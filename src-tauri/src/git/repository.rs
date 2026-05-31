@@ -1,6 +1,7 @@
 use super::command::{GitCommand, GitError};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::path::Path;
+use std::process::Command;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -46,6 +47,25 @@ pub struct CommitInfo {
     pub message: String,
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommitFile {
+    pub path: String,
+    pub original_path: Option<String>,
+    pub status: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommitFileDiff {
+    pub original_path: Option<String>,
+    pub modified_path: String,
+    pub original_content: String,
+    pub modified_content: String,
+    pub is_binary: bool,
+    pub message: Option<String>,
+}
+
 pub fn load_repository(path: &str) -> Result<RepositorySnapshot, GitError> {
     let info = detect_repository(path)?;
     let root = Path::new(&info.root);
@@ -54,6 +74,64 @@ pub fn load_repository(path: &str) -> Result<RepositorySnapshot, GitError> {
         status: repository_status(root)?,
         commits: load_commits(root)?,
         info,
+    })
+}
+
+pub fn load_commit_files(path: &str, commit_hash: &str) -> Result<Vec<CommitFile>, GitError> {
+    let info = detect_repository(path)?;
+    let root = Path::new(&info.root);
+    let output = GitCommand::run(
+        &["show", "--name-status", "--format=", commit_hash],
+        Some(root),
+    )?;
+
+    Ok(output.lines().filter_map(parse_commit_file).collect())
+}
+
+pub fn load_commit_file_diff(
+    path: &str,
+    commit_hash: &str,
+    file: &CommitFile,
+) -> Result<CommitFileDiff, GitError> {
+    let info = detect_repository(path)?;
+    let root = Path::new(&info.root);
+    let parent_hash = first_parent(root, commit_hash)?;
+    let status = file.status.chars().next().unwrap_or('M');
+    let original_path = file.original_path.as_deref().unwrap_or(&file.path);
+
+    let original_content = if status == 'A' || parent_hash.is_none() {
+        FileContent::Text(String::new())
+    } else {
+        load_file_at_revision(root, parent_hash.as_deref().unwrap_or(commit_hash), original_path)
+    };
+
+    let modified_content = if status == 'D' {
+        FileContent::Text(String::new())
+    } else {
+        load_file_at_revision(root, commit_hash, &file.path)
+    };
+
+    let is_binary = original_content.is_binary() || modified_content.is_binary();
+    let message = if is_binary {
+        Some("Binary file content cannot be displayed.".to_string())
+    } else {
+        original_content
+            .message()
+            .or_else(|| modified_content.message())
+            .map(ToString::to_string)
+    };
+
+    Ok(CommitFileDiff {
+        original_path: if status == 'A' {
+            None
+        } else {
+            Some(original_path.to_string())
+        },
+        modified_path: file.path.clone(),
+        original_content: original_content.into_text(),
+        modified_content: modified_content.into_text(),
+        is_binary,
+        message,
     })
 }
 
@@ -170,4 +248,80 @@ fn load_commits(root: &Path) -> Result<Vec<CommitInfo>, GitError> {
             })
         })
         .collect())
+}
+
+fn parse_commit_file(line: &str) -> Option<CommitFile> {
+    let mut parts = line.split('\t');
+    let status = parts.next()?.to_string();
+    let first_path = parts.next()?;
+    let second_path = parts.next();
+
+    Some(CommitFile {
+        path: second_path.unwrap_or(first_path).to_string(),
+        original_path: second_path.map(ToString::to_string),
+        status,
+    })
+}
+
+enum FileContent {
+    Text(String),
+    Binary,
+    Missing(String),
+}
+
+impl FileContent {
+    fn is_binary(&self) -> bool {
+        matches!(self, Self::Binary)
+    }
+
+    fn message(&self) -> Option<&str> {
+        match self {
+            Self::Missing(message) => Some(message),
+            _ => None,
+        }
+    }
+
+    fn into_text(self) -> String {
+        match self {
+            Self::Text(content) => content,
+            Self::Binary | Self::Missing(_) => String::new(),
+        }
+    }
+}
+
+fn first_parent(root: &Path, commit_hash: &str) -> Result<Option<String>, GitError> {
+    let output = GitCommand::run(&["show", "-s", "--format=%P", commit_hash], Some(root))?;
+    Ok(output.split_whitespace().next().map(ToString::to_string))
+}
+
+fn load_file_at_revision(root: &Path, revision: &str, file_path: &str) -> FileContent {
+    let spec = format!("{revision}:{file_path}");
+    let output = match Command::new("git")
+        .args(["show", &spec])
+        .current_dir(root)
+        .output()
+    {
+        Ok(output) => output,
+        Err(error) => {
+            return FileContent::Missing(format!("Failed to execute git: {error}"));
+        }
+    };
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return FileContent::Missing(if stderr.is_empty() {
+            format!("git show {spec} failed")
+        } else {
+            stderr
+        });
+    }
+
+    if output.stdout.contains(&0) {
+        return FileContent::Binary;
+    }
+
+    match String::from_utf8(output.stdout) {
+        Ok(content) => FileContent::Text(content),
+        Err(_) => FileContent::Binary,
+    }
 }

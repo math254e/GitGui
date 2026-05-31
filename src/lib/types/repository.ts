@@ -13,6 +13,21 @@ export type CommitInfo = {
   message: string;
 };
 
+export type CommitFile = {
+  path: string;
+  originalPath?: string;
+  status: string;
+};
+
+export type CommitFileDiff = {
+  originalPath?: string;
+  modifiedPath: string;
+  originalContent: string;
+  modifiedContent: string;
+  isBinary: boolean;
+  message?: string;
+};
+
 export type RepositorySnapshot = {
   info: {
     path: string;
