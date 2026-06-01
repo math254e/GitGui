@@ -10,15 +10,17 @@
   type TextModel = import("monaco-editor").editor.ITextModel;
   type DiffViewMode = "hunks" | "inline" | "split";
   type ContentViewMode = "diff" | "file";
+  type DiffSource = "commit" | "workingTree";
 
   type Props = {
     snapshot: RepositorySnapshot;
-    selectedCommit: CommitInfo;
+    diffSource: DiffSource;
+    selectedCommit: CommitInfo | null;
     selectedFile: CommitFile;
     onClose: () => void;
   };
 
-  let { snapshot, selectedCommit, selectedFile, onClose }: Props = $props();
+  let { snapshot, diffSource, selectedCommit, selectedFile, onClose }: Props = $props();
   let diffContainer: HTMLDivElement;
   let fileContainer: HTMLDivElement;
   let monaco: Monaco | null = null;
@@ -36,7 +38,7 @@
   let activeRequest = 0;
 
   $effect(() => {
-    void loadDiff(snapshot.info.root, selectedCommit.hash, selectedFile);
+    void loadDiff(snapshot.info.root, diffSource, selectedCommit, selectedFile);
   });
 
   $effect(() => {
@@ -86,18 +88,35 @@
     fileModel?.dispose();
   });
 
-  async function loadDiff(repositoryPath: string, commitHash: string, file: CommitFile) {
+  async function loadDiff(
+    repositoryPath: string,
+    source: DiffSource,
+    commit: CommitInfo | null,
+    file: CommitFile,
+  ) {
     const request = ++activeRequest;
     diff = null;
     error = "";
     loading = true;
 
     try {
-      const nextDiff = await invoke<CommitFileDiff>("load_commit_file_diff", {
-        path: repositoryPath,
-        commitHash,
-        file,
-      });
+      const commitHash = commit?.hash;
+
+      if (source === "commit" && !commitHash) {
+        throw new Error("No commit is selected.");
+      }
+
+      const nextDiff =
+        source === "commit"
+          ? await invoke<CommitFileDiff>("load_commit_file_diff", {
+              path: repositoryPath,
+              commitHash,
+              file,
+            })
+          : await invoke<CommitFileDiff>("load_working_tree_file_diff", {
+              path: repositoryPath,
+              file,
+            });
 
       if (request === activeRequest) {
         diff = nextDiff;
@@ -227,7 +246,10 @@
   }
 
   function statusLabel(file: CommitFile) {
-    return file.status.charAt(0) || "?";
+    const indexStatus = file.status.charAt(0);
+    const worktreeStatus = file.status.charAt(1);
+
+    return worktreeStatus && worktreeStatus !== "." ? worktreeStatus : indexStatus || "?";
   }
 
   function modeButtonClass(mode: DiffViewMode) {
@@ -311,7 +333,7 @@
       <button
         class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-[#d8dde4] text-[#36414d] transition hover:bg-[#eef2f5]"
         type="button"
-        aria-label="Close diff"
+        aria-label={diffSource === "workingTree" ? "Close changed file" : "Close diff"}
         onclick={onClose}
       >
         <X aria-hidden="true" size={16} />

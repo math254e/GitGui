@@ -4,10 +4,12 @@
   type Props = {
     snapshot: RepositorySnapshot | null;
     selectedCommit: CommitInfo | null;
+    changesSelected: boolean;
+    onSelectChanges: () => void;
     onSelectCommit: (commit: CommitInfo) => void;
   };
 
-  let { snapshot, selectedCommit, onSelectCommit }: Props = $props();
+  let { snapshot, selectedCommit, changesSelected, onSelectChanges, onSelectCommit }: Props = $props();
 
   function formatDate(timestamp: number) {
     return new Date(timestamp * 1000).toLocaleDateString();
@@ -23,6 +25,33 @@
       </div>
 
       <ol class="min-h-0 flex-1 overflow-auto">
+        {#if snapshot.status.changedFiles.length}
+          <li>
+            <button
+              class={`grid w-full grid-cols-[72px_1fr_auto] items-center gap-4 border-b border-[#f0f2f4] px-5 py-3 text-left transition hover:bg-[#f8fafb] ${
+                changesSelected ? "bg-[#e9f8f5]" : "bg-white"
+              }`}
+              type="button"
+              onclick={onSelectChanges}
+            >
+              <span class="relative flex h-8 items-center justify-center">
+                <span class="absolute top-1/2 bottom-0 left-1/2 w-px -translate-x-1/2 bg-[#d8dde4]"></span>
+                <span class="relative h-4 w-4 rounded border-2 border-[#4d9d91] bg-[#e9f8f5]"></span>
+              </span>
+              <span class="min-w-0">
+                <span class="block truncate text-sm font-semibold text-[#202124]">Changed files</span>
+                <span class="block truncate text-xs text-[#6d7784]">
+                  {snapshot.status.changedFiles.length} files
+                  {#if snapshot.status.currentBranch}
+                    on {snapshot.status.currentBranch}
+                  {/if}
+                </span>
+              </span>
+              <span class="text-xs font-semibold text-[#4d9d91]">Working tree</span>
+            </button>
+          </li>
+        {/if}
+
         {#each snapshot.commits as commit, index}
           <li>
             <button

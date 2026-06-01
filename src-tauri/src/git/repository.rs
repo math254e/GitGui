@@ -1,5 +1,6 @@
 use super::command::{GitCommand, GitError};
 use serde::{Deserialize, Serialize};
+use std::fs;
 use std::path::Path;
 use std::process::Command;
 
@@ -135,6 +136,49 @@ pub fn load_commit_file_diff(
     })
 }
 
+pub fn load_working_tree_file_diff(path: &str, file: &CommitFile) -> Result<CommitFileDiff, GitError> {
+    let info = detect_repository(path)?;
+    let root = Path::new(&info.root);
+    let head_hash = current_head(root);
+    let status = primary_status(&file.status);
+    let original_path = file.original_path.as_deref().unwrap_or(&file.path);
+
+    let original_content = if status == '?' || status == 'A' || head_hash.is_none() {
+        FileContent::Text(String::new())
+    } else {
+        load_file_at_revision(root, head_hash.as_deref().unwrap_or("HEAD"), original_path)
+    };
+
+    let modified_content = if status == 'D' {
+        FileContent::Text(String::new())
+    } else {
+        load_file_from_working_tree(root, &file.path)
+    };
+
+    let is_binary = original_content.is_binary() || modified_content.is_binary();
+    let message = if is_binary {
+        Some("Binary file content cannot be displayed.".to_string())
+    } else {
+        original_content
+            .message()
+            .or_else(|| modified_content.message())
+            .map(ToString::to_string)
+    };
+
+    Ok(CommitFileDiff {
+        original_path: if status == '?' || status == 'A' {
+            None
+        } else {
+            Some(original_path.to_string())
+        },
+        modified_path: file.path.clone(),
+        original_content: original_content.into_text(),
+        modified_content: modified_content.into_text(),
+        is_binary,
+        message,
+    })
+}
+
 fn detect_repository(path: &str) -> Result<RepositoryInfo, GitError> {
     let selected_path = Path::new(path);
     let root = GitCommand::run(&["rev-parse", "--show-toplevel"], Some(selected_path))?;
@@ -146,7 +190,10 @@ fn detect_repository(path: &str) -> Result<RepositoryInfo, GitError> {
 }
 
 fn repository_status(root: &Path) -> Result<RepositoryStatus, GitError> {
-    let output = GitCommand::run(&["status", "--porcelain=v2", "--branch"], Some(root))?;
+    let output = GitCommand::run(
+        &["status", "--porcelain=v2", "--branch", "--untracked-files=all"],
+        Some(root),
+    )?;
     let mut status = RepositoryStatus::default();
 
     for line in output.lines() {
@@ -186,31 +233,87 @@ fn parse_changed_file(line: &str) -> Option<ChangedFile> {
 
     match record_type {
         '1' | '2' => {
-            let fields: Vec<&str> = line.split_whitespace().collect();
+            let fields: Vec<&str> = line.splitn(if record_type == '2' { 10 } else { 9 }, ' ').collect();
             let status = fields.get(1)?;
             let path_index = if record_type == '2' { 9 } else { 8 };
-            let path = fields.get(path_index..)?.join(" ");
+            let path = fields.get(path_index)?.to_string();
             let original_path = if record_type == '2' {
-                path.split('\t').nth(1).map(ToString::to_string)
+                path.split('\t').nth(1).map(unquote_git_path)
             } else {
                 None
             };
+            let path = path.split('\t').next().unwrap_or(&path);
 
             Some(ChangedFile {
-                path: path.split('\t').next().unwrap_or(&path).to_string(),
+                path: unquote_git_path(path),
                 original_path,
                 index_status: status.chars().next().unwrap_or('.').to_string(),
                 worktree_status: status.chars().nth(1).unwrap_or('.').to_string(),
             })
         }
         '?' | '!' => Some(ChangedFile {
-            path: line.get(2..)?.to_string(),
+            path: unquote_git_path(line.get(2..)?),
             original_path: None,
             index_status: record_type.to_string(),
             worktree_status: record_type.to_string(),
         }),
         _ => None,
     }
+}
+
+fn unquote_git_path(path: &str) -> String {
+    let trimmed = path.trim();
+
+    if !(trimmed.starts_with('"') && trimmed.ends_with('"')) {
+        return trimmed.to_string();
+    }
+
+    let mut decoded = Vec::new();
+    let mut chars = trimmed[1..trimmed.len() - 1].chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch != '\\' {
+            let mut buffer = [0; 4];
+            decoded.extend_from_slice(ch.encode_utf8(&mut buffer).as_bytes());
+            continue;
+        }
+
+        let Some(next) = chars.next() else {
+            decoded.push(b'\\');
+            continue;
+        };
+
+        if ('0'..='7').contains(&next) {
+            let mut octal = String::from(next);
+
+            for _ in 0..2 {
+                if let Some(peeked) = chars.peek() {
+                    if ('0'..='7').contains(peeked) {
+                        octal.push(chars.next().unwrap());
+                    }
+                }
+            }
+
+            if let Ok(byte) = u8::from_str_radix(&octal, 8) {
+                decoded.push(byte);
+            }
+            continue;
+        }
+
+        match next {
+            'n' => decoded.push(b'\n'),
+            't' => decoded.push(b'\t'),
+            'r' => decoded.push(b'\r'),
+            '"' => decoded.push(b'"'),
+            '\\' => decoded.push(b'\\'),
+            other => {
+                let mut buffer = [0; 4];
+                decoded.extend_from_slice(other.encode_utf8(&mut buffer).as_bytes());
+            }
+        }
+    }
+
+    String::from_utf8_lossy(&decoded).into_owned()
 }
 
 fn load_commits(root: &Path) -> Result<Vec<CommitInfo>, GitError> {
@@ -294,6 +397,25 @@ fn first_parent(root: &Path, commit_hash: &str) -> Result<Option<String>, GitErr
     Ok(output.split_whitespace().next().map(ToString::to_string))
 }
 
+fn current_head(root: &Path) -> Option<String> {
+    GitCommand::run(&["rev-parse", "--verify", "HEAD"], Some(root))
+        .ok()
+        .map(|output| output.trim().to_string())
+        .filter(|hash| !hash.is_empty())
+}
+
+fn primary_status(status: &str) -> char {
+    let mut chars = status.chars();
+    let index_status = chars.next().unwrap_or('M');
+    let worktree_status = chars.next().unwrap_or('.');
+
+    if worktree_status != '.' {
+        worktree_status
+    } else {
+        index_status
+    }
+}
+
 fn load_file_at_revision(root: &Path, revision: &str, file_path: &str) -> FileContent {
     let spec = format!("{revision}:{file_path}");
     let output = match Command::new("git")
@@ -321,6 +443,28 @@ fn load_file_at_revision(root: &Path, revision: &str, file_path: &str) -> FileCo
     }
 
     match String::from_utf8(output.stdout) {
+        Ok(content) => FileContent::Text(content),
+        Err(_) => FileContent::Binary,
+    }
+}
+
+fn load_file_from_working_tree(root: &Path, file_path: &str) -> FileContent {
+    let full_path = root.join(file_path);
+    let bytes = match fs::read(&full_path) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            return FileContent::Missing(format!(
+                "Failed to read {}: {error}",
+                full_path.display()
+            ));
+        }
+    };
+
+    if bytes.contains(&0) {
+        return FileContent::Binary;
+    }
+
+    match String::from_utf8(bytes) {
         Ok(content) => FileContent::Text(content),
         Err(_) => FileContent::Binary,
     }

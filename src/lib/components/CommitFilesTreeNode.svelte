@@ -41,7 +41,10 @@
   }
 
   function statusLabel(file: CommitFile) {
-    return file.status.charAt(0) || "?";
+    const indexStatus = file.status.charAt(0);
+    const worktreeStatus = file.status.charAt(1);
+
+    return worktreeStatus && worktreeStatus !== "." ? worktreeStatus : indexStatus || "?";
   }
 
   function statusTitle(file: CommitFile) {
