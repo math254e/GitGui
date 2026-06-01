@@ -1,50 +1,90 @@
-<script lang="ts">
-  import type { RepositorySnapshot } from "$lib/types/repository";
-
-  type Props = {
-    repositoryPath: string;
-    snapshot: RepositorySnapshot | null;
+<script lang="ts" module>
+  export type RepoTab = {
+    id: string;
+    title: string;
+    root: string;
+    branch: string;
     loading: boolean;
     error: string;
-    onOpenRepository: (event: Event) => void;
   };
-
-  let { repositoryPath = $bindable(), snapshot, loading, error, onOpenRepository }: Props = $props();
 </script>
 
-<header class="flex h-20 min-h-20 items-center gap-5 border-b border-[#d8dde4] bg-white px-5">
-  <div class="min-w-36">
-    <p class="text-xs font-bold uppercase text-[#4d9d91]">GitGui</p>
-    <h1 class="text-xl font-semibold text-[#202124]">Repository Workspace</h1>
-  </div>
+<script lang="ts">
+  import { Home, Settings, X } from "@lucide/svelte";
 
-  <form class="flex min-w-0 flex-1 items-center gap-2.5" onsubmit={onOpenRepository}>
-    <label class="sr-only" for="repository-path">Repository path</label>
-    <input
-      class="h-10 min-w-0 flex-1 rounded-md border border-[#d8dde4] bg-[#f8fafb] px-3 text-sm text-[#202124] outline-none transition focus:border-[#78d5c8] focus:bg-white"
-      id="repository-path"
-      bind:value={repositoryPath}
-      placeholder="D:\ProgrammingProjects\GitGui"
-    />
-    <button
-      class="h-10 rounded-md bg-[#78d5c8] px-4 text-sm font-bold text-[#10201d] transition hover:bg-[#66c7b9] disabled:cursor-not-allowed disabled:opacity-55"
-      type="submit"
-      disabled={loading || !repositoryPath.trim()}
-    >
-      {loading ? "Loading" : "Open"}
-    </button>
-  </form>
+  type Props = {
+    activeView: "start" | "repo";
+    activeRepoId: string | null;
+    tabs: RepoTab[];
+    onShowStart: () => void;
+    onSelectRepo: (repoId: string) => void;
+    onCloseRepo: (repoId: string) => void;
+  };
 
-  {#if snapshot}
-    <div class="hidden min-w-0 max-w-80 text-right lg:block">
-      <p class="truncate text-sm font-semibold text-[#202124]">{snapshot.status.currentBranch ?? "Detached HEAD"}</p>
-      <p class="truncate text-xs text-[#6d7784]">{snapshot.info.root}</p>
-    </div>
-  {/if}
+  let { activeView, activeRepoId, tabs, onShowStart, onSelectRepo, onCloseRepo }: Props = $props();
+</script>
+
+<header class="flex h-12 min-h-12 items-center border-b border-[#d8dde4] bg-white">
+  <button
+    class={`flex h-full w-12 shrink-0 items-center justify-center border-r border-[#d8dde4] transition ${
+      activeView === "start" ? "bg-[#e9f8f5] text-[#183d38]" : "text-[#4f5b67] hover:bg-[#f8fafb]"
+    }`}
+    type="button"
+    aria-label="Start view"
+    title="Start"
+    onclick={onShowStart}
+  >
+    <Home aria-hidden="true" size={18} />
+  </button>
+
+  <nav class="flex h-full min-w-0 flex-1 items-stretch overflow-x-auto" aria-label="Open repositories">
+    {#if tabs.length}
+      {#each tabs as tab (tab.id)}
+        <div
+          class={`group flex h-full min-w-36 max-w-64 items-center border-r border-[#d8dde4] transition ${
+            activeView === "repo" && activeRepoId === tab.id
+              ? "bg-[#f8fafb] text-[#202124]"
+              : "bg-white text-[#4f5b67] hover:bg-[#f8fafb]"
+          }`}
+          title={`${tab.root} (${tab.branch})`}
+        >
+          <button
+            class="flex h-full min-w-0 flex-1 items-center gap-2 px-3 text-left"
+            type="button"
+            onclick={() => onSelectRepo(tab.id)}
+          >
+            <span class="min-w-0 flex-1">
+              <span class="block truncate text-sm font-semibold">{tab.title}</span>
+              <span class={`block truncate text-xs ${tab.error ? "text-[#9f3f33]" : "text-[#89929d]"}`}>
+                {tab.error || tab.branch}
+              </span>
+            </span>
+            {#if tab.loading}
+              <span class="h-2 w-2 shrink-0 rounded-full bg-[#4d9d91]" aria-label="Loading"></span>
+            {/if}
+          </button>
+          <button
+            class="mr-2 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-[#6d7784] transition hover:bg-[#e7ebef] hover:text-[#202124]"
+            type="button"
+            aria-label={`Close ${tab.title}`}
+            title={`Close ${tab.title}`}
+            onclick={() => onCloseRepo(tab.id)}
+          >
+            <X aria-hidden="true" size={14} />
+          </button>
+        </div>
+      {/each}
+    {:else}
+      <div class="flex h-full items-center px-4 text-sm text-[#89929d]">No repositories open</div>
+    {/if}
+  </nav>
+
+  <button
+    class="flex h-full w-12 shrink-0 items-center justify-center border-l border-[#d8dde4] text-[#4f5b67] transition hover:bg-[#f8fafb]"
+    type="button"
+    aria-label="Settings"
+    title="Settings"
+  >
+    <Settings aria-hidden="true" size={18} />
+  </button>
 </header>
-
-{#if error}
-  <div class="border-b border-[#f1c7c7] bg-[#fff0f0] px-5 py-2 text-sm text-[#8b2d2d]">
-    {error}
-  </div>
-{/if}
