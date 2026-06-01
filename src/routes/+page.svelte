@@ -38,6 +38,7 @@
   type RecentRepo = {
     root: string;
     title: string;
+    snapshot?: RepositorySnapshot;
   };
 
   const layoutStorageKey = "gitgui.workspaceLayout.v1";
@@ -175,6 +176,18 @@
     }
   }
 
+  async function openRecentRepository(path: string) {
+    const recentRepo = recentRepos.find((repo) => repo.root === path);
+
+    if (recentRepo?.snapshot) {
+      upsertRepository(recentRepo.snapshot);
+      void refreshRepository(recentRepo.snapshot.info.root);
+      return;
+    }
+
+    await openRepositoryPath(path);
+  }
+
   function upsertRepository(nextSnapshot: RepositorySnapshot) {
     const id = nextSnapshot.info.root;
     const existingIndex = openRepos.findIndex((repo) => repo.id === id);
@@ -226,6 +239,7 @@
     const recentRepo = {
       root: nextSnapshot.info.root,
       title: repoTitle(nextSnapshot.info.root),
+      snapshot: nextSnapshot,
     };
     recentRepos = [
       recentRepo,
@@ -304,6 +318,7 @@
       normalized.push({
         root: repo.root,
         title: repo.title || repoTitle(repo.root),
+        snapshot: isRepositorySnapshot(repo.snapshot) ? repo.snapshot : undefined,
       });
     }
 
@@ -322,6 +337,17 @@
         activeRepoPath: activeRepoId,
         recentRepos,
       } satisfies WorkspaceStorage),
+    );
+  }
+
+  function isRepositorySnapshot(value: unknown): value is RepositorySnapshot {
+    return (
+      typeof value === "object" &&
+      value !== null &&
+      "info" in value &&
+      "status" in value &&
+      "commits" in value &&
+      Array.isArray((value as RepositorySnapshot).commits)
     );
   }
 
@@ -378,6 +404,7 @@
           refreshRequest: 0,
         };
       });
+      updateRecentSnapshot(nextSnapshot);
     } catch (caught) {
       openRepos = openRepos.map((candidate) =>
         candidate.id === repoId && candidate.refreshRequest === request
@@ -389,6 +416,19 @@
           : candidate,
       );
     }
+  }
+
+  function updateRecentSnapshot(nextSnapshot: RepositorySnapshot) {
+    recentRepos = recentRepos.map((repo) =>
+      repo.root === nextSnapshot.info.root
+        ? {
+            ...repo,
+            title: repoTitle(nextSnapshot.info.root),
+            snapshot: nextSnapshot,
+          }
+        : repo,
+    );
+    persistWorkspace();
   }
 
   function reconcileSelection(
@@ -463,6 +503,25 @@
 
     if (wasVisibleActive) {
       activeView = nextRepo ? "repo" : "start";
+    }
+
+    persistWorkspace();
+  }
+
+  function removeRecentRepo(repoRoot: string) {
+    const repoIndex = openRepos.findIndex((repo) => repo.id === repoRoot);
+    recentRepos = recentRepos.filter((repo) => repo.root !== repoRoot);
+
+    if (repoIndex === -1) {
+      persistWorkspace();
+      return;
+    }
+
+    openRepos = openRepos.filter((repo) => repo.id !== repoRoot);
+
+    if (activeRepoId === repoRoot) {
+      activeRepoId = null;
+      activeView = "start";
     }
 
     persistWorkspace();
@@ -577,7 +636,8 @@
         loading={Boolean(openingPath) || restoreLoading}
         error={startError}
         onChooseRepository={chooseRepository}
-        onOpenRecent={openRepositoryPath}
+        onOpenRecent={openRecentRepository}
+        onRemoveRecent={removeRecentRepo}
       />
     {:else}
       <div class="grid h-full min-h-0 grid-cols-1 overflow-hidden lg:hidden">

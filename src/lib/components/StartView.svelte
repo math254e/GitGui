@@ -1,9 +1,11 @@
 <script lang="ts">
-  import { CloudDownload, FolderOpen, PlusSquare, Search } from "@lucide/svelte";
+  import { CloudDownload, FolderOpen, PlusSquare, Search, X } from "@lucide/svelte";
+  import type { RepositorySnapshot } from "$lib/types/repository";
 
   type RecentRepo = {
     root: string;
     title: string;
+    snapshot?: RepositorySnapshot;
   };
 
   type Props = {
@@ -12,6 +14,7 @@
     error: string;
     onChooseRepository: () => void;
     onOpenRecent: (path: string) => void;
+    onRemoveRecent: (path: string) => void;
   };
 
   let {
@@ -20,6 +23,7 @@
     error,
     onChooseRepository,
     onOpenRecent,
+    onRemoveRecent,
   }: Props = $props();
 
   let search = $state("");
@@ -98,14 +102,28 @@
         <ul class="space-y-1">
           {#each filteredRepos as repo (repo.root)}
             <li>
-              <button
-                class="grid w-full min-w-0 grid-cols-[minmax(0,auto)_1fr] items-baseline gap-4 py-0.5 text-left leading-6 transition hover:bg-[#eef2f5]"
-                type="button"
-                onclick={() => onOpenRecent(repo.root)}
-              >
-                <span class="truncate text-[18px] font-semibold text-[#4d9d91]">{repo.title}</span>
-                <span class="truncate text-[18px] font-medium text-[#6d7784]">{repo.root}</span>
-              </button>
+              <div class="group grid min-w-0 grid-cols-[1fr_auto] items-center gap-2 transition hover:bg-[#eef2f5]">
+                <button
+                  class="grid min-w-0 grid-cols-[minmax(0,auto)_1fr] items-baseline gap-4 py-0.5 text-left leading-6"
+                  type="button"
+                  onclick={() => onOpenRecent(repo.root)}
+                >
+                  <span class="truncate text-[18px] font-semibold text-[#4d9d91]">{repo.title}</span>
+                  <span class="truncate text-[18px] font-medium text-[#6d7784]">{repo.root}</span>
+                </button>
+                <button
+                  class="mr-1 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-[#89929d] opacity-0 transition hover:bg-[#e7ebef] hover:text-[#202124] focus:opacity-100 group-hover:opacity-100"
+                  type="button"
+                  aria-label={`Remove ${repo.title} from recent repositories`}
+                  title={`Remove ${repo.title}`}
+                  onclick={(event) => {
+                    event.stopPropagation();
+                    onRemoveRecent(repo.root);
+                  }}
+                >
+                  <X aria-hidden="true" size={14} />
+                </button>
+              </div>
             </li>
           {/each}
         </ul>
