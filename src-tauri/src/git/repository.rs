@@ -251,6 +251,18 @@ fn parse_changed_file(line: &str) -> Option<ChangedFile> {
                 worktree_status: status.chars().nth(1).unwrap_or('.').to_string(),
             })
         }
+        'u' => {
+            let fields: Vec<&str> = line.splitn(11, ' ').collect();
+            let status = fields.get(1)?;
+            let path = fields.get(10)?;
+
+            Some(ChangedFile {
+                path: unquote_git_path(path),
+                original_path: None,
+                index_status: status.chars().next().unwrap_or('U').to_string(),
+                worktree_status: status.chars().nth(1).unwrap_or('U').to_string(),
+            })
+        }
         '?' | '!' => Some(ChangedFile {
             path: unquote_git_path(line.get(2..)?),
             original_path: None,
@@ -467,5 +479,76 @@ fn load_file_from_working_tree(root: &Path, file_path: &str) -> FileContent {
     match String::from_utf8(bytes) {
         Ok(content) => FileContent::Text(content),
         Err(_) => FileContent::Binary,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_ordinary_modified_file() {
+        let file = parse_changed_file("1 .M N... 100644 100644 100644 1234567 1234567 src/main.rs").unwrap();
+
+        assert_eq!(file.path, "src/main.rs");
+        assert_eq!(file.original_path, None);
+        assert_eq!(file.index_status, ".");
+        assert_eq!(file.worktree_status, "M");
+    }
+
+    #[test]
+    fn parses_staged_added_file_with_spaces() {
+        let file = parse_changed_file("1 A. N... 000000 100644 100644 0000000 89abcde docs/new file.md").unwrap();
+
+        assert_eq!(file.path, "docs/new file.md");
+        assert_eq!(file.index_status, "A");
+        assert_eq!(file.worktree_status, ".");
+    }
+
+    #[test]
+    fn parses_renamed_file_with_original_path() {
+        let file = parse_changed_file(
+            "2 R. N... 100644 100644 100644 1234567 89abcde R100 src/new name.rs\tsrc/old name.rs",
+        )
+        .unwrap();
+
+        assert_eq!(file.path, "src/new name.rs");
+        assert_eq!(file.original_path, Some("src/old name.rs".to_string()));
+        assert_eq!(file.index_status, "R");
+        assert_eq!(file.worktree_status, ".");
+    }
+
+    #[test]
+    fn parses_unmerged_conflict_file() {
+        let file = parse_changed_file(
+            "u UU N... 100644 100644 100644 100644 1111111 2222222 3333333 src/conflict.txt",
+        )
+        .unwrap();
+
+        assert_eq!(file.path, "src/conflict.txt");
+        assert_eq!(file.original_path, None);
+        assert_eq!(file.index_status, "U");
+        assert_eq!(file.worktree_status, "U");
+    }
+
+    #[test]
+    fn parses_untracked_and_ignored_files() {
+        let untracked = parse_changed_file("? untracked file.txt").unwrap();
+        let ignored = parse_changed_file("! ignored file.log").unwrap();
+
+        assert_eq!(untracked.path, "untracked file.txt");
+        assert_eq!(untracked.index_status, "?");
+        assert_eq!(untracked.worktree_status, "?");
+        assert_eq!(ignored.path, "ignored file.log");
+        assert_eq!(ignored.index_status, "!");
+        assert_eq!(ignored.worktree_status, "!");
+    }
+
+    #[test]
+    fn unquotes_git_octal_paths() {
+        let file = parse_changed_file(r#"1 .M N... 100644 100644 100644 1234567 1234567 "src/quote\040and\011tab.rs""#)
+            .unwrap();
+
+        assert_eq!(file.path, "src/quote and\ttab.rs");
     }
 }
