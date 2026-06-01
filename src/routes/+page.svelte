@@ -1,5 +1,6 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
+  import { open } from "@tauri-apps/plugin-dialog";
   import { onDestroy, onMount } from "svelte";
   import CommitDetailsPanel from "$lib/components/CommitDetailsPanel.svelte";
   import CommitFileDiffViewer from "$lib/components/CommitFileDiffViewer.svelte";
@@ -50,7 +51,6 @@
   let activeRepoId = $state<string | null>(null);
   let openRepos = $state<WorkspaceRepo[]>([]);
   let recentRepos = $state<RecentRepo[]>([]);
-  let repositoryPath = $state("");
   let startError = $state("");
   let openingPath = $state<string | null>(null);
   let restoreLoading = $state(false);
@@ -129,9 +129,22 @@
     document.removeEventListener("visibilitychange", refreshWhenVisible);
   });
 
-  async function openRepository(event?: Event) {
-    event?.preventDefault();
-    await openRepositoryPath(repositoryPath.trim());
+  async function chooseRepository() {
+    startError = "";
+
+    try {
+      const selectedPath = await open({
+        directory: true,
+        multiple: false,
+        title: "Open repository",
+      });
+
+      if (typeof selectedPath === "string") {
+        await openRepositoryPath(selectedPath);
+      }
+    } catch (caught) {
+      startError = formatError(caught);
+    }
   }
 
   async function openRepositoryPath(path: string) {
@@ -151,7 +164,6 @@
       }
 
       upsertRepository(nextSnapshot);
-      repositoryPath = nextSnapshot.info.root;
     } catch (caught) {
       if (request === activeOpenRequest) {
         startError = formatError(caught);
@@ -561,11 +573,10 @@
   <section class="min-h-0 overflow-hidden">
     {#if activeView === "start" || !activeRepo}
       <StartView
-        bind:repositoryPath
         recentRepos={recentRepos}
         loading={Boolean(openingPath) || restoreLoading}
         error={startError}
-        onOpenRepository={openRepository}
+        onChooseRepository={chooseRepository}
         onOpenRecent={openRepositoryPath}
       />
     {:else}

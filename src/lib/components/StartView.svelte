@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { GitBranchPlus, GitPullRequestCreate, Plus, Search } from "@lucide/svelte";
+  import { CloudDownload, FolderOpen, PlusSquare, Search } from "@lucide/svelte";
 
   type RecentRepo = {
     root: string;
@@ -7,105 +7,112 @@
   };
 
   type Props = {
-    repositoryPath: string;
     recentRepos: RecentRepo[];
     loading: boolean;
     error: string;
-    onOpenRepository: (event: Event) => void;
+    onChooseRepository: () => void;
     onOpenRecent: (path: string) => void;
   };
 
   let {
-    repositoryPath = $bindable(),
     recentRepos,
     loading,
     error,
-    onOpenRepository,
+    onChooseRepository,
     onOpenRecent,
   }: Props = $props();
+
+  let search = $state("");
+  const filteredRepos = $derived(
+    recentRepos.filter((repo) => {
+      const query = search.trim().toLowerCase();
+
+      if (!query) {
+        return true;
+      }
+
+      return repo.title.toLowerCase().includes(query) || repo.root.toLowerCase().includes(query);
+    }),
+  );
 </script>
 
-<section class="h-full min-h-0 overflow-auto bg-[#f4f6f8]">
-  <div class="mx-auto flex min-h-full w-full max-w-5xl flex-col px-6 py-10">
-    <div class="mb-8">
-      <p class="text-xs font-bold uppercase text-[#4d9d91]">GitGui</p>
-      <h1 class="mt-2 text-3xl font-semibold text-[#202124]">Start</h1>
+<section class="h-full min-h-0 overflow-auto bg-[#f4f6f8] text-[#202124]">
+  <div class="mx-auto flex min-h-full w-full max-w-[1350px] flex-col px-8 py-12 lg:px-16 xl:px-24">
+    <h1 class="text-[26px] font-medium leading-tight text-[#202124]">Repositories</h1>
+
+    <div class="mt-6 flex flex-wrap items-center gap-3">
+      <button
+        class="inline-flex h-14 items-center justify-center gap-3 rounded border border-[#d8dde4] bg-white px-4 text-[21px] font-medium text-[#202124] transition hover:bg-[#eef2f5] disabled:cursor-not-allowed disabled:opacity-55"
+        type="button"
+        disabled={loading}
+        onclick={onChooseRepository}
+      >
+        <FolderOpen aria-hidden="true" class="text-[#6d7784]" size={24} />
+        {loading ? "Opening" : "Open"}
+      </button>
+
+      <button
+        class="inline-flex h-14 items-center justify-center gap-3 rounded border border-[#d8dde4] bg-white px-4 text-[21px] font-medium text-[#6d7784] opacity-75"
+        type="button"
+        disabled
+      >
+        <CloudDownload aria-hidden="true" class="text-[#6d7784]" size={24} />
+        Clone
+      </button>
+
+      <button
+        class="inline-flex h-14 items-center justify-center gap-3 rounded border border-[#d8dde4] bg-white px-4 text-[21px] font-medium text-[#6d7784] opacity-75"
+        type="button"
+        disabled
+      >
+        <PlusSquare aria-hidden="true" class="text-[#6d7784]" size={24} />
+        Create
+      </button>
     </div>
 
-    <div class="grid gap-5 lg:grid-cols-[1.3fr_0.7fr]">
-      <section class="rounded-lg border border-[#d8dde4] bg-white p-5">
-        <h2 class="text-sm font-bold uppercase text-[#7b8490]">Open repository</h2>
-        <form class="mt-4 flex flex-col gap-3 sm:flex-row" onsubmit={onOpenRepository}>
-          <label class="sr-only" for="repository-path">Repository path</label>
-          <input
-            class="h-10 min-w-0 flex-1 rounded-md border border-[#d8dde4] bg-[#f8fafb] px-3 text-sm text-[#202124] outline-none transition focus:border-[#78d5c8] focus:bg-white"
-            id="repository-path"
-            bind:value={repositoryPath}
-            placeholder="D:\ProgrammingProjects\GitGui"
-          />
-          <button
-            class="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-[#78d5c8] px-4 text-sm font-bold text-[#10201d] transition hover:bg-[#66c7b9] disabled:cursor-not-allowed disabled:opacity-55"
-            type="submit"
-            disabled={loading || !repositoryPath.trim()}
-          >
-            <Search aria-hidden="true" size={16} />
-            {loading ? "Opening" : "Open"}
-          </button>
-        </form>
-
-        {#if error}
-          <div class="mt-4 rounded-md border border-[#f1c7c7] bg-[#fff0f0] px-4 py-3 text-sm text-[#8b2d2d]">
-            {error}
-          </div>
-        {/if}
-      </section>
-
-      <section class="rounded-lg border border-[#d8dde4] bg-white p-5">
-        <h2 class="text-sm font-bold uppercase text-[#7b8490]">New workspace</h2>
-        <div class="mt-4 grid gap-3">
-          <button
-            class="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-[#d8dde4] bg-[#f8fafb] px-4 text-sm font-semibold text-[#6d7784]"
-            type="button"
-            disabled
-          >
-            <GitBranchPlus aria-hidden="true" size={16} />
-            Clone repository
-          </button>
-          <button
-            class="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-[#d8dde4] bg-[#f8fafb] px-4 text-sm font-semibold text-[#6d7784]"
-            type="button"
-            disabled
-          >
-            <Plus aria-hidden="true" size={16} />
-            Create repository
-          </button>
-        </div>
-      </section>
+    <div class="relative mt-6">
+      <Search
+        aria-hidden="true"
+        class="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-[#89929d]"
+        size={18}
+      />
+      <label class="sr-only" for="repository-search">Search repositories</label>
+      <input
+        id="repository-search"
+        class="h-9 w-full rounded border border-[#d8dde4] bg-white pr-3 pl-8 text-[16px] text-[#202124] outline-none placeholder:text-[#89929d] focus:border-[#78d5c8]"
+        bind:value={search}
+        placeholder="Search repositories"
+      />
     </div>
 
-    <section class="mt-5 rounded-lg border border-[#d8dde4] bg-white p-5">
-      <div class="mb-3 flex items-center justify-between gap-3">
-        <h2 class="text-sm font-bold uppercase text-[#7b8490]">Recent repositories</h2>
-        <GitPullRequestCreate aria-hidden="true" class="text-[#89929d]" size={16} />
+    {#if error}
+      <div class="mt-4 rounded border border-[#f1c7c7] bg-[#fff0f0] px-4 py-3 text-sm text-[#8b2d2d]">
+        {error}
       </div>
+    {/if}
 
-      {#if recentRepos.length}
-        <ul class="divide-y divide-[#edf0f3]">
-          {#each recentRepos as repo (repo.root)}
+    <section class="mt-6">
+      <h2 class="mb-2 text-[18px] font-medium text-[#202124]">Recent</h2>
+
+      {#if filteredRepos.length}
+        <ul class="space-y-1">
+          {#each filteredRepos as repo (repo.root)}
             <li>
               <button
-                class="flex w-full min-w-0 flex-col py-3 text-left transition hover:bg-[#f8fafb] sm:px-2"
+                class="grid w-full min-w-0 grid-cols-[minmax(0,auto)_1fr] items-baseline gap-4 py-0.5 text-left leading-6 transition hover:bg-[#eef2f5]"
                 type="button"
                 onclick={() => onOpenRecent(repo.root)}
               >
-                <span class="truncate text-sm font-semibold text-[#202124]">{repo.title}</span>
-                <span class="mt-1 break-all text-xs text-[#6d7784]">{repo.root}</span>
+                <span class="truncate text-[18px] font-semibold text-[#4d9d91]">{repo.title}</span>
+                <span class="truncate text-[18px] font-medium text-[#6d7784]">{repo.root}</span>
               </button>
             </li>
           {/each}
         </ul>
+      {:else if recentRepos.length}
+        <p class="py-1 text-[17px] text-[#89929d]">No repositories match your search.</p>
       {:else}
-        <p class="py-3 text-sm text-[#89929d]">Recently opened repositories will appear here.</p>
+        <p class="py-1 text-[17px] text-[#89929d]">Recently opened repositories will appear here.</p>
       {/if}
     </section>
   </div>
