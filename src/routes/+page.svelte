@@ -32,6 +32,7 @@
     selectedFile: CommitFile | null;
     loading: boolean;
     error: string;
+    refreshRequest: number;
   };
   type RecentRepo = {
     root: string;
@@ -41,6 +42,7 @@
   const layoutStorageKey = "gitgui.workspaceLayout.v1";
   const workspaceStorageKey = "gitgui.workspaceState.v1";
   const maxRecentRepos = 10;
+  const autoRefreshMs = 30_000;
   const sidebarLimits = { default: 230, min: 180, max: 420 };
   const detailsLimits = { default: 430, min: 300, max: 620 };
 
@@ -55,7 +57,9 @@
   let sidebarWidth = $state(sidebarLimits.default);
   let detailsWidth = $state(detailsLimits.default);
   let activeOpenRequest = 0;
+  let activeRefreshRequest = 0;
   let persistenceReady = false;
+  let autoRefreshTimer: ReturnType<typeof setInterval> | null = null;
 
   const activeRepo = $derived(openRepos.find((repo) => repo.id === activeRepoId) ?? null);
   const snapshot = $derived(activeRepo?.snapshot ?? null);
@@ -107,13 +111,22 @@
   onMount(() => {
     restoreLayout();
     void restoreWorkspace();
+    autoRefreshTimer = setInterval(refreshOpenRepositories, autoRefreshMs);
     window.addEventListener("pagehide", persistWorkspace);
     window.addEventListener("beforeunload", persistWorkspace);
+    window.addEventListener("focus", refreshOpenRepositories);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
   });
 
   onDestroy(() => {
+    if (autoRefreshTimer) {
+      clearInterval(autoRefreshTimer);
+    }
+
     window.removeEventListener("pagehide", persistWorkspace);
     window.removeEventListener("beforeunload", persistWorkspace);
+    window.removeEventListener("focus", refreshOpenRepositories);
+    document.removeEventListener("visibilitychange", refreshWhenVisible);
   });
 
   async function openRepository(event?: Event) {
@@ -163,6 +176,7 @@
               snapshot: nextSnapshot,
               error: "",
               loading: false,
+              refreshRequest: repo.refreshRequest,
             }
           : repo,
       );
@@ -177,6 +191,7 @@
           selectedFile: null,
           loading: false,
           error: "",
+          refreshRequest: 0,
         },
       ];
     }
@@ -239,6 +254,7 @@
             selectedFile: null,
             loading: false,
             error: "",
+            refreshRequest: 0,
           });
           addRecentRepo(nextSnapshot);
         } catch {
@@ -295,6 +311,100 @@
         recentRepos,
       } satisfies WorkspaceStorage),
     );
+  }
+
+  function refreshWhenVisible() {
+    if (document.visibilityState === "visible") {
+      void refreshOpenRepositories();
+    }
+  }
+
+  async function refreshOpenRepositories() {
+    if (!openRepos.length || restoreLoading) {
+      return;
+    }
+
+    const repoIds = openRepos.map((repo) => repo.id);
+
+    await Promise.all(repoIds.map((repoId) => refreshRepository(repoId)));
+  }
+
+  async function refreshRepository(repoId: string) {
+    const repo = openRepos.find((candidate) => candidate.id === repoId);
+
+    if (!repo || repo.refreshRequest) {
+      return;
+    }
+
+    const request = ++activeRefreshRequest;
+    openRepos = openRepos.map((candidate) =>
+      candidate.id === repoId
+        ? {
+            ...candidate,
+            refreshRequest: request,
+          }
+        : candidate,
+    );
+
+    try {
+      const nextSnapshot = await invoke<RepositorySnapshot>("load_repository", {
+        path: repo.snapshot.info.root,
+      });
+
+      openRepos = openRepos.map((candidate) => {
+        if (candidate.id !== repoId || candidate.refreshRequest !== request) {
+          return candidate;
+        }
+
+        return {
+          ...candidate,
+          title: repoTitle(nextSnapshot.info.root),
+          snapshot: nextSnapshot,
+          selectedGraphItem: reconcileSelection(candidate.selectedGraphItem, nextSnapshot),
+          selectedFile: reconcileSelectedFile(candidate.selectedFile, nextSnapshot),
+          error: "",
+          refreshRequest: 0,
+        };
+      });
+    } catch (caught) {
+      openRepos = openRepos.map((candidate) =>
+        candidate.id === repoId && candidate.refreshRequest === request
+          ? {
+              ...candidate,
+              error: formatError(caught),
+              refreshRequest: 0,
+            }
+          : candidate,
+      );
+    }
+  }
+
+  function reconcileSelection(
+    currentSelection: SelectedGraphItem | null,
+    nextSnapshot: RepositorySnapshot,
+  ): SelectedGraphItem | null {
+    if (currentSelection?.type === "commit") {
+      const matchingCommit = nextSnapshot.commits.find((commit) => commit.hash === currentSelection.commit.hash);
+
+      if (matchingCommit) {
+        return { type: "commit", commit: matchingCommit };
+      }
+    }
+
+    if (currentSelection?.type === "changes" && nextSnapshot.status.changedFiles.length) {
+      return { type: "changes" };
+    }
+
+    return initialGraphSelection(nextSnapshot);
+  }
+
+  function reconcileSelectedFile(currentFile: CommitFile | null, nextSnapshot: RepositorySnapshot) {
+    if (!currentFile) {
+      return null;
+    }
+
+    const stillChanged = nextSnapshot.status.changedFiles.some((file) => file.path === currentFile.path);
+    return stillChanged ? currentFile : null;
   }
 
   function formatError(caught: unknown) {
