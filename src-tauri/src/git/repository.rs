@@ -4,14 +4,14 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RepositoryInfo {
     pub path: String,
     pub root: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RepositorySnapshot {
     pub info: RepositoryInfo,
@@ -19,7 +19,7 @@ pub struct RepositorySnapshot {
     pub commits: Vec<CommitInfo>,
 }
 
-#[derive(Debug, Serialize, Default)]
+#[derive(Clone, Debug, Deserialize, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct RepositoryStatus {
     pub current_branch: Option<String>,
@@ -29,7 +29,7 @@ pub struct RepositoryStatus {
     pub changed_files: Vec<ChangedFile>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChangedFile {
     pub path: String,
@@ -38,7 +38,7 @@ pub struct ChangedFile {
     pub worktree_status: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CommitInfo {
     pub hash: String,
@@ -48,7 +48,7 @@ pub struct CommitInfo {
     pub message: String,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CommitFile {
     pub path: String,
@@ -56,7 +56,7 @@ pub struct CommitFile {
     pub status: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CommitFileDiff {
     pub original_path: Option<String>,

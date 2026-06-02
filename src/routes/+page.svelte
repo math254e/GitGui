@@ -20,30 +20,29 @@
     sidebarWidth?: number;
     detailsWidth?: number;
   };
-  type WorkspaceStorage = {
-    openRepoPaths?: string[];
-    activeRepoPath?: string | null;
-    recentRepos?: RecentRepo[];
-  };
-  type WorkspaceRepo = {
+  type BackendWorkspaceRepo = {
     id: string;
     title: string;
     snapshot: RepositorySnapshot;
+    error?: string | null;
+  };
+  type WorkspaceRepo = BackendWorkspaceRepo & {
     selectedGraphItem: SelectedGraphItem | null;
     selectedFile: CommitFile | null;
-    loading: boolean;
-    error: string;
-    refreshRequest: number;
   };
   type RecentRepo = {
     root: string;
     title: string;
     snapshot?: RepositorySnapshot;
   };
+  type WorkspaceSnapshot = {
+    activeRepoId?: string | null;
+    openRepos: BackendWorkspaceRepo[];
+    recentRepos: RecentRepo[];
+  };
 
   const layoutStorageKey = "gitgui.workspaceLayout.v1";
-  const workspaceStorageKey = "gitgui.workspaceState.v1";
-  const maxRecentRepos = 10;
+  const legacyWorkspaceStorageKey = "gitgui.workspaceState.v1";
   const autoRefreshMs = 30_000;
   const sidebarLimits = { default: 230, min: 180, max: 420 };
   const detailsLimits = { default: 430, min: 300, max: 620 };
@@ -53,13 +52,11 @@
   let openRepos = $state<WorkspaceRepo[]>([]);
   let recentRepos = $state<RecentRepo[]>([]);
   let startError = $state("");
-  let openingPath = $state<string | null>(null);
-  let restoreLoading = $state(false);
+  let opening = $state(false);
+  let restoring = $state(false);
   let sidebarWidth = $state(sidebarLimits.default);
   let detailsWidth = $state(detailsLimits.default);
-  let activeOpenRequest = 0;
-  let activeRefreshRequest = 0;
-  let persistenceReady = false;
+  let activeWorkspaceRequest = 0;
   let autoRefreshTimer: ReturnType<typeof setInterval> | null = null;
 
   const activeRepo = $derived(openRepos.find((repo) => repo.id === activeRepoId) ?? null);
@@ -76,8 +73,8 @@
       title: repo.title,
       root: repo.snapshot.info.root,
       branch: repo.snapshot.status.currentBranch ?? "Detached HEAD",
-      loading: repo.loading,
-      error: repo.error,
+      loading: false,
+      error: repo.error ?? "",
     })),
   );
   const detailsPane = $derived<ResizablePane>({
@@ -113,8 +110,6 @@
     restoreLayout();
     void restoreWorkspace();
     autoRefreshTimer = setInterval(refreshOpenRepositories, autoRefreshMs);
-    window.addEventListener("pagehide", persistWorkspace);
-    window.addEventListener("beforeunload", persistWorkspace);
     window.addEventListener("focus", refreshOpenRepositories);
     document.addEventListener("visibilitychange", refreshWhenVisible);
   });
@@ -124,11 +119,51 @@
       clearInterval(autoRefreshTimer);
     }
 
-    window.removeEventListener("pagehide", persistWorkspace);
-    window.removeEventListener("beforeunload", persistWorkspace);
     window.removeEventListener("focus", refreshOpenRepositories);
     document.removeEventListener("visibilitychange", refreshWhenVisible);
   });
+
+  async function restoreWorkspace() {
+    restoring = true;
+
+    try {
+      let workspace = await invoke<WorkspaceSnapshot>("restore_workspace");
+
+      if (!workspace.openRepos.length && !workspace.recentRepos.length) {
+        const legacyWorkspace = readLegacyWorkspace();
+
+        if (legacyWorkspace) {
+          workspace = await invoke<WorkspaceSnapshot>("import_legacy_workspace", {
+            legacyState: legacyWorkspace,
+          });
+          localStorage.removeItem(legacyWorkspaceStorageKey);
+        }
+      }
+
+      applyWorkspace(workspace);
+      activeView = activeRepoId ? "repo" : "start";
+    } catch (caught) {
+      startError = formatError(caught);
+      activeView = "start";
+    } finally {
+      restoring = false;
+    }
+  }
+
+  function readLegacyWorkspace() {
+    const stored = localStorage.getItem(legacyWorkspaceStorageKey);
+
+    if (!stored) {
+      return null;
+    }
+
+    try {
+      return JSON.parse(stored);
+    } catch {
+      localStorage.removeItem(legacyWorkspaceStorageKey);
+      return null;
+    }
+  }
 
   async function chooseRepository() {
     startError = "";
@@ -141,214 +176,86 @@
       });
 
       if (typeof selectedPath === "string") {
-        await openRepositoryPath(selectedPath);
+        await runWorkspaceCommand(() =>
+          invoke<WorkspaceSnapshot>("open_workspace_repository", { path: selectedPath }),
+        );
       }
     } catch (caught) {
       startError = formatError(caught);
     }
   }
 
-  async function openRepositoryPath(path: string) {
-    if (!path) {
-      return;
-    }
+  async function openRecentRepository(root: string) {
+    await runWorkspaceCommand(() =>
+      invoke<WorkspaceSnapshot>("open_recent_workspace_repository", { root }),
+    );
+    void refreshRepository(root);
+  }
 
-    const request = ++activeOpenRequest;
+  async function selectRepo(repoId: string) {
+    await runWorkspaceCommand(() =>
+      invoke<WorkspaceSnapshot>("select_workspace_repository", { repoId }),
+    );
+  }
+
+  async function closeRepo(repoId: string) {
+    const wasVisibleActive = activeView === "repo" && activeRepoId === repoId;
+    await runWorkspaceCommand(() =>
+      invoke<WorkspaceSnapshot>("close_workspace_repository", { repoId }),
+    );
+
+    if (wasVisibleActive) {
+      activeView = activeRepoId ? "repo" : "start";
+    }
+  }
+
+  async function removeRecentRepo(root: string) {
+    await runWorkspaceCommand(() =>
+      invoke<WorkspaceSnapshot>("remove_recent_workspace_repository", { root }),
+    );
+
+    if (!activeRepoId) {
+      activeView = "start";
+    }
+  }
+
+  async function runWorkspaceCommand(loadWorkspace: () => Promise<WorkspaceSnapshot>) {
+    const request = ++activeWorkspaceRequest;
+    opening = true;
     startError = "";
-    openingPath = path;
 
     try {
-      const nextSnapshot = await invoke<RepositorySnapshot>("load_repository", { path });
+      const workspace = await loadWorkspace();
 
-      if (request !== activeOpenRequest) {
-        return;
+      if (request === activeWorkspaceRequest) {
+        applyWorkspace(workspace);
+        activeView = activeRepoId ? "repo" : activeView;
       }
-
-      upsertRepository(nextSnapshot);
     } catch (caught) {
-      if (request === activeOpenRequest) {
+      if (request === activeWorkspaceRequest) {
         startError = formatError(caught);
       }
     } finally {
-      if (request === activeOpenRequest) {
-        openingPath = null;
+      if (request === activeWorkspaceRequest) {
+        opening = false;
       }
     }
   }
 
-  async function openRecentRepository(path: string) {
-    const recentRepo = recentRepos.find((repo) => repo.root === path);
+  function applyWorkspace(workspace: WorkspaceSnapshot) {
+    const previousRepos = openRepos;
+    activeRepoId = workspace.activeRepoId ?? null;
+    recentRepos = workspace.recentRepos;
+    openRepos = workspace.openRepos.map((repo) => {
+      const previousRepo = previousRepos.find((candidate) => candidate.id === repo.id);
+      const selectedGraphItem = reconcileSelection(previousRepo?.selectedGraphItem ?? null, repo.snapshot);
 
-    if (recentRepo?.snapshot) {
-      upsertRepository(recentRepo.snapshot);
-      void refreshRepository(recentRepo.snapshot.info.root);
-      return;
-    }
-
-    await openRepositoryPath(path);
-  }
-
-  function upsertRepository(nextSnapshot: RepositorySnapshot) {
-    const id = nextSnapshot.info.root;
-    const existingIndex = openRepos.findIndex((repo) => repo.id === id);
-
-    if (existingIndex >= 0) {
-      openRepos = openRepos.map((repo) =>
-        repo.id === id
-          ? {
-              ...repo,
-              title: repoTitle(nextSnapshot.info.root),
-              snapshot: nextSnapshot,
-              error: "",
-              loading: false,
-              refreshRequest: repo.refreshRequest,
-            }
-          : repo,
-      );
-    } else {
-      openRepos = [
-        ...openRepos,
-        {
-          id,
-          title: repoTitle(nextSnapshot.info.root),
-          snapshot: nextSnapshot,
-          selectedGraphItem: initialGraphSelection(nextSnapshot),
-          selectedFile: null,
-          loading: false,
-          error: "",
-          refreshRequest: 0,
-        },
-      ];
-    }
-
-    addRecentRepo(nextSnapshot);
-    activeRepoId = id;
-    activeView = "repo";
-    persistWorkspace();
-  }
-
-  function initialGraphSelection(nextSnapshot: RepositorySnapshot): SelectedGraphItem | null {
-    if (nextSnapshot.status.changedFiles.length) {
-      return { type: "changes" };
-    }
-
-    return nextSnapshot.commits[0] ? { type: "commit", commit: nextSnapshot.commits[0] } : null;
-  }
-
-  function addRecentRepo(nextSnapshot: RepositorySnapshot) {
-    const recentRepo = {
-      root: nextSnapshot.info.root,
-      title: repoTitle(nextSnapshot.info.root),
-      snapshot: nextSnapshot,
-    };
-    recentRepos = [
-      recentRepo,
-      ...recentRepos.filter((repo) => repo.root !== recentRepo.root),
-    ].slice(0, maxRecentRepos);
-  }
-
-  async function restoreWorkspace() {
-    const stored = localStorage.getItem(workspaceStorageKey);
-    persistenceReady = false;
-
-    if (!stored) {
-      persistenceReady = true;
-      return;
-    }
-
-    try {
-      const parsed = JSON.parse(stored) as WorkspaceStorage;
-      recentRepos = normalizeRecentRepos(parsed.recentRepos);
-      const paths = Array.isArray(parsed.openRepoPaths) ? parsed.openRepoPaths.filter(Boolean) : [];
-
-      if (!paths.length) {
-        persistenceReady = true;
-        return;
-      }
-
-      restoreLoading = true;
-      const restoredRepos: WorkspaceRepo[] = [];
-
-      for (const path of paths) {
-        try {
-          const nextSnapshot = await invoke<RepositorySnapshot>("load_repository", { path });
-          restoredRepos.push({
-            id: nextSnapshot.info.root,
-            title: repoTitle(nextSnapshot.info.root),
-            snapshot: nextSnapshot,
-            selectedGraphItem: initialGraphSelection(nextSnapshot),
-            selectedFile: null,
-            loading: false,
-            error: "",
-            refreshRequest: 0,
-          });
-          addRecentRepo(nextSnapshot);
-        } catch {
-          // Skip repositories that are no longer available.
-        }
-      }
-
-      openRepos = dedupeRepos(restoredRepos);
-      activeRepoId =
-        openRepos.find((repo) => repo.id === parsed.activeRepoPath)?.id ?? openRepos[0]?.id ?? null;
-      activeView = activeRepoId ? "repo" : "start";
-    } catch {
-      localStorage.removeItem(workspaceStorageKey);
-      activeView = "start";
-      activeRepoId = null;
-    } finally {
-      restoreLoading = false;
-      persistenceReady = true;
-      persistWorkspace();
-    }
-  }
-
-  function normalizeRecentRepos(storedRecentRepos: RecentRepo[] | undefined) {
-    if (!Array.isArray(storedRecentRepos)) {
-      return [];
-    }
-
-    const normalized: RecentRepo[] = [];
-
-    for (const repo of storedRecentRepos) {
-      if (!repo?.root || normalized.some((item) => item.root === repo.root)) {
-        continue;
-      }
-
-      normalized.push({
-        root: repo.root,
-        title: repo.title || repoTitle(repo.root),
-        snapshot: isRepositorySnapshot(repo.snapshot) ? repo.snapshot : undefined,
-      });
-    }
-
-    return normalized.slice(0, maxRecentRepos);
-  }
-
-  function dedupeRepos(repos: WorkspaceRepo[]) {
-    return repos.filter((repo, index) => repos.findIndex((candidate) => candidate.id === repo.id) === index);
-  }
-
-  function persistWorkspace() {
-    localStorage.setItem(
-      workspaceStorageKey,
-      JSON.stringify({
-        openRepoPaths: openRepos.map((repo) => repo.snapshot.info.root),
-        activeRepoPath: activeRepoId,
-        recentRepos,
-      } satisfies WorkspaceStorage),
-    );
-  }
-
-  function isRepositorySnapshot(value: unknown): value is RepositorySnapshot {
-    return (
-      typeof value === "object" &&
-      value !== null &&
-      "info" in value &&
-      "status" in value &&
-      "commits" in value &&
-      Array.isArray((value as RepositorySnapshot).commits)
-    );
+      return {
+        ...repo,
+        selectedGraphItem,
+        selectedFile: reconcileSelectedFile(previousRepo?.selectedFile ?? null, repo.snapshot),
+      };
+    });
   }
 
   function refreshWhenVisible() {
@@ -358,77 +265,35 @@
   }
 
   async function refreshOpenRepositories() {
-    if (!openRepos.length || restoreLoading) {
+    if (!openRepos.length || restoring) {
       return;
     }
 
-    const repoIds = openRepos.map((repo) => repo.id);
-
-    await Promise.all(repoIds.map((repoId) => refreshRepository(repoId)));
+    try {
+      applyWorkspace(await invoke<WorkspaceSnapshot>("refresh_workspace_repositories"));
+    } catch {
+      // Refresh errors are returned as per-repo tab errors when possible.
+    }
   }
 
   async function refreshRepository(repoId: string) {
-    const repo = openRepos.find((candidate) => candidate.id === repoId);
-
-    if (!repo || repo.refreshRequest) {
+    if (!openRepos.some((repo) => repo.id === repoId)) {
       return;
     }
 
-    const request = ++activeRefreshRequest;
-    openRepos = openRepos.map((candidate) =>
-      candidate.id === repoId
-        ? {
-            ...candidate,
-            refreshRequest: request,
-          }
-        : candidate,
-    );
-
     try {
-      const nextSnapshot = await invoke<RepositorySnapshot>("load_repository", {
-        path: repo.snapshot.info.root,
-      });
-
-      openRepos = openRepos.map((candidate) => {
-        if (candidate.id !== repoId || candidate.refreshRequest !== request) {
-          return candidate;
-        }
-
-        return {
-          ...candidate,
-          title: repoTitle(nextSnapshot.info.root),
-          snapshot: nextSnapshot,
-          selectedGraphItem: reconcileSelection(candidate.selectedGraphItem, nextSnapshot),
-          selectedFile: reconcileSelectedFile(candidate.selectedFile, nextSnapshot),
-          error: "",
-          refreshRequest: 0,
-        };
-      });
-      updateRecentSnapshot(nextSnapshot);
-    } catch (caught) {
-      openRepos = openRepos.map((candidate) =>
-        candidate.id === repoId && candidate.refreshRequest === request
-          ? {
-              ...candidate,
-              error: formatError(caught),
-              refreshRequest: 0,
-            }
-          : candidate,
-      );
+      applyWorkspace(await invoke<WorkspaceSnapshot>("refresh_workspace_repository", { repoId }));
+    } catch {
+      // Refresh errors are returned as per-repo tab errors when possible.
     }
   }
 
-  function updateRecentSnapshot(nextSnapshot: RepositorySnapshot) {
-    recentRepos = recentRepos.map((repo) =>
-      repo.root === nextSnapshot.info.root
-        ? {
-            ...repo,
-            title: repoTitle(nextSnapshot.info.root),
-            snapshot: nextSnapshot,
-          }
-        : repo,
-    );
-    persistWorkspace();
+  function initialGraphSelection(nextSnapshot: RepositorySnapshot): SelectedGraphItem | null {
+    if (nextSnapshot.status.changedFiles.length) {
+      return { type: "changes" };
+    }
+
+    return nextSnapshot.commits[0] ? { type: "commit", commit: nextSnapshot.commits[0] } : null;
   }
 
   function reconcileSelection(
@@ -473,58 +338,6 @@
 
   function showStartView() {
     activeView = "start";
-    persistWorkspace();
-  }
-
-  function selectRepo(repoId: string) {
-    activeRepoId = repoId;
-    activeView = "repo";
-    persistWorkspace();
-  }
-
-  function closeRepo(repoId: string) {
-    const repoIndex = openRepos.findIndex((repo) => repo.id === repoId);
-
-    if (repoIndex === -1) {
-      return;
-    }
-
-    const wasActive = activeRepoId === repoId;
-    const wasVisibleActive = activeView === "repo" && wasActive;
-    openRepos = openRepos.filter((repo) => repo.id !== repoId);
-
-    if (!wasActive) {
-      persistWorkspace();
-      return;
-    }
-
-    const nextRepo = openRepos[Math.min(repoIndex, openRepos.length - 1)] ?? null;
-    activeRepoId = nextRepo?.id ?? null;
-
-    if (wasVisibleActive) {
-      activeView = nextRepo ? "repo" : "start";
-    }
-
-    persistWorkspace();
-  }
-
-  function removeRecentRepo(repoRoot: string) {
-    const repoIndex = openRepos.findIndex((repo) => repo.id === repoRoot);
-    recentRepos = recentRepos.filter((repo) => repo.root !== repoRoot);
-
-    if (repoIndex === -1) {
-      persistWorkspace();
-      return;
-    }
-
-    openRepos = openRepos.filter((repo) => repo.id !== repoRoot);
-
-    if (activeRepoId === repoRoot) {
-      activeRepoId = null;
-      activeView = "start";
-    }
-
-    persistWorkspace();
   }
 
   function selectCommit(commit: CommitInfo) {
@@ -563,11 +376,6 @@
     }
 
     openRepos = openRepos.map((repo) => (repo.id === activeRepoId ? update(repo) : repo));
-  }
-
-  function repoTitle(path: string) {
-    const normalized = path.replace(/[\\/]+$/, "");
-    return normalized.split(/[\\/]/).pop() || normalized || "Repository";
   }
 
   function clamp(value: number, min: number, max: number) {
@@ -633,7 +441,7 @@
     {#if activeView === "start" || !activeRepo}
       <StartView
         recentRepos={recentRepos}
-        loading={Boolean(openingPath) || restoreLoading}
+        loading={opening || restoring}
         error={startError}
         onChooseRepository={chooseRepository}
         onOpenRecent={openRecentRepository}
