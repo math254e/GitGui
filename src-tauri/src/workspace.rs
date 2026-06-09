@@ -2,7 +2,7 @@ use crate::git::repository::{load_repository, RepositorySnapshot};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Manager};
 
 const MAX_RECENT_REPOS: usize = 10;
@@ -40,7 +40,7 @@ pub struct WorkspaceState {
     recent_repos: Vec<RecentRepo>,
 }
 
-pub type SharedWorkspaceState = Mutex<WorkspaceState>;
+pub type SharedWorkspaceState = Arc<Mutex<WorkspaceState>>;
 
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]

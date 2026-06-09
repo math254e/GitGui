@@ -44,6 +44,7 @@
   const layoutStorageKey = "gitgui.workspaceLayout.v1";
   const legacyWorkspaceStorageKey = "gitgui.workspaceState.v1";
   const autoRefreshMs = 30_000;
+  const initialPrefetchCommitCount = 20;
   const sidebarLimits = { default: 230, min: 180, max: 420 };
   const detailsLimits = { default: 430, min: 300, max: 620 };
 
@@ -54,10 +55,14 @@
   let startError = $state("");
   let opening = $state(false);
   let restoring = $state(false);
+  let largeScreen = $state(false);
   let sidebarWidth = $state(sidebarLimits.default);
   let detailsWidth = $state(detailsLimits.default);
   let activeWorkspaceRequest = 0;
   let autoRefreshTimer: ReturnType<typeof setInterval> | null = null;
+  let largeScreenMediaQuery: MediaQueryList | null = null;
+  const prefetchedInitialCommits = new Map<string, string>();
+  const prefetchedCommitDiffs = new Set<string>();
 
   const activeRepo = $derived(openRepos.find((repo) => repo.id === activeRepoId) ?? null);
   const snapshot = $derived(activeRepo?.snapshot ?? null);
@@ -108,6 +113,9 @@
 
   onMount(() => {
     restoreLayout();
+    largeScreenMediaQuery = window.matchMedia("(min-width: 1024px)");
+    largeScreen = largeScreenMediaQuery.matches;
+    largeScreenMediaQuery.addEventListener("change", updateLargeScreen);
     void restoreWorkspace();
     autoRefreshTimer = setInterval(refreshOpenRepositories, autoRefreshMs);
     window.addEventListener("focus", refreshOpenRepositories);
@@ -121,7 +129,12 @@
 
     window.removeEventListener("focus", refreshOpenRepositories);
     document.removeEventListener("visibilitychange", refreshWhenVisible);
+    largeScreenMediaQuery?.removeEventListener("change", updateLargeScreen);
   });
+
+  function updateLargeScreen(event: MediaQueryListEvent) {
+    largeScreen = event.matches;
+  }
 
   async function restoreWorkspace() {
     restoring = true;
@@ -256,6 +269,52 @@
         selectedFile: reconcileSelectedFile(previousRepo?.selectedFile ?? null, repo.snapshot),
       };
     });
+    prunePrefetchState(openRepos);
+    prefetchInitialCommitFiles(openRepos);
+  }
+
+  function prunePrefetchState(repos: WorkspaceRepo[]) {
+    const openRepoIds = new Set(repos.map((repo) => repo.id));
+
+    for (const repoId of prefetchedInitialCommits.keys()) {
+      if (!openRepoIds.has(repoId)) {
+        prefetchedInitialCommits.delete(repoId);
+      }
+    }
+
+    for (const signature of prefetchedCommitDiffs) {
+      const isOpenRepoSignature = repos.some((repo) => signature.startsWith(`${repo.id}:`));
+
+      if (!isOpenRepoSignature) {
+        prefetchedCommitDiffs.delete(signature);
+      }
+    }
+  }
+
+  function prefetchInitialCommitFiles(repos: WorkspaceRepo[]) {
+    for (const repo of repos) {
+      const commitHashes = repo.snapshot.commits
+        .slice(0, initialPrefetchCommitCount)
+        .map((commit) => commit.hash);
+
+      if (!commitHashes.length) {
+        continue;
+      }
+
+      const signature = commitHashes.join(":");
+
+      if (prefetchedInitialCommits.get(repo.id) === signature) {
+        continue;
+      }
+
+      prefetchedInitialCommits.set(repo.id, signature);
+      void invoke("prefetch_first_commit_files", {
+        repoRoot: repo.snapshot.info.root,
+        commitHashes,
+      }).catch(() => {
+        prefetchedInitialCommits.delete(repo.id);
+      });
+    }
   }
 
   function refreshWhenVisible() {
@@ -341,11 +400,33 @@
   }
 
   function selectCommit(commit: CommitInfo) {
+    if (snapshot) {
+      prefetchCommitDiffs(snapshot.info.root, commit);
+    }
+
     updateActiveRepo((repo) => ({
       ...repo,
       selectedGraphItem: { type: "commit", commit },
       selectedFile: null,
     }));
+  }
+
+  function prefetchCommitDiffs(repositoryPath: string, commit: CommitInfo) {
+    const parentHash = commit.parents[0] ?? null;
+    const signature = `${repositoryPath}:${commit.hash}:${parentHash ?? ""}`;
+
+    if (prefetchedCommitDiffs.has(signature)) {
+      return;
+    }
+
+    prefetchedCommitDiffs.add(signature);
+    void invoke("prefetch_commit_file_diffs", {
+      path: repositoryPath,
+      commitHash: commit.hash,
+      parentHash,
+    }).catch(() => {
+      prefetchedCommitDiffs.delete(signature);
+    });
   }
 
   function selectChanges() {
@@ -448,7 +529,8 @@
         onRemoveRecent={removeRecentRepo}
       />
     {:else}
-      <div class="grid h-full min-h-0 grid-cols-1 overflow-hidden lg:hidden">
+      {#if !largeScreen}
+      <div class="grid h-full min-h-0 grid-cols-1 overflow-hidden">
         {#if snapshot && selectedFile && (selectedCommit || changesSelected)}
           <div class="h-full min-h-0">
             <CommitFileDiffViewer
@@ -479,8 +561,8 @@
           <EmptyDetailsPanel />
         {/if}
       </div>
-
-      <div class="hidden h-full min-h-0 lg:block">
+      {:else}
+      <div class="h-full min-h-0">
         {#if snapshot && selectedFile && (selectedCommit || changesSelected)}
           <ResizablePaneGroup panes={diffPanes} onResize={resizePane}>
             {#snippet pane0()}
@@ -531,6 +613,7 @@
           </ResizablePaneGroup>
         {/if}
       </div>
+      {/if}
     {/if}
   </section>
 </main>

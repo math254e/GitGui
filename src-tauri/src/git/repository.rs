@@ -1,8 +1,7 @@
-use super::command::{GitCommand, GitError};
+use super::command::{git_command, GitCommand, GitError};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
-use std::process::Command;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -78,9 +77,8 @@ pub fn load_repository(path: &str) -> Result<RepositorySnapshot, GitError> {
     })
 }
 
-pub fn load_commit_files(path: &str, commit_hash: &str) -> Result<Vec<CommitFile>, GitError> {
-    let info = detect_repository(path)?;
-    let root = Path::new(&info.root);
+pub fn load_commit_files_from_root(repo_root: &str, commit_hash: &str) -> Result<Vec<CommitFile>, GitError> {
+    let root = Path::new(repo_root);
     let output = GitCommand::run(
         &["show", "--name-status", "--format=", commit_hash],
         Some(root),
@@ -90,20 +88,19 @@ pub fn load_commit_files(path: &str, commit_hash: &str) -> Result<Vec<CommitFile
 }
 
 pub fn load_commit_file_diff(
-    path: &str,
+    repo_root: &str,
     commit_hash: &str,
+    parent_hash: Option<&str>,
     file: &CommitFile,
 ) -> Result<CommitFileDiff, GitError> {
-    let info = detect_repository(path)?;
-    let root = Path::new(&info.root);
-    let parent_hash = first_parent(root, commit_hash)?;
+    let root = Path::new(repo_root);
     let status = file.status.chars().next().unwrap_or('M');
     let original_path = file.original_path.as_deref().unwrap_or(&file.path);
 
     let original_content = if status == 'A' || parent_hash.is_none() {
         FileContent::Text(String::new())
     } else {
-        load_file_at_revision(root, parent_hash.as_deref().unwrap_or(commit_hash), original_path)
+        load_file_at_revision(root, parent_hash.unwrap_or(commit_hash), original_path)
     };
 
     let modified_content = if status == 'D' {
@@ -136,17 +133,19 @@ pub fn load_commit_file_diff(
     })
 }
 
-pub fn load_working_tree_file_diff(path: &str, file: &CommitFile) -> Result<CommitFileDiff, GitError> {
-    let info = detect_repository(path)?;
-    let root = Path::new(&info.root);
-    let head_hash = current_head(root);
+pub fn load_working_tree_file_diff(
+    repo_root: &str,
+    head_hash: Option<&str>,
+    file: &CommitFile,
+) -> Result<CommitFileDiff, GitError> {
+    let root = Path::new(repo_root);
     let status = primary_status(&file.status);
     let original_path = file.original_path.as_deref().unwrap_or(&file.path);
 
     let original_content = if status == '?' || status == 'A' || head_hash.is_none() {
         FileContent::Text(String::new())
     } else {
-        load_file_at_revision(root, head_hash.as_deref().unwrap_or("HEAD"), original_path)
+        load_file_at_revision(root, head_hash.unwrap_or("HEAD"), original_path)
     };
 
     let modified_content = if status == 'D' {
@@ -404,18 +403,6 @@ impl FileContent {
     }
 }
 
-fn first_parent(root: &Path, commit_hash: &str) -> Result<Option<String>, GitError> {
-    let output = GitCommand::run(&["show", "-s", "--format=%P", commit_hash], Some(root))?;
-    Ok(output.split_whitespace().next().map(ToString::to_string))
-}
-
-fn current_head(root: &Path) -> Option<String> {
-    GitCommand::run(&["rev-parse", "--verify", "HEAD"], Some(root))
-        .ok()
-        .map(|output| output.trim().to_string())
-        .filter(|hash| !hash.is_empty())
-}
-
 fn primary_status(status: &str) -> char {
     let mut chars = status.chars();
     let index_status = chars.next().unwrap_or('M');
@@ -430,7 +417,7 @@ fn primary_status(status: &str) -> char {
 
 fn load_file_at_revision(root: &Path, revision: &str, file_path: &str) -> FileContent {
     let spec = format!("{revision}:{file_path}");
-    let output = match Command::new("git")
+    let output = match git_command()
         .args(["show", &spec])
         .current_dir(root)
         .output()

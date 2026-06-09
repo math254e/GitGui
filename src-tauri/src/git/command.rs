@@ -2,7 +2,13 @@ use serde::Serialize;
 use std::path::Path;
 use std::process::Command;
 
-#[derive(Debug, Serialize)]
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+#[derive(Clone, Debug, Serialize)]
 pub struct GitError {
     pub message: String,
     pub stderr: String,
@@ -13,7 +19,7 @@ pub struct GitCommand;
 
 impl GitCommand {
     pub fn run(args: &[&str], cwd: Option<&Path>) -> Result<String, GitError> {
-        let mut command = Command::new("git");
+        let mut command = git_command();
         command.args(args);
 
         if let Some(cwd) = cwd {
@@ -36,4 +42,13 @@ impl GitCommand {
 
         Ok(String::from_utf8_lossy(&output.stdout).to_string())
     }
+}
+
+pub fn git_command() -> Command {
+    let mut command = Command::new("git");
+
+    #[cfg(windows)]
+    command.creation_flags(CREATE_NO_WINDOW);
+
+    command
 }

@@ -36,8 +36,19 @@
   let diffViewMode = $state<DiffViewMode>("inline");
   let wordWrap = $state(false);
   let activeRequest = 0;
+  let activeDiffRequestKey = "";
+  let renderingDiffView = false;
+  let renderingFileView = false;
+  const diffRequestKey = $derived(buildDiffRequestKey(snapshot, diffSource, selectedCommit, selectedFile));
 
   $effect(() => {
+    const requestKey = diffRequestKey;
+
+    if (requestKey === activeDiffRequestKey) {
+      return;
+    }
+
+    activeDiffRequestKey = requestKey;
     void loadDiff(snapshot.info.root, diffSource, selectedCommit, selectedFile);
   });
 
@@ -46,37 +57,16 @@
     const wrap = wordWrap;
     const view = contentViewMode;
     applyEditorOptions(mode, wrap, view);
+
+    if (diff && !diff.isBinary) {
+      void renderSelectedView(diff, activeRequest);
+    }
   });
 
   onMount(async () => {
-    monaco = await import("monaco-editor");
-    await tick();
-
-    diffEditor = monaco.editor.createDiffEditor(diffContainer, {
-      automaticLayout: true,
-      enableSplitViewResizing: true,
-      originalEditable: false,
-      readOnly: true,
-      renderSideBySide: false,
-      useInlineViewWhenSpaceIsLimited: false,
-      renderSideBySideInlineBreakpoint: 0,
-      minimap: { enabled: false },
-      scrollBeyondLastLine: false,
-      fontSize: 12,
-      fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
-    });
-    fileEditor = monaco.editor.create(fileContainer, {
-      automaticLayout: true,
-      readOnly: true,
-      minimap: { enabled: false },
-      scrollBeyondLastLine: false,
-      fontSize: 12,
-      fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
-    });
-    applyEditorOptions(diffViewMode, wordWrap, contentViewMode);
-
+    await ensureMonaco();
     if (diff && !diff.isBinary) {
-      setEditorModel(diff);
+      await renderSelectedView(diff, activeRequest);
     }
   });
 
@@ -98,9 +88,12 @@
     diff = null;
     error = "";
     loading = true;
+    resetModels();
 
     try {
       const commitHash = commit?.hash;
+      const parentHash = commit?.parents[0] ?? null;
+      const headHash = snapshot.status.headOid ?? null;
 
       if (source === "commit" && !commitHash) {
         throw new Error("No commit is selected.");
@@ -111,17 +104,20 @@
           ? await invoke<CommitFileDiff>("load_commit_file_diff", {
               path: repositoryPath,
               commitHash,
+              parentHash,
               file,
             })
           : await invoke<CommitFileDiff>("load_working_tree_file_diff", {
               path: repositoryPath,
+              headHash,
               file,
             });
 
       if (request === activeRequest) {
         diff = nextDiff;
-        if (diffEditor && fileEditor && !nextDiff.isBinary) {
-          setEditorModel(nextDiff);
+        if (!nextDiff.isBinary) {
+          await renderSelectedView(nextDiff, request);
+          scheduleInactiveView(nextDiff, request);
         }
       }
     } catch (caught) {
@@ -135,69 +131,226 @@
     }
   }
 
-  function setEditorModel(nextDiff: CommitFileDiff) {
-    if (!monaco || !diffEditor || !fileEditor) {
+  function buildDiffRequestKey(
+    currentSnapshot: RepositorySnapshot,
+    source: DiffSource,
+    commit: CommitInfo | null,
+    file: CommitFile,
+  ) {
+    const commitHash = source === "commit" ? commit?.hash ?? "" : currentSnapshot.status.headOid ?? "";
+    const parentHash = source === "commit" ? commit?.parents[0] ?? "" : "";
+    const originalPath = file.originalPath ?? "";
+
+    return [
+      currentSnapshot.info.root,
+      source,
+      commitHash,
+      parentHash,
+      file.path,
+      originalPath,
+      file.status,
+    ].join("\0");
+  }
+
+  async function ensureMonaco() {
+    if (!monaco) {
+      monaco = await import("monaco-editor");
+    }
+
+    await tick();
+    return monaco;
+  }
+
+  async function ensureDiffEditor() {
+    const currentMonaco = await ensureMonaco();
+
+    if (!diffEditor) {
+      diffEditor = currentMonaco.editor.createDiffEditor(diffContainer, {
+        automaticLayout: true,
+        enableSplitViewResizing: true,
+        originalEditable: false,
+        readOnly: true,
+        renderSideBySide: false,
+        useInlineViewWhenSpaceIsLimited: false,
+        renderSideBySideInlineBreakpoint: 0,
+        minimap: { enabled: false },
+        scrollBeyondLastLine: false,
+        fontSize: 12,
+        fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+      });
+      applyEditorOptions(diffViewMode, wordWrap, contentViewMode);
+    }
+
+    return diffEditor;
+  }
+
+  async function ensureFileEditor() {
+    const currentMonaco = await ensureMonaco();
+
+    if (!fileEditor) {
+      fileEditor = currentMonaco.editor.create(fileContainer, {
+        automaticLayout: true,
+        readOnly: true,
+        minimap: { enabled: false },
+        scrollBeyondLastLine: false,
+        fontSize: 12,
+        fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+      });
+      applyEditorOptions(diffViewMode, wordWrap, contentViewMode);
+    }
+
+    return fileEditor;
+  }
+
+  async function renderSelectedView(nextDiff: CommitFileDiff, request: number) {
+    if (request !== activeRequest) {
       return;
     }
 
-    originalModel?.dispose();
-    modifiedModel?.dispose();
-    fileModel?.dispose();
-    originalModel = monaco.editor.createModel(
+    if (contentViewMode === "file") {
+      await renderFileView(nextDiff, request);
+      return;
+    }
+
+    await renderDiffView(nextDiff, request);
+  }
+
+  async function renderInactiveView(nextDiff: CommitFileDiff, request: number) {
+    if (request !== activeRequest) {
+      return;
+    }
+
+    if (contentViewMode === "file") {
+      await renderDiffView(nextDiff, request);
+      return;
+    }
+
+    await renderFileView(nextDiff, request);
+  }
+
+  async function renderDiffView(nextDiff: CommitFileDiff, request: number) {
+    if ((originalModel && modifiedModel) || renderingDiffView) {
+      return;
+    }
+
+    renderingDiffView = true;
+    const currentMonaco = await ensureMonaco();
+    const currentDiffEditor = await ensureDiffEditor();
+
+    if (request !== activeRequest) {
+      renderingDiffView = false;
+      return;
+    }
+
+    originalModel = currentMonaco.editor.createModel(
       nextDiff.originalContent,
       languageForPath(nextDiff.originalPath ?? nextDiff.modifiedPath),
     );
-    modifiedModel = monaco.editor.createModel(
+    modifiedModel = currentMonaco.editor.createModel(
       nextDiff.modifiedContent,
       languageForPath(nextDiff.modifiedPath),
     );
-    fileModel = monaco.editor.createModel(nextDiff.modifiedContent, languageForPath(nextDiff.modifiedPath));
-    diffEditor.setModel({
+    currentDiffEditor.setModel({
       original: originalModel,
       modified: modifiedModel,
     });
-    fileEditor.setModel(fileModel);
-    requestAnimationFrame(() => {
-      diffEditor?.layout();
-      fileEditor?.layout();
+    await animationFrame();
+    currentDiffEditor.layout();
+    renderingDiffView = false;
+  }
+
+  async function renderFileView(nextDiff: CommitFileDiff, request: number) {
+    if (fileModel || renderingFileView) {
+      return;
+    }
+
+    renderingFileView = true;
+    const currentMonaco = await ensureMonaco();
+    const currentFileEditor = await ensureFileEditor();
+
+    if (request !== activeRequest) {
+      renderingFileView = false;
+      return;
+    }
+
+    fileModel = currentMonaco.editor.createModel(nextDiff.modifiedContent, languageForPath(nextDiff.modifiedPath));
+    currentFileEditor.setModel(fileModel);
+    await animationFrame();
+    currentFileEditor.layout();
+    renderingFileView = false;
+  }
+
+  function scheduleInactiveView(nextDiff: CommitFileDiff, request: number) {
+    const render = () => {
+      void renderInactiveView(nextDiff, request);
+    };
+
+    const idleWindow = window as Window & {
+      requestIdleCallback?: (callback: () => void) => number;
+    };
+
+    if (idleWindow.requestIdleCallback) {
+      idleWindow.requestIdleCallback(render);
+      return;
+    }
+
+    window.setTimeout(render, 0);
+  }
+
+  function resetModels() {
+    originalModel?.dispose();
+    modifiedModel?.dispose();
+    fileModel?.dispose();
+    originalModel = null;
+    modifiedModel = null;
+    fileModel = null;
+    renderingDiffView = false;
+    renderingFileView = false;
+    diffEditor?.setModel(null);
+    fileEditor?.setModel(null);
+  }
+
+  function animationFrame() {
+    return new Promise<void>((resolve) => {
+      requestAnimationFrame(() => resolve());
     });
   }
 
   function applyEditorOptions(mode: DiffViewMode, wrapEnabled: boolean, view: ContentViewMode) {
-    if (!diffEditor || !fileEditor) {
-      return;
-    }
-
     const wrap = wrapEnabled ? "on" : "off";
     const diffWrap = mode === "split" ? wrap : "off";
-    diffEditor.updateOptions({
-      renderSideBySide: mode === "split",
-      useInlineViewWhenSpaceIsLimited: false,
-      renderSideBySideInlineBreakpoint: 0,
-      hideUnchangedRegions: {
-        enabled: mode === "hunks",
-        contextLineCount: 3,
-        minimumLineCount: 8,
-        revealLineCount: 20,
-      },
-      experimental: {
-        useTrueInlineView: false,
-      },
-      wordWrap: diffWrap,
-      wordWrapOverride1: mode === "split" ? wrap : "inherit",
-      wordWrapOverride2: mode === "split" ? wrap : "inherit",
-    });
-    diffEditor.getOriginalEditor().updateOptions({
-      wordWrap: diffWrap,
-      wordWrapOverride1: mode === "split" ? wrap : "inherit",
-      wordWrapOverride2: mode === "split" ? wrap : "inherit",
-    });
-    diffEditor.getModifiedEditor().updateOptions({
-      wordWrap: wrap,
-      wordWrapOverride1: mode === "split" ? wrap : "inherit",
-      wordWrapOverride2: mode === "split" ? wrap : "inherit",
-    });
-    fileEditor.updateOptions({ wordWrap: wrap });
+
+    if (diffEditor) {
+      diffEditor.updateOptions({
+        renderSideBySide: mode === "split",
+        useInlineViewWhenSpaceIsLimited: false,
+        renderSideBySideInlineBreakpoint: 0,
+        hideUnchangedRegions: {
+          enabled: mode === "hunks",
+          contextLineCount: 3,
+          minimumLineCount: 8,
+          revealLineCount: 20,
+        },
+        experimental: {
+          useTrueInlineView: false,
+        },
+        wordWrap: diffWrap,
+        wordWrapOverride1: mode === "split" ? wrap : "inherit",
+        wordWrapOverride2: mode === "split" ? wrap : "inherit",
+      });
+      diffEditor.getOriginalEditor().updateOptions({
+        wordWrap: diffWrap,
+        wordWrapOverride1: mode === "split" ? wrap : "inherit",
+        wordWrapOverride2: mode === "split" ? wrap : "inherit",
+      });
+      diffEditor.getModifiedEditor().updateOptions({
+        wordWrap: wrap,
+        wordWrapOverride1: mode === "split" ? wrap : "inherit",
+        wordWrapOverride2: mode === "split" ? wrap : "inherit",
+      });
+    }
+
+    fileEditor?.updateOptions({ wordWrap: wrap });
     requestAnimationFrame(() => {
       if (view === "diff") {
         diffEditor?.layout();
