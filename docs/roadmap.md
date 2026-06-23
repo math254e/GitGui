@@ -18,7 +18,8 @@
 
 ## Phase 3
 
-- Implement the first graph engine iteration
+- Research Gitamine's graph implementation and document the behavior baseline
+- Implement the first graph engine iteration based on Gitamine's graph semantics
 - Render commit lanes and edges
 - Add branch and checkout interactions
 

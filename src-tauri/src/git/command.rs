@@ -45,6 +45,10 @@ impl GitCommand {
 }
 
 pub fn git_command() -> Command {
+    #[cfg(not(windows))]
+    let command = Command::new("git");
+
+    #[cfg(windows)]
     let mut command = Command::new("git");
 
     #[cfg(windows)]

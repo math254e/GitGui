@@ -1,17 +1,20 @@
 mod git;
 mod workspace;
 
-use git::cache::{CommitFileDiffKey, CommitFileDiffLookup, CommitFilesKey, InFlightCommitFileDiff, SharedCommitFilesCache};
+use git::cache::{
+    CommitFileDiffKey, CommitFileDiffLookup, CommitFilesKey, InFlightCommitFileDiff,
+    SharedCommitFilesCache,
+};
 use git::command::GitError;
 use git::repository::{
-    load_commit_file_diff as load_diff_for_commit_file,
-    load_working_tree_file_diff as load_diff_for_working_tree_file,
-    load_commit_files_from_root, load_repository as load_repository_snapshot, CommitFile, CommitFileDiff,
+    load_commit_file_diff as load_diff_for_commit_file, load_commit_files_from_root,
+    load_repository as load_repository_snapshot,
+    load_working_tree_file_diff as load_diff_for_working_tree_file, CommitFile, CommitFileDiff,
     RepositorySnapshot,
 };
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, State};
 use workspace::{SharedWorkspaceState, WorkspaceSnapshot};
-use std::time::{Duration, Instant};
 
 const PREFETCH_COMMIT_DIFF_LIMIT: usize = 6;
 
@@ -33,13 +36,15 @@ async fn load_commit_files(
     commit_hash: String,
 ) -> Result<Vec<CommitFile>, GitError> {
     let cache = cache.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || load_commit_files_cached(&cache, &path, &commit_hash))
-        .await
-        .map_err(|error| GitError {
-            message: format!("Failed to join commit files task: {error}"),
-            stderr: String::new(),
-            status: None,
-        })?
+    tauri::async_runtime::spawn_blocking(move || {
+        load_commit_files_cached(&cache, &path, &commit_hash)
+    })
+    .await
+    .map_err(|error| GitError {
+        message: format!("Failed to join commit files task: {error}"),
+        stderr: String::new(),
+        status: None,
+    })?
 }
 
 #[tauri::command]
@@ -50,7 +55,8 @@ async fn prefetch_first_commit_files(
 ) -> Result<(), String> {
     let cache = cache.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        prefetch_first_commit_files_blocking(&cache, &repo_root, &commit_hashes).map_err(format_git_error)
+        prefetch_first_commit_files_blocking(&cache, &repo_root, &commit_hashes)
+            .map_err(format_git_error)
     })
     .await
     .map_err(|error| format!("Failed to join commit files prefetch task: {error}"))?
@@ -67,7 +73,13 @@ async fn load_commit_file_diff(
     let cache = cache.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let started = Instant::now();
-        let result = load_commit_file_diff_cached(&cache, &path, &commit_hash, parent_hash.as_deref(), &file);
+        let result = load_commit_file_diff_cached(
+            &cache,
+            &path,
+            &commit_hash,
+            parent_hash.as_deref(),
+            &file,
+        );
         log_slow_task(
             "load_commit_file_diff",
             started,
@@ -75,12 +87,12 @@ async fn load_commit_file_diff(
         );
         result
     })
-        .await
-        .map_err(|error| GitError {
-            message: format!("Failed to join commit file diff task: {error}"),
-            stderr: String::new(),
-            status: None,
-        })?
+    .await
+    .map_err(|error| GitError {
+        message: format!("Failed to join commit file diff task: {error}"),
+        stderr: String::new(),
+        status: None,
+    })?
 }
 
 #[tauri::command]
@@ -108,12 +120,12 @@ async fn load_working_tree_file_diff(
     tauri::async_runtime::spawn_blocking(move || {
         load_diff_for_working_tree_file(&path, head_hash.as_deref(), &file)
     })
-        .await
-        .map_err(|error| GitError {
-            message: format!("Failed to join working tree diff task: {error}"),
-            stderr: String::new(),
-            status: None,
-        })?
+    .await
+    .map_err(|error| GitError {
+        message: format!("Failed to join working tree diff task: {error}"),
+        stderr: String::new(),
+        status: None,
+    })?
 }
 
 #[tauri::command]
@@ -134,9 +146,11 @@ async fn import_legacy_workspace(
     legacy_state: serde_json::Value,
 ) -> Result<WorkspaceSnapshot, String> {
     let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || workspace::import_legacy_workspace(&app, &state, legacy_state))
-        .await
-        .map_err(|error| format!("Failed to join workspace import task: {error}"))?
+    tauri::async_runtime::spawn_blocking(move || {
+        workspace::import_legacy_workspace(&app, &state, legacy_state)
+    })
+    .await
+    .map_err(|error| format!("Failed to join workspace import task: {error}"))?
 }
 
 #[tauri::command]
@@ -158,9 +172,11 @@ async fn open_recent_workspace_repository(
     root: String,
 ) -> Result<WorkspaceSnapshot, String> {
     let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || workspace::open_recent_repository(&app, &state, root))
-        .await
-        .map_err(|error| format!("Failed to join recent repository open task: {error}"))?
+    tauri::async_runtime::spawn_blocking(move || {
+        workspace::open_recent_repository(&app, &state, root)
+    })
+    .await
+    .map_err(|error| format!("Failed to join recent repository open task: {error}"))?
 }
 
 #[tauri::command]
@@ -177,8 +193,8 @@ async fn close_workspace_repository(
         evict_repo_cache(&cache, &repo_id)?;
         Ok(snapshot)
     })
-        .await
-        .map_err(|error| format!("Failed to join repository close task: {error}"))?
+    .await
+    .map_err(|error| format!("Failed to join repository close task: {error}"))?
 }
 
 #[tauri::command]
@@ -195,8 +211,8 @@ async fn remove_recent_workspace_repository(
         evict_repo_cache(&cache, &root)?;
         Ok(snapshot)
     })
-        .await
-        .map_err(|error| format!("Failed to join recent repository remove task: {error}"))?
+    .await
+    .map_err(|error| format!("Failed to join recent repository remove task: {error}"))?
 }
 
 #[tauri::command]
@@ -206,9 +222,11 @@ async fn select_workspace_repository(
     repo_id: String,
 ) -> Result<WorkspaceSnapshot, String> {
     let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || workspace::select_repository(&app, &state, repo_id))
-        .await
-        .map_err(|error| format!("Failed to join repository select task: {error}"))?
+    tauri::async_runtime::spawn_blocking(move || {
+        workspace::select_repository(&app, &state, repo_id)
+    })
+    .await
+    .map_err(|error| format!("Failed to join repository select task: {error}"))?
 }
 
 #[tauri::command]
@@ -229,9 +247,11 @@ async fn refresh_workspace_repository(
     repo_id: String,
 ) -> Result<WorkspaceSnapshot, String> {
     let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || workspace::refresh_repository(&app, &state, repo_id))
-        .await
-        .map_err(|error| format!("Failed to join repository refresh task: {error}"))?
+    tauri::async_runtime::spawn_blocking(move || {
+        workspace::refresh_repository(&app, &state, repo_id)
+    })
+    .await
+    .map_err(|error| format!("Failed to join repository refresh task: {error}"))?
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -306,7 +326,10 @@ fn load_commit_file_diff_cached(
 
     match lookup {
         CommitFileDiffLookup::Cached(diff) => {
-            log_cache_hit("commit_diff", Some(format!("{} {}", short_hash(commit_hash), file.path)));
+            log_cache_hit(
+                "commit_diff",
+                Some(format!("{} {}", short_hash(commit_hash), file.path)),
+            );
             Ok(diff)
         }
         CommitFileDiffLookup::Loading(in_flight) => wait_for_diff_load(in_flight),
@@ -422,7 +445,12 @@ fn prefetch_commit_file_diffs_blocking(
         prefetched += 1;
     }
 
-    log_prefetch("commit_diffs", started, prefetched, Some(short_hash(commit_hash).to_string()));
+    log_prefetch(
+        "commit_diffs",
+        started,
+        prefetched,
+        Some(short_hash(commit_hash).to_string()),
+    );
     Ok(())
 }
 
@@ -473,9 +501,15 @@ fn log_prefetch(task: &str, started: Instant, count: usize, detail: Option<Strin
         let elapsed = started.elapsed();
 
         if let Some(detail) = detail {
-            eprintln!("[perf] prefetch {task} warmed {count} in {}ms: {detail}", elapsed.as_millis());
+            eprintln!(
+                "[perf] prefetch {task} warmed {count} in {}ms: {detail}",
+                elapsed.as_millis()
+            );
         } else {
-            eprintln!("[perf] prefetch {task} warmed {count} in {}ms", elapsed.as_millis());
+            eprintln!(
+                "[perf] prefetch {task} warmed {count} in {}ms",
+                elapsed.as_millis()
+            );
         }
     }
 }

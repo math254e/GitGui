@@ -13,6 +13,15 @@ export type CommitInfo = {
   message: string;
 };
 
+export type CommitRefType = "localBranch" | "remoteBranch" | "tag";
+
+export type CommitRef = {
+  name: string;
+  shortName: string;
+  target: string;
+  refType: CommitRefType;
+};
+
 export type CommitFile = {
   path: string;
   originalPath?: string;
@@ -28,6 +37,27 @@ export type CommitFileDiff = {
   message?: string;
 };
 
+export type GraphEdgeType = "normal" | "merge";
+
+export type GraphCommit = {
+  hash: string;
+  row: number;
+  lane: number;
+};
+
+export type GraphEdge = {
+  from: string;
+  to: string;
+  edgeType: GraphEdgeType;
+};
+
+export type CommitGraph = {
+  commits: GraphCommit[];
+  edges: GraphEdge[];
+  width: number;
+  headLane?: number;
+};
+
 export type RepositorySnapshot = {
   info: {
     path: string;
@@ -41,4 +71,6 @@ export type RepositorySnapshot = {
     changedFiles: ChangedFile[];
   };
   commits: CommitInfo[];
+  graph: CommitGraph;
+  refs: CommitRef[];
 };

@@ -80,7 +80,11 @@ impl CommitFilesCache {
         self.evict_recent_diffs();
     }
 
-    pub fn finish_diff_load(&mut self, key: &CommitFileDiffKey, result: Result<CommitFileDiff, GitError>) {
+    pub fn finish_diff_load(
+        &mut self,
+        key: &CommitFileDiffKey,
+        result: Result<CommitFileDiff, GitError>,
+    ) {
         let Some(in_flight) = self.in_flight_diffs.remove(key) else {
             return;
         };
@@ -100,8 +104,10 @@ impl CommitFilesCache {
     pub fn evict_repo(&mut self, repo_root: &str) {
         self.recent.retain(|key, _| key.repo_root != repo_root);
         self.recent_order.retain(|key| key.repo_root != repo_root);
-        self.recent_diffs.retain(|key, _| key.repo_root != repo_root);
-        self.recent_diff_order.retain(|key| key.repo_root != repo_root);
+        self.recent_diffs
+            .retain(|key, _| key.repo_root != repo_root);
+        self.recent_diff_order
+            .retain(|key| key.repo_root != repo_root);
 
         let evicted_in_flight = self
             .in_flight_diffs

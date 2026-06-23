@@ -47,7 +47,16 @@ pub type SharedWorkspaceState = Arc<Mutex<WorkspaceState>>;
 struct StoredWorkspace {
     open_repo_paths: Vec<String>,
     active_repo_path: Option<String>,
-    recent_repos: Vec<RecentRepo>,
+    recent_repos: Vec<StoredRecentRepo>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredRecentRepo {
+    root: String,
+    title: String,
+    #[serde(default)]
+    snapshot: Option<serde_json::Value>,
 }
 
 impl WorkspaceState {
@@ -141,9 +150,10 @@ impl WorkspaceState {
             return Ok(Self::default());
         }
 
-        let contents = fs::read_to_string(&path).map_err(|error| format!("Failed to read workspace state: {error}"))?;
-        let stored: StoredWorkspace =
-            serde_json::from_str(&contents).map_err(|error| format!("Failed to parse workspace state: {error}"))?;
+        let contents = fs::read_to_string(&path)
+            .map_err(|error| format!("Failed to read workspace state: {error}"))?;
+        let stored: StoredWorkspace = serde_json::from_str(&contents)
+            .map_err(|error| format!("Failed to parse workspace state: {error}"))?;
         Self::from_stored(stored)
     }
 
@@ -168,7 +178,13 @@ impl WorkspaceState {
 
         state.active_repo_id = stored
             .active_repo_path
-            .and_then(|active_path| state.open_repos.iter().find(|repo| repo.id == active_path).map(|repo| repo.id.clone()))
+            .and_then(|active_path| {
+                state
+                    .open_repos
+                    .iter()
+                    .find(|repo| repo.id == active_path)
+                    .map(|repo| repo.id.clone())
+            })
             .or_else(|| state.open_repos.first().map(|repo| repo.id.clone()));
         Ok(state)
     }
@@ -177,24 +193,42 @@ impl WorkspaceState {
         let path = workspace_file_path(app)?;
 
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).map_err(|error| format!("Failed to create workspace state directory: {error}"))?;
+            fs::create_dir_all(parent)
+                .map_err(|error| format!("Failed to create workspace state directory: {error}"))?;
         }
 
         let stored = StoredWorkspace {
             open_repo_paths: self.open_repos.iter().map(|repo| repo.id.clone()).collect(),
             active_repo_path: self.active_repo_id.clone(),
-            recent_repos: self.recent_repos.clone(),
+            recent_repos: self
+                .recent_repos
+                .iter()
+                .map(|repo| StoredRecentRepo {
+                    root: repo.root.clone(),
+                    title: repo.title.clone(),
+                    snapshot: repo
+                        .snapshot
+                        .as_ref()
+                        .and_then(|snapshot| serde_json::to_value(snapshot).ok()),
+                })
+                .collect(),
         };
-        let contents =
-            serde_json::to_string_pretty(&stored).map_err(|error| format!("Failed to serialize workspace state: {error}"))?;
-        fs::write(path, contents).map_err(|error| format!("Failed to write workspace state: {error}"))
+        let contents = serde_json::to_string_pretty(&stored)
+            .map_err(|error| format!("Failed to serialize workspace state: {error}"))?;
+        fs::write(path, contents)
+            .map_err(|error| format!("Failed to write workspace state: {error}"))
     }
 }
 
-pub fn restore_workspace(app: &AppHandle, state: &SharedWorkspaceState) -> Result<WorkspaceSnapshot, String> {
+pub fn restore_workspace(
+    app: &AppHandle,
+    state: &SharedWorkspaceState,
+) -> Result<WorkspaceSnapshot, String> {
     let restored_state = WorkspaceState::load_from_disk(app)?;
     let snapshot = restored_state.snapshot();
-    *state.lock().map_err(|_| "Workspace state is unavailable.".to_string())? = restored_state;
+    *state
+        .lock()
+        .map_err(|_| "Workspace state is unavailable.".to_string())? = restored_state;
     Ok(snapshot)
 }
 
@@ -208,7 +242,9 @@ pub fn import_legacy_workspace(
     let imported_state = WorkspaceState::from_stored(stored)?;
     let snapshot = imported_state.snapshot();
     imported_state.save_to_disk(app)?;
-    *state.lock().map_err(|_| "Workspace state is unavailable.".to_string())? = imported_state;
+    *state
+        .lock()
+        .map_err(|_| "Workspace state is unavailable.".to_string())? = imported_state;
     Ok(snapshot)
 }
 
@@ -230,7 +266,9 @@ pub fn open_recent_repository(
     root: String,
 ) -> Result<WorkspaceSnapshot, String> {
     let cached_snapshot = {
-        let workspace = state.lock().map_err(|_| "Workspace state is unavailable.".to_string())?;
+        let workspace = state
+            .lock()
+            .map_err(|_| "Workspace state is unavailable.".to_string())?;
         workspace
             .recent_repos
             .iter()
@@ -286,8 +324,14 @@ pub fn refresh_open_repositories(
     state: &SharedWorkspaceState,
 ) -> Result<WorkspaceSnapshot, String> {
     let repo_ids = {
-        let workspace = state.lock().map_err(|_| "Workspace state is unavailable.".to_string())?;
-        workspace.open_repos.iter().map(|repo| repo.id.clone()).collect::<Vec<_>>()
+        let workspace = state
+            .lock()
+            .map_err(|_| "Workspace state is unavailable.".to_string())?;
+        workspace
+            .open_repos
+            .iter()
+            .map(|repo| repo.id.clone())
+            .collect::<Vec<_>>()
     };
     let refresh_results = repo_ids
         .into_iter()
@@ -319,12 +363,16 @@ pub fn refresh_repository(
     repo_id: String,
 ) -> Result<WorkspaceSnapshot, String> {
     let is_open = {
-        let workspace = state.lock().map_err(|_| "Workspace state is unavailable.".to_string())?;
+        let workspace = state
+            .lock()
+            .map_err(|_| "Workspace state is unavailable.".to_string())?;
         workspace.open_repos.iter().any(|repo| repo.id == repo_id)
     };
 
     if !is_open {
-        let workspace = state.lock().map_err(|_| "Workspace state is unavailable.".to_string())?;
+        let workspace = state
+            .lock()
+            .map_err(|_| "Workspace state is unavailable.".to_string())?;
         return Ok(workspace.snapshot());
     }
 
@@ -348,7 +396,9 @@ fn with_workspace(
     state: &SharedWorkspaceState,
     update: impl FnOnce(&mut WorkspaceState) -> Result<(), String>,
 ) -> Result<WorkspaceSnapshot, String> {
-    let mut workspace = state.lock().map_err(|_| "Workspace state is unavailable.".to_string())?;
+    let mut workspace = state
+        .lock()
+        .map_err(|_| "Workspace state is unavailable.".to_string())?;
     update(&mut workspace)?;
     workspace.save_to_disk(app)?;
     Ok(workspace.snapshot())
@@ -371,13 +421,19 @@ fn repo_title(path: &str) -> String {
         .to_string()
 }
 
-fn normalize_recent_repos(recent_repos: Vec<RecentRepo>) -> Vec<RecentRepo> {
+fn normalize_recent_repos(recent_repos: Vec<StoredRecentRepo>) -> Vec<RecentRepo> {
     let mut normalized = Vec::new();
 
     for repo in recent_repos {
-        if repo.root.is_empty() || normalized.iter().any(|existing: &RecentRepo| existing.root == repo.root) {
+        if repo.root.is_empty()
+            || normalized
+                .iter()
+                .any(|existing: &RecentRepo| existing.root == repo.root)
+        {
             continue;
         }
+
+        let snapshot = load_repository(&repo.root).ok();
 
         normalized.push(RecentRepo {
             title: if repo.title.is_empty() {
@@ -386,7 +442,7 @@ fn normalize_recent_repos(recent_repos: Vec<RecentRepo>) -> Vec<RecentRepo> {
                 repo.title
             },
             root: repo.root,
-            snapshot: repo.snapshot,
+            snapshot,
         });
 
         if normalized.len() == MAX_RECENT_REPOS {

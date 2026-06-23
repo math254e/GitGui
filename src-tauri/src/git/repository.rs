@@ -1,5 +1,6 @@
 use super::command::{git_command, GitCommand, GitError};
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 
@@ -16,6 +17,8 @@ pub struct RepositorySnapshot {
     pub info: RepositoryInfo,
     pub status: RepositoryStatus,
     pub commits: Vec<CommitInfo>,
+    pub graph: CommitGraph,
+    pub refs: Vec<CommitRef>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, Default)]
@@ -49,6 +52,55 @@ pub struct CommitInfo {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct CommitGraph {
+    pub commits: Vec<GraphCommit>,
+    pub edges: Vec<GraphEdge>,
+    pub width: usize,
+    pub head_lane: Option<usize>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphCommit {
+    pub hash: String,
+    pub row: usize,
+    pub lane: usize,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphEdge {
+    pub from: String,
+    pub to: String,
+    pub edge_type: GraphEdgeType,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum GraphEdgeType {
+    Normal,
+    Merge,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CommitRef {
+    pub name: String,
+    pub short_name: String,
+    pub target: String,
+    pub ref_type: CommitRefType,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum CommitRefType {
+    LocalBranch,
+    RemoteBranch,
+    Tag,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CommitFile {
     pub path: String,
     pub original_path: Option<String>,
@@ -69,15 +121,24 @@ pub struct CommitFileDiff {
 pub fn load_repository(path: &str) -> Result<RepositorySnapshot, GitError> {
     let info = detect_repository(path)?;
     let root = Path::new(&info.root);
+    let status = repository_status(root)?;
+    let commits = sort_commits(load_commits(root)?);
+    let graph = build_commit_graph(&commits, status.head_oid.as_deref());
+    let refs = load_refs(root)?;
 
     Ok(RepositorySnapshot {
-        status: repository_status(root)?,
-        commits: load_commits(root)?,
+        status,
+        graph,
+        refs,
+        commits,
         info,
     })
 }
 
-pub fn load_commit_files_from_root(repo_root: &str, commit_hash: &str) -> Result<Vec<CommitFile>, GitError> {
+pub fn load_commit_files_from_root(
+    repo_root: &str,
+    commit_hash: &str,
+) -> Result<Vec<CommitFile>, GitError> {
     let root = Path::new(repo_root);
     let output = GitCommand::run(
         &["show", "--name-status", "--format=", commit_hash],
@@ -190,7 +251,12 @@ fn detect_repository(path: &str) -> Result<RepositoryInfo, GitError> {
 
 fn repository_status(root: &Path) -> Result<RepositoryStatus, GitError> {
     let output = GitCommand::run(
-        &["status", "--porcelain=v2", "--branch", "--untracked-files=all"],
+        &[
+            "status",
+            "--porcelain=v2",
+            "--branch",
+            "--untracked-files=all",
+        ],
         Some(root),
     )?;
     let mut status = RepositoryStatus::default();
@@ -232,7 +298,9 @@ fn parse_changed_file(line: &str) -> Option<ChangedFile> {
 
     match record_type {
         '1' | '2' => {
-            let fields: Vec<&str> = line.splitn(if record_type == '2' { 10 } else { 9 }, ' ').collect();
+            let fields: Vec<&str> = line
+                .splitn(if record_type == '2' { 10 } else { 9 }, ' ')
+                .collect();
             let status = fields.get(1)?;
             let path_index = if record_type == '2' { 9 } else { 8 };
             let path = fields.get(path_index)?.to_string();
@@ -334,7 +402,6 @@ fn load_commits(root: &Path) -> Result<Vec<CommitInfo>, GitError> {
             "--all",
             "--date=unix",
             "--pretty=format:%H%x1f%P%x1f%an%x1f%at%x1f%s%x1e",
-            "--max-count=200",
         ],
         Some(root),
     )?;
@@ -362,6 +429,372 @@ fn load_commits(root: &Path) -> Result<Vec<CommitInfo>, GitError> {
             })
         })
         .collect())
+}
+
+fn load_refs(root: &Path) -> Result<Vec<CommitRef>, GitError> {
+    let output = GitCommand::run(
+        &[
+            "for-each-ref",
+            "--format=%(refname)%09%(refname:short)%09%(objectname)%09%(*objectname)",
+            "refs/heads",
+            "refs/remotes",
+            "refs/tags",
+        ],
+        Some(root),
+    )?;
+
+    Ok(output.lines().filter_map(parse_commit_ref).collect())
+}
+
+fn parse_commit_ref(line: &str) -> Option<CommitRef> {
+    let mut parts = line.split('\t');
+    let name = parts.next()?.trim();
+    let short_name = parts.next()?.trim();
+    let object_name = parts.next()?.trim();
+    let peeled_object_name = parts.next().unwrap_or_default().trim();
+    let target = if peeled_object_name.is_empty() {
+        object_name
+    } else {
+        peeled_object_name
+    };
+
+    if name.is_empty() || short_name.is_empty() || target.is_empty() {
+        return None;
+    }
+
+    if name.ends_with("/HEAD") {
+        return None;
+    }
+
+    let ref_type = if name.starts_with("refs/heads/") {
+        CommitRefType::LocalBranch
+    } else if name.starts_with("refs/remotes/") {
+        CommitRefType::RemoteBranch
+    } else if name.starts_with("refs/tags/") {
+        CommitRefType::Tag
+    } else {
+        return None;
+    };
+
+    Some(CommitRef {
+        name: name.to_string(),
+        short_name: short_name.to_string(),
+        target: target.to_string(),
+        ref_type,
+    })
+}
+
+fn sort_commits(mut commits: Vec<CommitInfo>) -> Vec<CommitInfo> {
+    let children = build_children(&commits);
+    let commit_by_hash: HashMap<String, CommitInfo> = commits
+        .iter()
+        .cloned()
+        .map(|commit| (commit.hash.clone(), commit))
+        .collect();
+    let mut sorted = Vec::with_capacity(commits.len());
+    let mut seen = HashSet::new();
+
+    commits.sort_by(|first, second| {
+        second
+            .timestamp
+            .cmp(&first.timestamp)
+            .then_with(|| first.hash.cmp(&second.hash))
+    });
+
+    for commit in &commits {
+        visit_commit_for_sort(
+            &commit.hash,
+            &commit_by_hash,
+            &children,
+            &mut seen,
+            &mut sorted,
+        );
+    }
+
+    sorted
+}
+
+fn visit_commit_for_sort(
+    commit_hash: &str,
+    commit_by_hash: &HashMap<String, CommitInfo>,
+    children: &HashMap<String, Vec<String>>,
+    seen: &mut HashSet<String>,
+    sorted: &mut Vec<CommitInfo>,
+) {
+    if !seen.insert(commit_hash.to_string()) {
+        return;
+    }
+
+    if let Some(child_hashes) = children.get(commit_hash) {
+        for child_hash in child_hashes {
+            visit_commit_for_sort(child_hash, commit_by_hash, children, seen, sorted);
+        }
+    }
+
+    if let Some(commit) = commit_by_hash.get(commit_hash) {
+        sorted.push(commit.clone());
+    }
+}
+
+fn build_children(commits: &[CommitInfo]) -> HashMap<String, Vec<String>> {
+    let known_hashes: HashSet<&str> = commits.iter().map(|commit| commit.hash.as_str()).collect();
+    let mut children: HashMap<String, Vec<String>> = commits
+        .iter()
+        .map(|commit| (commit.hash.clone(), Vec::new()))
+        .collect();
+
+    for commit in commits {
+        for parent_hash in &commit.parents {
+            if known_hashes.contains(parent_hash.as_str()) {
+                children
+                    .entry(parent_hash.clone())
+                    .or_default()
+                    .push(commit.hash.clone());
+            }
+        }
+    }
+
+    children
+}
+
+fn build_commit_graph(commits: &[CommitInfo], head_hash: Option<&str>) -> CommitGraph {
+    const INDEX_NODE: &str = "__gitgui_index__";
+
+    let children = build_children(commits);
+    let commit_by_hash: HashMap<&str, &CommitInfo> = commits
+        .iter()
+        .map(|commit| (commit.hash.as_str(), commit))
+        .collect();
+    let sha_to_index: HashMap<String, usize> = commits
+        .iter()
+        .enumerate()
+        .map(|(index, commit)| (commit.hash.clone(), index + 1))
+        .collect();
+    let mut positions: HashMap<String, (usize, usize)> = HashMap::new();
+    let mut graph_commits = Vec::with_capacity(commits.len());
+    let mut branches: Vec<Option<String>> = vec![Some(INDEX_NODE.to_string())];
+    let mut active_nodes: HashMap<String, HashSet<usize>> = HashMap::new();
+    let mut active_queue: Vec<(usize, String)> = Vec::new();
+    let head_hash = head_hash.filter(|hash| sha_to_index.contains_key(*hash));
+
+    active_nodes.insert(INDEX_NODE.to_string(), HashSet::new());
+
+    if let Some(head_hash) = head_hash {
+        if let Some(head_index) = sha_to_index.get(head_hash) {
+            active_queue.push((*head_index, INDEX_NODE.to_string()));
+        }
+    }
+
+    for (index, commit) in commits.iter().enumerate() {
+        let row = index + 1;
+        let commit_hash = commit.hash.clone();
+        let empty_children = Vec::new();
+        let child_hashes = children.get(&commit_hash).unwrap_or(&empty_children);
+        let branch_children: Vec<&String> = child_hashes
+            .iter()
+            .filter(|child_hash| {
+                commit_by_hash
+                    .get(child_hash.as_str())
+                    .and_then(|child| child.parents.first())
+                    .is_some_and(|first_parent| first_parent == &commit_hash)
+            })
+            .collect();
+        let merge_children: Vec<&String> = child_hashes
+            .iter()
+            .filter(|child_hash| {
+                commit_by_hash
+                    .get(child_hash.as_str())
+                    .and_then(|child| child.parents.first())
+                    .is_some_and(|first_parent| first_parent != &commit_hash)
+            })
+            .collect();
+        let forbidden_lanes =
+            forbidden_lanes_for_merge_children(&merge_children, &positions, &active_nodes);
+        let mut commit_to_replace: Option<&str> = None;
+        let mut replace_lane = usize::MAX;
+
+        if Some(commit_hash.as_str()) == head_hash {
+            commit_to_replace = Some(INDEX_NODE);
+            replace_lane = 0;
+        } else {
+            for child_hash in &branch_children {
+                let Some((_, child_lane)) = positions.get(child_hash.as_str()) else {
+                    continue;
+                };
+
+                if !forbidden_lanes.contains(child_lane) && *child_lane < replace_lane {
+                    commit_to_replace = Some(child_hash.as_str());
+                    replace_lane = *child_lane;
+                }
+            }
+        }
+
+        let lane = if commit_to_replace.is_some() {
+            branches[replace_lane] = Some(commit_hash.clone());
+            replace_lane
+        } else if let Some(child_hash) = child_hashes.first() {
+            let near_lane = positions
+                .get(child_hash.as_str())
+                .map(|(_, lane)| *lane)
+                .unwrap_or(0);
+            insert_commit_near_lane(
+                &mut branches,
+                commit_hash.clone(),
+                near_lane,
+                &forbidden_lanes,
+            )
+        } else {
+            insert_commit_near_lane(&mut branches, commit_hash.clone(), 0, &HashSet::new())
+        };
+
+        active_queue.retain(|(remove_row, node_hash)| {
+            if *remove_row < row {
+                active_nodes.remove(node_hash);
+                false
+            } else {
+                true
+            }
+        });
+
+        let mut lanes_to_add = vec![lane];
+        for child_hash in &branch_children {
+            if let Some((_, child_lane)) = positions.get(child_hash.as_str()) {
+                lanes_to_add.push(*child_lane);
+            }
+        }
+
+        for active_node in active_nodes.values_mut() {
+            active_node.extend(lanes_to_add.iter().copied());
+        }
+
+        active_nodes.insert(commit_hash.clone(), HashSet::new());
+
+        if let Some(remove_row) = commit
+            .parents
+            .iter()
+            .filter_map(|parent_hash| sha_to_index.get(parent_hash).copied())
+            .max()
+        {
+            active_queue.push((remove_row, commit_hash.clone()));
+        }
+
+        for child_hash in &branch_children {
+            if Some(child_hash.as_str()) != commit_to_replace {
+                if let Some((_, child_lane)) = positions.get(child_hash.as_str()) {
+                    branches[*child_lane] = None;
+                }
+            }
+        }
+
+        if commit.parents.is_empty() {
+            branches[lane] = None;
+        }
+
+        positions.insert(commit_hash.clone(), (row, lane));
+        graph_commits.push(GraphCommit {
+            hash: commit_hash,
+            row,
+            lane,
+        });
+    }
+
+    let edges = build_graph_edges(commits, &positions);
+    let head_lane = head_hash.and_then(|hash| positions.get(hash).map(|(_, lane)| *lane));
+
+    CommitGraph {
+        commits: graph_commits,
+        edges,
+        width: branches.len().max(1),
+        head_lane,
+    }
+}
+
+fn forbidden_lanes_for_merge_children(
+    merge_children: &[&String],
+    positions: &HashMap<String, (usize, usize)>,
+    active_nodes: &HashMap<String, HashSet<usize>>,
+) -> HashSet<usize> {
+    let highest_child = merge_children
+        .iter()
+        .filter_map(|child_hash| {
+            positions
+                .get(child_hash.as_str())
+                .map(|(row, _)| (*row, *child_hash))
+        })
+        .min_by_key(|(row, _)| *row)
+        .map(|(_, child_hash)| child_hash);
+
+    highest_child
+        .and_then(|child_hash| active_nodes.get(child_hash.as_str()).cloned())
+        .unwrap_or_default()
+}
+
+fn insert_commit_near_lane(
+    branches: &mut Vec<Option<String>>,
+    commit_hash: String,
+    lane: usize,
+    forbidden_lanes: &HashSet<usize>,
+) -> usize {
+    let mut distance = 1;
+
+    while lane >= distance || lane + distance < branches.len() {
+        let right_lane = lane + distance;
+
+        if right_lane < branches.len()
+            && branches[right_lane].is_none()
+            && !forbidden_lanes.contains(&right_lane)
+        {
+            branches[right_lane] = Some(commit_hash);
+            return right_lane;
+        }
+
+        if lane >= distance {
+            let left_lane = lane - distance;
+
+            if branches[left_lane].is_none() && !forbidden_lanes.contains(&left_lane) {
+                branches[left_lane] = Some(commit_hash);
+                return left_lane;
+            }
+        }
+
+        distance += 1;
+    }
+
+    branches.push(Some(commit_hash));
+    branches.len() - 1
+}
+
+fn build_graph_edges(
+    commits: &[CommitInfo],
+    positions: &HashMap<String, (usize, usize)>,
+) -> Vec<GraphEdge> {
+    let known_hashes: HashSet<&str> = commits.iter().map(|commit| commit.hash.as_str()).collect();
+    let mut edges = Vec::new();
+
+    for commit in commits {
+        if !positions.contains_key(&commit.hash) {
+            continue;
+        }
+
+        for (parent_index, parent_hash) in commit.parents.iter().enumerate() {
+            if !known_hashes.contains(parent_hash.as_str()) || !positions.contains_key(parent_hash)
+            {
+                continue;
+            }
+
+            edges.push(GraphEdge {
+                from: commit.hash.clone(),
+                to: parent_hash.clone(),
+                edge_type: if parent_index == 0 {
+                    GraphEdgeType::Normal
+                } else {
+                    GraphEdgeType::Merge
+                },
+            });
+        }
+    }
+
+    edges
 }
 
 fn parse_commit_file(line: &str) -> Option<CommitFile> {
@@ -473,9 +906,28 @@ fn load_file_from_working_tree(root: &Path, file_path: &str) -> FileContent {
 mod tests {
     use super::*;
 
+    fn commit(hash: &str, parents: &[&str], timestamp: i64) -> CommitInfo {
+        CommitInfo {
+            hash: hash.to_string(),
+            parents: parents.iter().map(|parent| parent.to_string()).collect(),
+            author: "Test Author".to_string(),
+            timestamp,
+            message: format!("Commit {hash}"),
+        }
+    }
+
+    fn graph_commit<'a>(graph: &'a CommitGraph, hash: &str) -> &'a GraphCommit {
+        graph
+            .commits
+            .iter()
+            .find(|commit| commit.hash == hash)
+            .unwrap()
+    }
+
     #[test]
     fn parses_ordinary_modified_file() {
-        let file = parse_changed_file("1 .M N... 100644 100644 100644 1234567 1234567 src/main.rs").unwrap();
+        let file = parse_changed_file("1 .M N... 100644 100644 100644 1234567 1234567 src/main.rs")
+            .unwrap();
 
         assert_eq!(file.path, "src/main.rs");
         assert_eq!(file.original_path, None);
@@ -485,7 +937,9 @@ mod tests {
 
     #[test]
     fn parses_staged_added_file_with_spaces() {
-        let file = parse_changed_file("1 A. N... 000000 100644 100644 0000000 89abcde docs/new file.md").unwrap();
+        let file =
+            parse_changed_file("1 A. N... 000000 100644 100644 0000000 89abcde docs/new file.md")
+                .unwrap();
 
         assert_eq!(file.path, "docs/new file.md");
         assert_eq!(file.index_status, "A");
@@ -533,9 +987,165 @@ mod tests {
 
     #[test]
     fn unquotes_git_octal_paths() {
-        let file = parse_changed_file(r#"1 .M N... 100644 100644 100644 1234567 1234567 "src/quote\040and\011tab.rs""#)
-            .unwrap();
+        let file = parse_changed_file(
+            r#"1 .M N... 100644 100644 100644 1234567 1234567 "src/quote\040and\011tab.rs""#,
+        )
+        .unwrap();
 
         assert_eq!(file.path, "src/quote and\ttab.rs");
+    }
+
+    #[test]
+    fn parses_local_branch_ref() {
+        let parsed = parse_commit_ref("refs/heads/main\tmain\tabc123\t").unwrap();
+
+        assert_eq!(parsed.name, "refs/heads/main");
+        assert_eq!(parsed.short_name, "main");
+        assert_eq!(parsed.target, "abc123");
+        assert_eq!(parsed.ref_type, CommitRefType::LocalBranch);
+    }
+
+    #[test]
+    fn parses_remote_branch_ref() {
+        let parsed = parse_commit_ref("refs/remotes/origin/main\torigin/main\tabc123\t").unwrap();
+
+        assert_eq!(parsed.short_name, "origin/main");
+        assert_eq!(parsed.ref_type, CommitRefType::RemoteBranch);
+    }
+
+    #[test]
+    fn parses_tag_ref() {
+        let parsed = parse_commit_ref("refs/tags/v1.0.0\tv1.0.0\tabc123\t").unwrap();
+
+        assert_eq!(parsed.short_name, "v1.0.0");
+        assert_eq!(parsed.target, "abc123");
+        assert_eq!(parsed.ref_type, CommitRefType::Tag);
+    }
+
+    #[test]
+    fn parses_peeled_tag_target_when_available() {
+        let parsed =
+            parse_commit_ref("refs/tags/v1.0.0\tv1.0.0\ttag-object\tcommit-object").unwrap();
+
+        assert_eq!(parsed.target, "commit-object");
+        assert_eq!(parsed.ref_type, CommitRefType::Tag);
+    }
+
+    #[test]
+    fn ignores_malformed_and_remote_head_refs() {
+        assert_eq!(parse_commit_ref("refs/heads/main\tmain").is_none(), true);
+        assert_eq!(
+            parse_commit_ref("refs/remotes/origin/HEAD\torigin\tabc123\t").is_none(),
+            true
+        );
+        assert_eq!(
+            parse_commit_ref("refs/notes/test\ttest\tabc123\t").is_none(),
+            true
+        );
+    }
+
+    #[test]
+    fn graph_keeps_linear_history_in_lane_zero() {
+        let commits = sort_commits(vec![
+            commit("a", &[], 1),
+            commit("b", &["a"], 2),
+            commit("c", &["b"], 3),
+        ]);
+        let graph = build_commit_graph(&commits, Some("c"));
+
+        assert_eq!(
+            commits
+                .iter()
+                .map(|commit| commit.hash.as_str())
+                .collect::<Vec<_>>(),
+            vec!["c", "b", "a"]
+        );
+        assert_eq!(graph.width, 1);
+        assert_eq!(graph.head_lane, Some(0));
+        assert!(graph.commits.iter().all(|commit| commit.lane == 0));
+    }
+
+    #[test]
+    fn graph_places_branch_in_second_lane_and_rejoins_after_merge() {
+        let commits = sort_commits(vec![
+            commit("a", &[], 1),
+            commit("b", &["a"], 2),
+            commit("c", &["a"], 3),
+            commit("m", &["b", "c"], 4),
+        ]);
+        let graph = build_commit_graph(&commits, Some("m"));
+
+        assert_eq!(graph_commit(&graph, "m").lane, 0);
+        assert_eq!(graph_commit(&graph, "b").lane, 0);
+        assert_eq!(graph_commit(&graph, "c").lane, 1);
+        assert_eq!(graph_commit(&graph, "a").lane, 0);
+        assert_eq!(graph.width, 2);
+    }
+
+    #[test]
+    fn graph_marks_first_parent_edges_as_normal_and_other_parent_edges_as_merge() {
+        let commits = sort_commits(vec![
+            commit("a", &[], 1),
+            commit("b", &["a"], 2),
+            commit("c", &["a"], 3),
+            commit("m", &["b", "c"], 4),
+        ]);
+        let graph = build_commit_graph(&commits, Some("m"));
+
+        assert_eq!(
+            graph
+                .edges
+                .iter()
+                .find(|edge| edge.from == "m" && edge.to == "b")
+                .map(|edge| &edge.edge_type),
+            Some(&GraphEdgeType::Normal)
+        );
+        assert_eq!(
+            graph
+                .edges
+                .iter()
+                .find(|edge| edge.from == "m" && edge.to == "c")
+                .map(|edge| &edge.edge_type),
+            Some(&GraphEdgeType::Merge)
+        );
+    }
+
+    #[test]
+    fn graph_reuses_empty_lanes_without_shifting_active_lanes() {
+        let commits = sort_commits(vec![
+            commit("a", &[], 1),
+            commit("b", &["a"], 2),
+            commit("c", &["a"], 3),
+            commit("d", &["b"], 4),
+            commit("e", &["d", "c"], 5),
+            commit("f", &["e"], 6),
+        ]);
+        let graph = build_commit_graph(&commits, Some("f"));
+
+        assert_eq!(graph_commit(&graph, "f").lane, 0);
+        assert_eq!(graph_commit(&graph, "e").lane, 0);
+        assert_eq!(graph_commit(&graph, "d").lane, 0);
+        assert_eq!(graph_commit(&graph, "c").lane, 1);
+        assert_eq!(graph_commit(&graph, "a").lane, 0);
+    }
+
+    #[test]
+    fn temporal_topological_sort_keeps_children_above_newer_parents() {
+        let commits = sort_commits(vec![
+            commit("parent-with-newer-timestamp", &[], 10),
+            commit(
+                "child-with-older-timestamp",
+                &["parent-with-newer-timestamp"],
+                1,
+            ),
+        ]);
+
+        assert_eq!(
+            commits
+                .iter()
+                .map(|commit| commit.hash.as_str())
+                .collect::<Vec<_>>(),
+            vec!["child-with-older-timestamp", "parent-with-newer-timestamp"]
+        );
     }
 }
