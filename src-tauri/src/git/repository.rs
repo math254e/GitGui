@@ -399,6 +399,8 @@ fn load_commits(root: &Path) -> Result<Vec<CommitInfo>, GitError> {
     let output = GitCommand::run(
         &[
             "log",
+            "--exclude=refs/t3/checkpoints/**",
+            "--exclude=refs/codex/turn-diffs/checkpoints/**",
             "--all",
             "--date=unix",
             "--pretty=format:%H%x1f%P%x1f%an%x1f%at%x1f%s%x1e",
