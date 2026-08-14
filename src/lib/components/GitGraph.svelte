@@ -1,6 +1,6 @@
 <script lang="ts">
   import { Cloud, Monitor } from "@lucide/svelte";
-  import type { CommitInfo, CommitRef, GraphCommit, GraphEdge, RepositorySnapshot } from "$lib/types/repository";
+  import type { CommitInfo, CommitRef, GraphCommit, RepositorySnapshot } from "$lib/types/repository";
 
   type ColumnId = "branch" | "graph" | "message";
   type HistoryColumn = {
@@ -14,6 +14,49 @@
     startX: number;
     startWidth: number;
   };
+  type Swimlane = {
+    id: string;
+    color: number;
+    isStash: boolean;
+  };
+  type ParentEdge = {
+    oid: string;
+    lane: number;
+  };
+  type RoutedGraphRow = {
+    oid: string;
+    commit: CommitInfo;
+    row: number;
+    lane: number;
+    circleLane: number;
+    parents: ParentEdge[];
+    inputSwimlanes: Swimlane[];
+    outputSwimlanes: Swimlane[];
+  };
+  type RoutedGraph = {
+    rows: RoutedGraphRow[];
+    commits: Map<string, GraphCommit>;
+    maxLane: number;
+    headLane: number;
+  };
+  type GraphSegment =
+    | {
+        type: "line";
+        key: string;
+        x1: number;
+        y1: number;
+        x2: number;
+        y2: number;
+        stroke: string;
+        dashed: boolean;
+      }
+    | {
+        type: "path";
+        key: string;
+        d: string;
+        stroke: string;
+        dashed: boolean;
+      };
   type Props = {
     snapshot: RepositorySnapshot | null;
     selectedCommit: CommitInfo | null;
@@ -22,29 +65,35 @@
     onSelectCommit: (commit: CommitInfo) => void;
   };
 
-  const rowHeight = 36;
+  const rowHeight = 34;
   const headerHeight = 30;
-  const laneGap = 24;
-  const graphPadding = 18;
-  const nodeRadius = 6;
-  const workingTreeSize = 14;
+  const laneGap = 20;
+  const graphPadding = 14;
+  const dotRadius = 7;
+  const lineWidth = 2.5;
+  const workingTreeSize = 12;
+  const shiftCurveRadius = 2;
+  const curveStartY = 6;
+  const bezierControlFactor = 0.25;
+  const bezierMidFactor = 0.5;
   const columnStorageKey = "gitgui.historyColumns.v1";
   const minimumColumnWidth = 24;
   const branchColors = [
-    "#008f7a",
-    "#006ee6",
-    "#d97706",
-    "#7c3aed",
-    "#dc2626",
-    "#0891b2",
-    "#16a34a",
-    "#be185d",
+    "oklch(0.773 0.118 281.135)",
+    "oklch(0.772 0.130 240.067)",
+    "oklch(0.811 0.146 217.709)",
+    "oklch(0.822 0.152 177.146)",
+    "oklch(0.798 0.193 140.004)",
+    "oklch(0.802 0.166 98.070)",
+    "oklch(0.774 0.174 65.052)",
+    "oklch(0.749 0.152 17.942)",
+    "oklch(0.761 0.164 353.728)",
   ];
 
   let { snapshot, selectedCommit, changesSelected, onSelectChanges, onSelectCommit }: Props = $props();
   let columns = $state<HistoryColumn[]>([
-    { id: "branch", label: "Branch", width: 190, visible: true },
-    { id: "graph", label: "Graph", width: 96, visible: true },
+    { id: "branch", label: "Branch", width: 118, visible: true },
+    { id: "graph", label: "Graph", width: 92, visible: true },
     { id: "message", label: "Message", width: 520, visible: true },
   ]);
   let resizeState = $state<ResizeState | null>(null);
@@ -77,7 +126,8 @@
 
   const hasChanges = $derived(Boolean(snapshot?.status.changedFiles.length));
   const visibleColumns = $derived(columns.filter((column) => column.visible));
-  const graphRequiredWidth = $derived(Math.max(72, ((snapshot?.graph.width ?? 1) - 1) * laneGap + graphPadding * 2));
+  const routedGraph = $derived(buildRoutedGraph(snapshot));
+  const graphRequiredWidth = $derived(Math.max(90, (routedGraph.maxLane + 2) * laneGap + 8));
   const graphColumnWidth = $derived(columnWidth("graph"));
   const gridTemplate = $derived(
     visibleColumns
@@ -89,7 +139,7 @@
   );
   const visibleRowCount = $derived((snapshot?.commits.length ?? 0) + (hasChanges ? 1 : 0));
   const graphHeight = $derived(Math.max(rowHeight, visibleRowCount * rowHeight));
-  const graphCommitByHash = $derived(new Map(snapshot?.graph.commits.map((commit) => [commit.hash, commit]) ?? []));
+  const graphCommitByHash = $derived(routedGraph.commits);
   const refsByTarget = $derived(groupRefsByTarget(snapshot?.refs ?? []));
   const branchRefByFirstParentCommit = $derived(groupBranchRefByFirstParentCommit(snapshot));
   const branchRefByLineCommit = $derived(groupBranchRefByLineCommit(snapshot));
@@ -100,7 +150,7 @@
   const branchRefByNearestDescendantCommit = $derived(
     groupBranchRefByNearestDescendantCommit(snapshot, graphCommitByHash, refsByTarget),
   );
-  const currentHeadLane = $derived(snapshot?.graph.headLane ?? 0);
+  const currentHeadLane = $derived(routedGraph.headLane);
 
   function columnWidth(columnId: ColumnId) {
     return columns.find((column) => column.id === columnId)?.width ?? 0;
@@ -115,6 +165,124 @@
       columnStorageKey,
       JSON.stringify(Object.fromEntries(nextColumns.map((column) => [column.id, column.width]))),
     );
+  }
+
+  function buildRoutedGraph(currentSnapshot: RepositorySnapshot | null): RoutedGraph {
+    const rows: RoutedGraphRow[] = [];
+    const commits = new Map<string, GraphCommit>();
+    let lanes: Swimlane[] = [];
+    let colorCounter = 0;
+    let maxLane = 0;
+
+    const nextColor = () => {
+      const color = colorCounter % branchColors.length;
+      colorCounter += 1;
+      return color;
+    };
+
+    for (const [index, commit] of currentSnapshot?.commits.entries() ?? []) {
+      const inputSwimlanes = lanes.map(cloneSwimlane);
+      const commitIndex = lanes.findIndex((lane) => lane.id === commit.hash);
+      const circleLane = commitIndex === -1 ? lanes.length : commitIndex;
+      const output: Swimlane[] = [];
+      const parents = commit.parents;
+      let firstParentAdded = false;
+      let commitLaneInOutput = circleLane;
+
+      if (parents.length) {
+        for (const lane of lanes) {
+          if (lane.id === commit.hash) {
+            if (!firstParentAdded) {
+              commitLaneInOutput = output.length;
+              output.push({
+                id: parents[0],
+                color: lane.color,
+                isStash: false,
+              });
+              firstParentAdded = true;
+            }
+
+            continue;
+          }
+
+          output.push(cloneSwimlane(lane));
+        }
+      } else {
+        for (const lane of lanes) {
+          if (lane.id !== commit.hash) {
+            output.push(cloneSwimlane(lane));
+          }
+        }
+      }
+
+      if (!firstParentAdded && parents.length) {
+        commitLaneInOutput = output.length;
+        output.push({
+          id: parents[0],
+          color: nextColor(),
+          isStash: false,
+        });
+      }
+
+      const parentEdges: ParentEdge[] = [];
+
+      if (parents.length) {
+        parentEdges.push({ oid: parents[0], lane: commitLaneInOutput });
+      }
+
+      for (const parent of parents.slice(1)) {
+        const existingLane = output.findIndex((lane) => lane.id === parent);
+
+        if (existingLane !== -1) {
+          parentEdges.push({ oid: parent, lane: existingLane });
+          continue;
+        }
+
+        const lane = output.length;
+        output.push({
+          id: parent,
+          color: nextColor(),
+          isStash: false,
+        });
+        parentEdges.push({ oid: parent, lane });
+      }
+
+      const outputSwimlanes = output.map(cloneSwimlane);
+      const graphRow: RoutedGraphRow = {
+        oid: commit.hash,
+        commit,
+        row: index + 1,
+        lane: commitLaneInOutput,
+        circleLane,
+        parents: parentEdges,
+        inputSwimlanes,
+        outputSwimlanes,
+      };
+
+      rows.push(graphRow);
+      commits.set(commit.hash, {
+        hash: commit.hash,
+        row: index + 1,
+        lane: circleLane,
+      });
+      maxLane = Math.max(maxLane, circleLane, inputSwimlanes.length - 1, outputSwimlanes.length - 1);
+      lanes = output;
+    }
+
+    return {
+      rows,
+      commits,
+      maxLane: Math.max(0, maxLane),
+      headLane: rows[0]?.circleLane ?? 0,
+    };
+  }
+
+  function cloneSwimlane(lane: Swimlane): Swimlane {
+    return {
+      id: lane.id,
+      color: lane.color,
+      isStash: lane.isStash,
+    };
   }
 
   function groupRefsByTarget(refs: CommitRef[]) {
@@ -610,50 +778,253 @@
     return `border-color: ${color}66; color: ${color}; background: color-mix(in srgb, ${color} ${tint}%, white);`;
   }
 
-  function visibleRow(graphCommit: GraphCommit) {
-    return graphCommit.row - 1 + (hasChanges ? 1 : 0);
-  }
-
   function xForLane(lane: number) {
     return graphPadding + lane * laneGap;
   }
 
-  function yForGraphCommit(graphCommit: GraphCommit) {
-    return visibleRow(graphCommit) * rowHeight + rowHeight / 2;
+  function buildSingleLaneCurve(inX: number, outX: number, startY: number, midY: number, endY?: number) {
+    const dx = outX - inX;
+    const curve = Math.min(Math.abs(dx) * 0.5, shiftCurveRadius);
+
+    if (endY === undefined) {
+      return [
+        `M ${inX} 0`,
+        `V ${startY}`,
+        `C ${inX} ${midY - curve},`,
+        `${inX + dx * bezierControlFactor} ${midY},`,
+        `${inX + dx * bezierMidFactor} ${midY}`,
+        `H ${outX}`,
+      ].join(" ");
+    }
+
+    const controlDistance = Math.abs(endY - startY) * 0.35;
+
+    return [
+      `M ${inX} 0`,
+      `V ${startY}`,
+      `C ${inX} ${startY + controlDistance},`,
+      `${outX} ${endY - controlDistance},`,
+      `${outX} ${endY}`,
+    ].join(" ");
   }
 
-  function edgePath(edge: GraphEdge) {
-    const from = graphCommitByHash.get(edge.from);
-    const to = graphCommitByHash.get(edge.to);
+  function buildMultiLaneCurve(inX: number, outX: number, startY: number, midY: number, direction: number, endY?: number) {
+    const firstCurveX = inX + direction * laneGap;
 
-    if (!from || !to) {
-      return "";
+    if (endY === undefined) {
+      return [
+        `M ${inX} 0`,
+        `V ${startY}`,
+        `C ${inX} ${midY - shiftCurveRadius},`,
+        `${inX + direction * laneGap * 0.5} ${midY},`,
+        `${firstCurveX} ${midY}`,
+        `H ${outX}`,
+      ].join(" ");
     }
 
-    const x0 = xForLane(from.lane);
-    const y0 = yForGraphCommit(from);
-    const x1 = xForLane(to.lane);
-    const y1 = yForGraphCommit(to);
+    const dy = endY - startY;
+    const controlDistanceY = Math.abs(dy) * 0.7;
 
-    if (x0 === x1) {
-      return `M ${x0} ${y0} L ${x1} ${y1}`;
-    }
-
-    if (edge.edgeType === "merge") {
-      const turnY = y0 + Math.min(18, Math.max(8, (y1 - y0) / 3));
-      return `M ${x0} ${y0} L ${x0} ${turnY} Q ${x0} ${turnY + 8} ${xForLane(to.lane)} ${turnY + 8} L ${x1} ${y1}`;
-    }
-
-    const turnY = y1 - Math.min(18, Math.max(8, (y1 - y0) / 3));
-    return `M ${x0} ${y0} L ${x0} ${turnY} Q ${x0} ${y1} ${x1} ${y1}`;
+    return [
+      `M ${inX} 0`,
+      `V ${startY}`,
+      `C ${inX} ${startY + controlDistanceY * Math.sign(dy)},`,
+      `${outX} ${endY - controlDistanceY * Math.sign(dy)},`,
+      `${outX} ${endY}`,
+    ].join(" ");
   }
 
-  function edgeColor(edge: GraphEdge) {
-    const from = graphCommitByHash.get(edge.from);
-    const to = graphCommitByHash.get(edge.to);
-    const lane = edge.edgeType === "merge" ? to?.lane : from?.lane;
+  function buildConvergencePath(inLane: number, outLane: number) {
+    const inX = xForLane(inLane);
+    const outX = xForLane(outLane);
+    const laneDelta = outLane - inLane;
+    const absoluteDelta = Math.abs(laneDelta);
+    const direction = Math.sign(laneDelta);
+    const midY = rowHeight / 2;
 
-    return branchColor(lane ?? 0);
+    return absoluteDelta === 1
+      ? buildSingleLaneCurve(inX, outX, curveStartY, midY)
+      : buildMultiLaneCurve(inX, outX, curveStartY, midY, direction);
+  }
+
+  function buildShiftPath(inLane: number, outLane: number) {
+    const inX = xForLane(inLane);
+    const outX = xForLane(outLane);
+    const laneDelta = outLane - inLane;
+    const absoluteDelta = Math.abs(laneDelta);
+    const direction = Math.sign(laneDelta);
+    const midY = rowHeight / 2;
+
+    return absoluteDelta === 1
+      ? buildSingleLaneCurve(inX, outX, curveStartY, midY, rowHeight)
+      : buildMultiLaneCurve(inX, outX, curveStartY, midY, direction, rowHeight);
+  }
+
+  function routeSegmentsForRow(row: RoutedGraphRow): GraphSegment[] {
+    const segments: GraphSegment[] = [];
+    const input = row.inputSwimlanes;
+    const output = row.outputSwimlanes;
+    const circleLane = row.circleLane;
+    const centerY = rowHeight / 2;
+    const centerX = xForLane(circleLane);
+    let outputSwimlaneIndex = 0;
+
+    for (let index = 0; index < input.length; index += 1) {
+      const inputLane = input[index];
+      const inputColor = branchColor(inputLane.color);
+
+      if (inputLane.id === row.oid) {
+        if (index !== circleLane) {
+          segments.push({
+            type: "path",
+            key: `conv-${row.oid}-${index}`,
+            d: buildConvergencePath(index, circleLane),
+            stroke: inputColor,
+            dashed: inputLane.isStash,
+          });
+        } else {
+          outputSwimlaneIndex += 1;
+        }
+
+        continue;
+      }
+
+      const outputLane = output[outputSwimlaneIndex];
+
+      if (!outputLane || inputLane.id !== outputLane.id) {
+        continue;
+      }
+
+      const outputColor = branchColor(outputLane.color);
+
+      if (index === outputSwimlaneIndex) {
+        const x = Math.round(xForLane(index));
+        segments.push({
+          type: "line",
+          key: `pass-${row.oid}-${index}`,
+          x1: x,
+          y1: 0,
+          x2: x,
+          y2: rowHeight,
+          stroke: outputColor,
+          dashed: outputLane.isStash,
+        });
+      } else {
+        segments.push({
+          type: "path",
+          key: `shift-${row.oid}-${index}-${outputSwimlaneIndex}`,
+          d: buildShiftPath(index, outputSwimlaneIndex),
+          stroke: outputColor,
+          dashed: outputLane.isStash,
+        });
+      }
+
+      outputSwimlaneIndex += 1;
+    }
+
+    for (let index = 1; index < row.parents.length; index += 1) {
+      const parentOid = row.parents[index].oid;
+      let parentOutputLane = -1;
+
+      for (let outputIndex = output.length - 1; outputIndex >= 0; outputIndex -= 1) {
+        if (output[outputIndex].id === parentOid) {
+          parentOutputLane = outputIndex;
+          break;
+        }
+      }
+
+      if (parentOutputLane === -1) {
+        continue;
+      }
+
+      const parentX = xForLane(parentOutputLane);
+
+      if (parentX === centerX) {
+        continue;
+      }
+
+      const arcStartX = parentOutputLane > circleLane ? parentX - laneGap : parentX + laneGap;
+      const sweepFlag = parentOutputLane > circleLane ? 1 : 0;
+
+      segments.push({
+        type: "path",
+        key: `parent-${row.oid}-${parentOid}-${index}`,
+        d: [`M ${arcStartX} ${centerY}`, `A ${laneGap} ${laneGap} 0 0 ${sweepFlag} ${parentX} ${rowHeight}`, `M ${arcStartX} ${centerY}`, `H ${centerX}`].join(" "),
+        stroke: branchColor(output[parentOutputLane].color),
+        dashed: false,
+      });
+    }
+
+    const inputIndex = input.findIndex((lane) => lane.id === row.oid);
+
+    if (inputIndex !== -1) {
+      segments.push({
+        type: "line",
+        key: `to-dot-${row.oid}`,
+        x1: centerX,
+        y1: 0,
+        x2: centerX,
+        y2: centerY,
+        stroke: branchColor(input[inputIndex].color),
+        dashed: input[inputIndex].isStash,
+      });
+    }
+
+    if (row.parents.length > 0) {
+      segments.push({
+        type: "line",
+        key: `from-dot-${row.oid}`,
+        x1: centerX,
+        y1: centerY,
+        x2: centerX,
+        y2: rowHeight,
+        stroke: commitColor(row),
+        dashed: false,
+      });
+    }
+
+    return segments;
+  }
+
+  function commitColor(row: RoutedGraphRow) {
+    const lane =
+      row.circleLane < row.outputSwimlanes.length
+        ? row.outputSwimlanes[row.circleLane]
+        : row.circleLane < row.inputSwimlanes.length
+          ? row.inputSwimlanes[row.circleLane]
+          : null;
+
+    return branchColor(lane?.color ?? 0);
+  }
+
+  function routeCommitNodeStyle(row: RoutedGraphRow) {
+    const color = commitColor(row);
+
+    return `left: ${xForLane(row.circleLane) - dotRadius}px; top: calc(50% - ${dotRadius}px); width: ${dotRadius * 2}px; height: ${dotRadius * 2}px; border-color: ${color}; color: ${color};`;
+  }
+
+  function workingTreeNodeStyle() {
+    const color = branchColor(currentHeadLane);
+
+    return `left: ${xForLane(currentHeadLane) - workingTreeSize / 2}px; top: calc(50% - ${workingTreeSize / 2}px); width: ${workingTreeSize}px; height: ${workingTreeSize}px; border-color: ${color}; background: white;`;
+  }
+
+  function workingTreePath() {
+    const x = xForLane(currentHeadLane);
+
+    return `M ${x} ${rowHeight / 2 + workingTreeSize / 2} L ${x} ${rowHeight + rowHeight / 2}`;
+  }
+
+  function segmentDash(segment: GraphSegment) {
+    return segment.dashed ? "4 3" : undefined;
+  }
+
+  function rowKey(row: RoutedGraphRow) {
+    return row.oid;
+  }
+
+  function refKey(ref: CommitRef) {
+    return `${ref.name}-${ref.target}`;
   }
 
   function startResize(event: PointerEvent, column: HistoryColumn) {
@@ -697,8 +1068,8 @@
         class="grid border-b border-[#e5e9ee] bg-[#f8fafb] text-[11px] font-bold uppercase text-[#7b8490]"
         style={`grid-template-columns: ${gridTemplate}; min-width: ${totalGridWidth}px; height: ${headerHeight}px;`}
       >
-        {#each visibleColumns as column, index}
-          <div class="relative flex items-center border-r border-[#e5e9ee] px-3 last:border-r-0">
+        {#each visibleColumns as column, index (column.id)}
+          <div class="relative flex items-center border-r border-[#e5e9ee] px-1 last:border-r-0">
             <span class="truncate">{column.label}</span>
             {#if index < visibleColumns.length - 1}
               <button
@@ -713,45 +1084,6 @@
       </div>
 
       <div class="relative min-h-0 flex-1 overflow-auto">
-        <div
-          class="pointer-events-none absolute top-0 z-10 overflow-hidden"
-          style={`left: ${columnWidth("branch")}px; width: ${graphColumnWidth}px; height: ${graphHeight}px;`}
-          aria-hidden="true"
-        >
-          <svg
-            width={graphRequiredWidth}
-            height={graphHeight}
-            viewBox={`0 0 ${graphRequiredWidth} ${graphHeight}`}
-          >
-            {#each snapshot.graph.edges as edge}
-              {@const path = edgePath(edge)}
-              {#if path}
-                <path
-                  d={path}
-                  fill="none"
-                  stroke={edgeColor(edge)}
-                  stroke-width="2.75"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  opacity={edge.edgeType === "merge" ? "0.9" : "1"}
-                />
-              {/if}
-            {/each}
-
-            {#if hasChanges}
-              <path
-                d={`M ${xForLane(currentHeadLane)} ${rowHeight / 2 + workingTreeSize / 2} L ${xForLane(currentHeadLane)} ${rowHeight + rowHeight / 2}`}
-                fill="none"
-                stroke={branchColor(currentHeadLane)}
-                stroke-width="2.75"
-                stroke-dasharray="4 4"
-                stroke-linecap="round"
-                opacity="0.95"
-              />
-            {/if}
-          </svg>
-        </div>
-
         <ol class="relative" style={`min-width: ${totalGridWidth}px;`}>
           {#if hasChanges}
             <li>
@@ -763,30 +1095,39 @@
                 type="button"
                 onclick={onSelectChanges}
               >
-                <span class="relative z-30 flex min-w-0 items-center gap-1.5 overflow-visible px-3">
+                <span class="relative z-30 flex min-w-0 items-center gap-0.5 overflow-visible px-0.5">
                   {#if snapshot.status.currentBranch}
-                    <span class="max-w-full truncate rounded border border-[#008f7a]/30 bg-[#e9f8f5] px-2 py-0.5 text-xs font-semibold text-[#006f60]">
+                    <span class="max-w-full truncate rounded-sm border border-[#008f7a]/30 bg-[#e9f8f5] px-0.5 py-0 text-[10px] font-semibold leading-3.5 text-[#006f60]">
                       {snapshot.status.currentBranch}
                     </span>
                   {/if}
                 </span>
-                <span class="relative z-20 flex h-full items-center overflow-hidden">
-                  <span
-                    class="absolute rounded border-2 bg-[#e9f8f5]"
-                    style={`left: ${xForLane(currentHeadLane) - workingTreeSize / 2}px; top: calc(50% - ${workingTreeSize / 2}px); width: ${workingTreeSize}px; height: ${workingTreeSize}px; border-color: ${branchColor(currentHeadLane)};`}
-                  ></span>
+                <span class="relative z-20 flex h-full items-center overflow-visible">
+                  <svg width={graphRequiredWidth} height={rowHeight} viewBox={`0 0 ${graphRequiredWidth} ${rowHeight}`} aria-hidden="true" class="shrink-0 overflow-visible">
+                    <path
+                      d={workingTreePath()}
+                      fill="none"
+                      stroke={branchColor(currentHeadLane)}
+                      stroke-width={lineWidth}
+                      stroke-dasharray="4 4"
+                      stroke-linecap="round"
+                      opacity="0.95"
+                    />
+                  </svg>
+                  <span class="absolute rounded border-[3px]" style={workingTreeNodeStyle()}></span>
                 </span>
-                <span class="relative z-20 min-w-0 px-3">
-                  <span class="block truncate text-sm font-semibold text-[#202124]">
+                <span class="relative z-20 min-w-0 px-1">
+                  <span class="block truncate text-xs font-semibold text-[#202124]">
                     Changed files
-                    <span class="ml-2 text-xs font-medium text-[#6d7784]">{snapshot.status.changedFiles.length} files</span>
+                    <span class="ml-0.5 text-[10px] font-medium text-[#6d7784]">{snapshot.status.changedFiles.length} files</span>
                   </span>
                 </span>
               </button>
             </li>
           {/if}
 
-          {#each snapshot.commits as commit}
+          {#each routedGraph.rows as row (rowKey(row))}
+            {@const commit = row.commit}
             {@const graphCommit = graphCommitByHash.get(commit.hash)}
             {@const commitRefs = refsByTarget.get(commit.hash) ?? []}
             {@const ghostRef = branchRefByLineCommit.get(commit.hash) ?? branchRefByNearestDescendantCommit.get(commit.hash) ?? branchRefByMergeTargetCommit.get(commit.hash) ?? branchRefByLaneCommit.get(commit.hash) ?? branchRefByFirstParentCommit.get(commit.hash)}
@@ -802,19 +1143,19 @@
                 onpointerleave={() => (hoveredRowHash = hoveredRowHash === commit.hash ? null : hoveredRowHash)}
               >
                 <span
-                  class={`relative flex min-w-0 flex-wrap items-center gap-1.5 overflow-visible px-3 ${
+                  class={`relative flex min-w-0 flex-wrap items-center gap-0.5 overflow-visible px-0.5 ${
                     hoveredRowHash === commit.hash || selectedCommit?.hash === commit.hash ? "z-[120]" : "z-[80]"
                   }`}
                 >
-                    {#each commitRefs as ref}
+                    {#each commitRefs as ref (refKey(ref))}
                       <span
-                        class="relative z-30 flex max-w-full items-center gap-1 rounded border px-2 py-0.5 text-xs font-semibold hover:z-[100] hover:max-w-none hover:whitespace-nowrap"
+                        class="relative z-30 flex max-w-full items-center gap-0.5 rounded-sm border px-0.5 py-0 text-[10px] font-semibold leading-3.5 hover:z-[100] hover:max-w-none hover:whitespace-nowrap"
                         style={refBadgeStyle(ref.refType, graphCommit)}
                       >
                         {#if ref.refType === "remoteBranch"}
-                          <Cloud class="h-3 w-3 shrink-0" size={12} strokeWidth={2.4} />
+                          <Cloud class="h-2.5 w-2.5 shrink-0" size={10} strokeWidth={2.4} />
                         {:else if ref.refType === "localBranch"}
-                          <Monitor class="h-3 w-3 shrink-0" size={12} strokeWidth={2.4} />
+                          <Monitor class="h-2.5 w-2.5 shrink-0" size={10} strokeWidth={2.4} />
                         {/if}
                         <span class="truncate">{displayRefName(ref)}</span>
                       </span>
@@ -822,29 +1163,50 @@
                     {#if !commitRefs.length && (hoveredRowHash === commit.hash || selectedCommit?.hash === commit.hash)}
                       {#if ghostRef}
                         <span
-                          class="relative z-30 flex max-w-full items-center gap-1 rounded border border-dashed px-2 py-0.5 text-xs font-semibold opacity-50 hover:z-[100] hover:max-w-none hover:whitespace-nowrap"
+                          class="relative z-30 flex max-w-full items-center gap-0.5 rounded-sm border border-dashed px-0.5 py-0 text-[10px] font-semibold leading-3.5 opacity-50 hover:z-[100] hover:max-w-none hover:whitespace-nowrap"
                           style={refBadgeStyle(ghostRef.refType, graphCommit)}
                         >
                           {#if ghostRef.refType === "remoteBranch"}
-                            <Cloud class="h-3 w-3 shrink-0" size={12} strokeWidth={2.4} />
+                            <Cloud class="h-2.5 w-2.5 shrink-0" size={10} strokeWidth={2.4} />
                           {:else if ghostRef.refType === "localBranch"}
-                            <Monitor class="h-3 w-3 shrink-0" size={12} strokeWidth={2.4} />
+                            <Monitor class="h-2.5 w-2.5 shrink-0" size={10} strokeWidth={2.4} />
                           {/if}
                           <span class="truncate">{displayRefName(ghostRef)}</span>
                         </span>
                       {/if}
                     {/if}
                 </span>
-                <span class="relative z-20 flex h-full items-center overflow-hidden">
-                  {#if graphCommit}
-                    <span
-                      class="absolute rounded-full border-2 border-white shadow-[0_0_0_1px_rgba(32,33,36,0.08)]"
-                      style={`left: ${xForLane(graphCommit.lane) - nodeRadius}px; top: calc(50% - ${nodeRadius}px); width: ${nodeRadius * 2}px; height: ${nodeRadius * 2}px; background: ${branchColor(graphCommit.lane)};`}
-                    ></span>
-                  {/if}
+                <span class="relative z-20 flex h-full items-center overflow-visible">
+                  <svg width={graphRequiredWidth} height={rowHeight} viewBox={`0 0 ${graphRequiredWidth} ${rowHeight}`} aria-hidden="true" class="shrink-0 overflow-visible">
+                    {#each routeSegmentsForRow(row) as segment (segment.key)}
+                      {#if segment.type === "line"}
+                        <line
+                          x1={segment.x1}
+                          y1={segment.y1}
+                          x2={segment.x2}
+                          y2={segment.y2}
+                          stroke={segment.stroke}
+                          stroke-width={lineWidth}
+                          stroke-linecap="round"
+                          stroke-dasharray={segmentDash(segment)}
+                        />
+                      {:else}
+                        <path
+                          d={segment.d}
+                          fill="none"
+                          stroke={segment.stroke}
+                          stroke-width={lineWidth}
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                          stroke-dasharray={segmentDash(segment)}
+                        />
+                      {/if}
+                    {/each}
+                  </svg>
+                  <span class="absolute rounded-full border-[3px] bg-white" style={routeCommitNodeStyle(row)}></span>
                 </span>
-                <span class="relative z-20 min-w-0 px-3">
-                  <span class="block truncate text-sm font-medium text-[#202124]">{commit.message}</span>
+                <span class="relative z-20 min-w-0 px-1">
+                  <span class="block truncate text-xs font-medium text-[#202124]">{commit.message}</span>
                 </span>
               </button>
             </li>
