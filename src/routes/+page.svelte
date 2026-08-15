@@ -13,6 +13,7 @@
   import ResizablePaneGroup, { type ResizablePane } from "$lib/components/ResizablePaneGroup.svelte";
   import RepositoryDetailsPanel from "$lib/components/RepositoryDetailsPanel.svelte";
   import RepositoryPathDialog from "$lib/components/RepositoryPathDialog.svelte";
+  import SettingsView from "$lib/components/SettingsView.svelte";
   import Sidebar from "$lib/components/Sidebar.svelte";
   import StartView from "$lib/components/StartView.svelte";
   import TopMenu, { type RepoTab } from "$lib/components/TopMenu.svelte";
@@ -20,7 +21,7 @@
   import type { RepositorySummary } from "$lib/generated/protocol";
   import type { CommitFile, CommitInfo, RepositorySnapshot } from "$lib/types/repository";
 
-  type ActiveView = "start" | "repo";
+  type ActiveView = "start" | "repo" | "settings";
   type SelectedGraphItem = { type: "changes" } | { type: "commit"; commit: CommitInfo };
   type LayoutStorage = {
     sidebarWidth?: number;
@@ -295,7 +296,9 @@
       if (!migrationReportedError && startError === "Restarting the local GitGui server…") {
         startError = "";
       }
-      activeView = activeRepoId ? "repo" : "start";
+      if (activeView !== "settings") {
+        activeView = activeRepoId ? "repo" : "start";
+      }
       retainRuntime = true;
     } catch (caught) {
       if (isCurrentBootstrap(generation)) {
@@ -796,6 +799,10 @@
     activeView = "start";
   }
 
+  function showSettingsView() {
+    activeView = "settings";
+  }
+
   function selectCommit(commit: CommitInfo) {
     if (snapshot && activeRepoId) {
       void prefetchCommitDiffs(activeRepoId, commit);
@@ -911,18 +918,21 @@
   }
 </script>
 
-<main class="grid h-screen min-h-0 grid-rows-[auto_1fr] bg-white text-[#202124]">
+<main class="grid h-screen min-h-0 grid-rows-[auto_1fr] bg-[var(--app-theme-canvas)] text-[var(--app-theme-text)]">
   <TopMenu
     activeView={activeView}
     {activeRepoId}
     tabs={repoTabs}
     onShowStart={showStartView}
+    onShowSettings={showSettingsView}
     onSelectRepo={selectRepo}
     onCloseRepo={closeRepo}
   />
 
   <section class="min-h-0 overflow-hidden">
-    {#if activeView === "start" || !activeRepo}
+    {#if activeView === "settings"}
+      <SettingsView />
+    {:else if activeView === "start" || !activeRepo}
       <StartView
         recentRepos={recentRepos}
         {loading}

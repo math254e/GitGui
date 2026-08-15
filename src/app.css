@@ -1,8 +1,11 @@
 @import "tailwindcss";
+@import "./lib/theme/theme.css";
 
 @layer base {
   body {
-    @apply m-0 bg-[#f4f6f8] font-sans text-[#202124];
+    @apply m-0 font-sans;
+    background: var(--app-theme-canvas);
+    color: var(--app-theme-text);
   }
 
   * {

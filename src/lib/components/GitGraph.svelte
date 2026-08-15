@@ -1063,19 +1063,19 @@
 
 </script>
 
-<section class="min-h-0 bg-white">
+<section class="min-h-0 bg-[var(--app-theme-surface)]">
   {#if snapshot}
     <div class="flex h-full min-h-0 flex-col">
       <div
-        class="grid border-b border-[#e5e9ee] bg-[#f8fafb] text-[11px] font-bold uppercase text-[#7b8490]"
+        class="grid border-b border-[var(--app-theme-toolbar-border)] bg-[var(--app-theme-toolbar)] text-[11px] font-bold uppercase text-[var(--app-theme-toolbar-foreground)]"
         style={`grid-template-columns: ${gridTemplate}; min-width: ${totalGridWidth}px; height: ${headerHeight}px;`}
       >
         {#each visibleColumns as column, index (column.id)}
-          <div class="relative flex items-center border-r border-[#e5e9ee] px-1 last:border-r-0">
+          <div class="relative flex items-center border-r border-[var(--app-theme-toolbar-border)] px-1 last:border-r-0">
             <span class="truncate">{column.label}</span>
             {#if index < visibleColumns.length - 1}
               <button
-                class="absolute top-0 right-[-4px] z-30 h-full w-2 cursor-col-resize"
+                class="absolute top-0 right-[-4px] z-30 h-full w-2 cursor-col-resize focus-visible:outline-2 focus-visible:outline-[var(--app-theme-focus)]"
                 type="button"
                 aria-label={`Resize ${column.label} column`}
                 onpointerdown={(event) => startResize(event, column)}
@@ -1090,8 +1090,8 @@
           {#if hasChanges}
             <li>
               <button
-                class={`grid w-full items-center border-b border-[#f0f2f4] text-left transition hover:bg-[#f8fafb] ${
-                  changesSelected ? "bg-[#e9f8f5]" : "bg-white/90"
+                class={`grid w-full items-center border-b border-[var(--app-theme-border)] text-left transition hover:bg-[var(--app-theme-sidebar-row-hover)] focus-visible:outline-2 focus-visible:outline-[var(--app-theme-focus)] ${
+                  changesSelected ? "bg-[var(--app-theme-accent-surface)]" : "bg-[var(--app-theme-surface)]"
                 }`}
                 style={`grid-template-columns: ${gridTemplate}; min-height: ${rowHeight}px;`}
                 type="button"
@@ -1099,7 +1099,7 @@
               >
                 <span class="relative z-30 flex min-w-0 items-center gap-0.5 overflow-visible px-0.5">
                   {#if snapshot.status.currentBranch}
-                    <span class="max-w-full truncate rounded-sm border border-[#008f7a]/30 bg-[#e9f8f5] px-0.5 py-0 text-[10px] font-semibold leading-3.5 text-[#006f60]">
+                    <span class="max-w-full truncate rounded-sm border border-[var(--app-theme-accent)]/30 bg-[var(--app-theme-accent-surface)] px-0.5 py-0 text-[10px] font-semibold leading-3.5 text-[var(--app-theme-accent-surface-foreground)]">
                       {snapshot.status.currentBranch}
                     </span>
                   {/if}
@@ -1119,9 +1119,9 @@
                   <span class="absolute rounded border-[3px]" style={workingTreeNodeStyle()}></span>
                 </span>
                 <span class="relative z-20 min-w-0 px-1">
-                  <span class="block truncate text-xs font-semibold text-[#202124]">
+                  <span class="block truncate text-xs font-semibold text-[var(--app-theme-text)]">
                     Changed files
-                    <span class="ml-0.5 text-[10px] font-medium text-[#6d7784]">{snapshot.status.changedFiles.length} files</span>
+                    <span class="ml-0.5 text-[10px] font-medium text-[var(--app-theme-text-muted)]">{snapshot.status.changedFiles.length} files</span>
                   </span>
                 </span>
               </button>
@@ -1135,8 +1135,8 @@
             {@const ghostRef = branchRefByLineCommit.get(commit.hash) ?? branchRefByNearestDescendantCommit.get(commit.hash) ?? branchRefByMergeTargetCommit.get(commit.hash) ?? branchRefByLaneCommit.get(commit.hash) ?? branchRefByFirstParentCommit.get(commit.hash)}
             <li>
               <button
-                class={`grid w-full items-center border-b border-[#f0f2f4] text-left transition hover:bg-[#f8fafb] ${
-                  selectedCommit?.hash === commit.hash ? "bg-[#e9f8f5]" : "bg-white/90"
+                class={`grid w-full items-center border-b border-[var(--app-theme-border)] text-left transition hover:bg-[var(--app-theme-sidebar-row-hover)] focus-visible:outline-2 focus-visible:outline-[var(--app-theme-focus)] ${
+                  selectedCommit?.hash === commit.hash ? "bg-[var(--app-theme-accent-surface)]" : "bg-[var(--app-theme-surface)]"
                 }`}
                 style={`grid-template-columns: ${gridTemplate}; min-height: ${rowHeight}px;`}
                 type="button"
@@ -1208,7 +1208,7 @@
                   <span class="absolute rounded-full border-[3px] bg-white" style={routeCommitNodeStyle(row)}></span>
                 </span>
                 <span class="relative z-20 min-w-0 px-1">
-                  <span class="block truncate text-xs font-medium text-[#202124]">{commit.message}</span>
+                  <span class="block truncate text-xs font-medium text-[var(--app-theme-text)]">{commit.message}</span>
                 </span>
               </button>
             </li>
@@ -1219,8 +1219,8 @@
   {:else}
     <div class="grid h-full place-items-center p-8 text-center">
       <div>
-        <p class="text-sm font-bold uppercase text-[#7b8490]">Git Graph</p>
-        <h2 class="mt-2 text-2xl font-semibold text-[#202124]">Open a repository to view history.</h2>
+        <p class="text-sm font-bold uppercase text-[var(--app-theme-text-muted)]">Git Graph</p>
+        <h2 class="mt-2 text-2xl font-semibold text-[var(--app-theme-text)]">Open a repository to view history.</h2>
       </div>
     </div>
   {/if}

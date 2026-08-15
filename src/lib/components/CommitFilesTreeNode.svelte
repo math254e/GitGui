@@ -78,7 +78,7 @@
 
 {#if isFolder}
   <button
-    class="flex h-8 w-full min-w-0 items-center gap-1.5 px-3 text-left text-sm font-medium text-[#36414d] transition hover:bg-[#eef2f5]"
+    class="flex h-8 w-full min-w-0 items-center gap-1.5 px-3 text-left text-sm font-medium text-[var(--app-theme-sidebar-foreground)] transition hover:bg-[var(--app-theme-sidebar-row-hover)]"
     style={`padding-left: ${12 + depth * 16}px`}
     type="button"
     onclick={() => toggleFolder(node.path)}
@@ -87,12 +87,12 @@
       aria-hidden="true"
       size={14}
       strokeWidth={2.5}
-      class={`shrink-0 text-[#89929d] transition-transform ${isCollapsed ? "rotate-0" : "rotate-90"}`}
+      class={`shrink-0 text-[var(--app-theme-text-subtle)] transition-transform ${isCollapsed ? "rotate-0" : "rotate-90"}`}
     />
-    <Folder aria-hidden="true" size={15} class="shrink-0 text-[#6d7784]" />
+    <Folder aria-hidden="true" size={15} class="shrink-0 text-[var(--app-theme-text-muted)]" />
     <span class="truncate">{node.name}</span>
     {#if isCollapsed}
-      <span class="shrink-0 text-xs font-semibold text-[#89929d]">{hiddenFileCount}</span>
+      <span class="shrink-0 text-xs font-semibold text-[var(--app-theme-text-subtle)]">{hiddenFileCount}</span>
     {/if}
   </button>
 
@@ -103,16 +103,18 @@
   {/if}
 {:else if node.file}
   <button
-    class={`flex h-8 w-full min-w-0 items-center gap-2 px-3 text-left text-sm transition hover:bg-[#eef2f5] ${
-      isSelected ? "bg-[#d9efeb] text-[#183d38]" : "text-[#36414d]"
+    class={`flex h-8 w-full min-w-0 items-center gap-2 px-3 text-left text-sm transition hover:bg-[var(--app-theme-sidebar-row-hover)] ${
+      isSelected
+        ? "bg-[var(--app-theme-sidebar-row-selected)] text-[var(--app-theme-accent-surface-foreground)]"
+        : "text-[var(--app-theme-sidebar-foreground)]"
     }`}
     style={`padding-left: ${28 + depth * 16}px`}
     title={statusTitle(node.file)}
     type="button"
     onclick={() => selectFile(node.file)}
   >
-    <File aria-hidden="true" size={14} class="shrink-0 text-[#7b8490]" />
-    <code class="w-4 shrink-0 text-xs font-semibold text-[#4d9d91]">{statusLabel(node.file)}</code>
+    <File aria-hidden="true" size={14} class="shrink-0 text-[var(--app-theme-sidebar-muted-foreground)]" />
+    <code class="w-4 shrink-0 text-xs font-semibold text-[var(--app-theme-accent)]">{statusLabel(node.file)}</code>
     <span class="truncate">{node.name}</span>
   </button>
 {/if}

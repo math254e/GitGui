@@ -13,21 +13,24 @@
   import { Home, Settings, X } from "@lucide/svelte";
 
   type Props = {
-    activeView: "start" | "repo";
+    activeView: "start" | "repo" | "settings";
     activeRepoId: string | null;
     tabs: RepoTab[];
     onShowStart: () => void;
+    onShowSettings: () => void;
     onSelectRepo: (repoId: string) => void;
     onCloseRepo: (repoId: string) => void;
   };
 
-  let { activeView, activeRepoId, tabs, onShowStart, onSelectRepo, onCloseRepo }: Props = $props();
+  let { activeView, activeRepoId, tabs, onShowStart, onShowSettings, onSelectRepo, onCloseRepo }: Props = $props();
 </script>
 
-<header class="flex h-12 min-h-12 items-center border-b border-[#d8dde4] bg-white">
+<header class="flex h-12 min-h-12 items-center border-b border-[var(--app-theme-toolbar-border)] bg-[var(--app-theme-toolbar)]">
   <button
-    class={`flex h-full w-12 shrink-0 items-center justify-center border-r border-[#d8dde4] transition ${
-      activeView === "start" ? "bg-[#e9f8f5] text-[#183d38]" : "text-[#4f5b67] hover:bg-[#f8fafb]"
+    class={`flex h-full w-12 shrink-0 items-center justify-center border-r border-[var(--app-theme-toolbar-border)] transition ${
+      activeView === "start"
+        ? "bg-[var(--app-theme-accent-surface)] text-[var(--app-theme-accent-surface-foreground)]"
+        : "text-[var(--app-theme-toolbar-foreground)] hover:bg-[var(--app-theme-toolbar-control-hover)]"
     }`}
     type="button"
     aria-label="Start view"
@@ -41,10 +44,10 @@
     {#if tabs.length}
       {#each tabs as tab (tab.id)}
         <div
-          class={`group flex h-full min-w-36 max-w-64 items-center border-r border-[#d8dde4] transition ${
+          class={`group flex h-full min-w-36 max-w-64 items-center border-r border-[var(--app-theme-toolbar-border)] transition ${
             activeView === "repo" && activeRepoId === tab.id
-              ? "bg-[#f8fafb] text-[#202124]"
-              : "bg-white text-[#4f5b67] hover:bg-[#f8fafb]"
+              ? "bg-[var(--app-theme-toolbar-control-hover)] text-[var(--app-theme-text)]"
+              : "bg-[var(--app-theme-toolbar)] text-[var(--app-theme-toolbar-foreground)] hover:bg-[var(--app-theme-toolbar-control-hover)]"
           }`}
           title={`${tab.root} (${tab.branch})`}
         >
@@ -55,16 +58,16 @@
           >
             <span class="min-w-0 flex-1">
               <span class="block truncate text-sm font-semibold">{tab.title}</span>
-              <span class={`block truncate text-xs ${tab.error ? "text-[#9f3f33]" : "text-[#89929d]"}`}>
+              <span class={`block truncate text-xs ${tab.error ? "text-[var(--app-theme-error)]" : "text-[var(--app-theme-text-subtle)]"}`}>
                 {tab.error || tab.branch}
               </span>
             </span>
             {#if tab.loading}
-              <span class="h-2 w-2 shrink-0 rounded-full bg-[#4d9d91]" aria-label="Loading"></span>
+              <span class="h-2 w-2 shrink-0 rounded-full bg-[var(--app-theme-success)]" aria-label="Loading"></span>
             {/if}
           </button>
           <button
-            class="mr-2 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-[#6d7784] transition hover:bg-[#e7ebef] hover:text-[#202124]"
+            class="mr-2 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-[var(--app-theme-text-muted)] transition hover:bg-[var(--app-theme-control-hover)] hover:text-[var(--app-theme-text)]"
             type="button"
             aria-label={`Close ${tab.title}`}
             title={`Close ${tab.title}`}
@@ -75,15 +78,20 @@
         </div>
       {/each}
     {:else}
-      <div class="flex h-full items-center px-4 text-sm text-[#89929d]">No repositories open</div>
+      <div class="flex h-full items-center px-4 text-sm text-[var(--app-theme-text-subtle)]">No repositories open</div>
     {/if}
   </nav>
 
   <button
-    class="flex h-full w-12 shrink-0 items-center justify-center border-l border-[#d8dde4] text-[#4f5b67] transition hover:bg-[#f8fafb]"
+    class={`flex h-full w-12 shrink-0 items-center justify-center border-l border-[var(--app-theme-toolbar-border)] transition ${
+      activeView === "settings"
+        ? "bg-[var(--app-theme-accent-surface)] text-[var(--app-theme-accent-surface-foreground)]"
+        : "text-[var(--app-theme-toolbar-foreground)] hover:bg-[var(--app-theme-toolbar-control-hover)]"
+    }`}
     type="button"
     aria-label="Settings"
     title="Settings"
+    onclick={onShowSettings}
   >
     <Settings aria-hidden="true" size={18} />
   </button>

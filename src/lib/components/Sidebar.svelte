@@ -31,13 +31,13 @@
   }
 </script>
 
-<aside class="min-h-0 border-r border-[#d8dde4] bg-[#fbfcfd]">
+<aside class="min-h-0 border-r border-[var(--app-theme-sidebar-border)] bg-[var(--app-theme-sidebar)]">
   <div class="flex h-full flex-col overflow-auto px-4 pt-5 pb-2">
     <section class={`flex min-h-0 flex-col ${open.LocalBranches ? 'flex-1' : 'flex-none'}`}>
       <button
         type="button"
         onclick={() => toggle("LocalBranches")}
-        class="group mb-3 inline-flex items-center gap-1 text-xs font-bold uppercase text-[#7b8490] transition-colors hover:text-[#183d38]"
+        class="group mb-3 inline-flex items-center gap-1 text-xs font-bold uppercase text-[var(--app-theme-sidebar-muted-foreground)] transition-colors hover:text-[var(--app-theme-accent-surface-foreground)]"
       >
         <ChevronRight
           aria-hidden="true"
@@ -51,12 +51,12 @@
         <div class="min-h-0 flex-1 overflow-auto">
           <ul class="space-y-1">
             {#if snapshot?.status.currentBranch}
-              <li class="rounded-md bg-[#e9f8f5] px-3 py-2 text-sm font-semibold text-[#183d38]">
+              <li class="rounded-md bg-[var(--app-theme-sidebar-row-active)] px-3 py-2 text-sm font-semibold text-[var(--app-theme-accent-surface-foreground)]">
                 {snapshot.status.currentBranch}
               </li>
             {:else}
               {#each emptyItems as item (item)}
-                <li class="px-3 py-2 text-sm text-[#89929d]">{item}</li>
+                <li class="px-3 py-2 text-sm text-[var(--app-theme-text-subtle)]">{item}</li>
               {/each}
             {/if}
           </ul>
@@ -68,7 +68,7 @@
       <button
         type="button"
         onclick={() => toggle("RemoteBranches")}
-        class="group mb-3 inline-flex items-center gap-1 text-xs font-bold uppercase text-[#7b8490] transition-colors hover:text-[#183d38]"
+        class="group mb-3 inline-flex items-center gap-1 text-xs font-bold uppercase text-[var(--app-theme-sidebar-muted-foreground)] transition-colors hover:text-[var(--app-theme-accent-surface-foreground)]"
       >
         <ChevronRight
           aria-hidden="true"
@@ -80,7 +80,7 @@
       </button>
       {#if open.RemoteBranches}
         <div class="min-h-0 flex-1 overflow-auto">
-          <p class="px-3 py-2 text-sm text-[#89929d]">Remote refs are planned.</p>
+          <p class="px-3 py-2 text-sm text-[var(--app-theme-text-subtle)]">Remote refs are planned.</p>
         </div>
       {/if}
     </section>
@@ -89,7 +89,7 @@
       <button
         type="button"
         onclick={() => toggle("ChangedFiles")}
-        class="group mb-3 inline-flex items-center gap-1 text-xs font-bold uppercase text-[#7b8490] transition-colors hover:text-[#183d38]"
+        class="group mb-3 inline-flex items-center gap-1 text-xs font-bold uppercase text-[var(--app-theme-sidebar-muted-foreground)] transition-colors hover:text-[var(--app-theme-accent-surface-foreground)]"
       >
         <ChevronRight
           aria-hidden="true"
@@ -105,16 +105,16 @@
             <ul class="space-y-1">
               {#each snapshot.status.changedFiles as file (changedFileKey(file))}
                 <li
-                  class="flex min-w-0 items-center gap-2 rounded-md px-3 py-2 text-sm text-[#36414d] hover:bg-[#eef2f5]"
+                  class="flex min-w-0 items-center gap-2 rounded-md px-3 py-2 text-sm text-[var(--app-theme-sidebar-foreground)] hover:bg-[var(--app-theme-sidebar-row-hover)]"
                   title={changedFileTitle(file)}
                 >
-                  <code class="shrink-0 font-mono text-xs text-[#4d9d91]">{file.indexStatus}{file.worktreeStatus}</code>
+                  <code class="shrink-0 font-mono text-xs text-[var(--app-theme-accent)]">{file.indexStatus}{file.worktreeStatus}</code>
                   <span class="truncate">{file.path}</span>
                 </li>
               {/each}
             </ul>
           {:else}
-            <p class="px-3 py-2 text-sm text-[#89929d]">Working tree is clean.</p>
+            <p class="px-3 py-2 text-sm text-[var(--app-theme-text-subtle)]">Working tree is clean.</p>
           {/if}
         </div>
       {/if}
@@ -124,7 +124,7 @@
       <button
         type="button"
         onclick={() => toggle("Stashes")}
-        class="group mb-3 inline-flex items-center gap-1 text-xs font-bold uppercase text-[#7b8490] transition-colors hover:text-[#183d38]"
+        class="group mb-3 inline-flex items-center gap-1 text-xs font-bold uppercase text-[var(--app-theme-sidebar-muted-foreground)] transition-colors hover:text-[var(--app-theme-accent-surface-foreground)]"
       >
         <ChevronRight
           aria-hidden="true"
@@ -136,7 +136,7 @@
       </button>
       {#if open.Stashes}
         <div class="min-h-0 flex-1 overflow-auto">
-          <p class="px-3 py-2 text-sm text-[#89929d]">Stash loading is planned.</p>
+          <p class="px-3 py-2 text-sm text-[var(--app-theme-text-subtle)]">Stash loading is planned.</p>
         </div>
       {/if}
     </section>

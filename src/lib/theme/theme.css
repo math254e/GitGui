@@ -1,0 +1,158 @@
+/* Static T3 Code fallback used before the runtime has painted a preference. */
+:root {
+  color-scheme: light;
+
+  --app-theme-canvas: #fcfcfc;
+  --app-theme-chrome: #fcfcfc;
+  --app-theme-toolbar: #fcfcfc;
+  --app-theme-toolbar-foreground: #27272a;
+  --app-theme-toolbar-border: #e4e4e7;
+  --app-theme-toolbar-control: #ffffff;
+  --app-theme-toolbar-control-foreground: #27272a;
+  --app-theme-toolbar-control-hover: #f4f4f5;
+  --app-theme-surface: #ffffff;
+  --app-theme-surface-raised: #fcfcfc;
+  --app-theme-surface-overlay: #ffffff;
+  --app-theme-text: #27272a;
+  --app-theme-text-muted: #71717b;
+  --app-theme-border: #e4e4e7;
+  --app-theme-input: #d4d4d8;
+  --app-theme-focus: #1b4ed8;
+  --app-theme-accent: #1b4ed8;
+  --app-theme-accent-foreground: #ffffff;
+  --app-theme-secondary: #fafafa;
+  --app-theme-secondary-foreground: #27272a;
+  --app-theme-muted: #fafafa;
+  --app-theme-muted-foreground: #71717b;
+  --app-theme-placeholder: #71717b;
+  --app-theme-secondary-label: #71717b;
+  --app-theme-icon-muted: #71717b;
+  --app-theme-error: #fb2c36;
+  --app-theme-error-foreground: #c10007;
+  --app-theme-error-surface: #fcebec;
+  --app-theme-warning: #fe9a00;
+  --app-theme-warning-foreground: #bb4d00;
+  --app-theme-warning-surface: #fcf4e8;
+  --app-theme-update: #1b4ed8;
+  --app-theme-update-foreground: #1b4ed8;
+  --app-theme-update-surface: #e0e6f7;
+  --app-theme-accent-surface: #f4f4f5;
+  --app-theme-accent-surface-foreground: #18181b;
+  --app-theme-message-surface: #f4f4f5;
+  --app-theme-message-foreground: #27272a;
+  --app-theme-message-action: #1b4ed8;
+  --app-theme-message-action-foreground: #ffffff;
+  --app-theme-message-action-hover: #3160db;
+  --app-theme-code-background: #ffffff;
+  --app-theme-code-foreground: #27272a;
+  --app-theme-sidebar: #fafafa;
+  --app-theme-sidebar-foreground: #27272a;
+  --app-theme-sidebar-muted-foreground: #71717b;
+  --app-theme-sidebar-control-surface: #f4f4f5;
+  --app-theme-sidebar-row-hover: #fcfcfc;
+  --app-theme-sidebar-row-active: #ffffff;
+  --app-theme-sidebar-row-selected: #ffffff;
+  --app-theme-sidebar-border: #e4e4e7;
+  --app-theme-terminal-background: #fcfcfc;
+  --app-theme-terminal-foreground: #27272a;
+  --app-theme-terminal-cursor: #26384e;
+  --app-theme-terminal-selection-background: #d0d6dd;
+  --app-theme-terminal-scrollbar: #d6d6d6;
+  --app-theme-terminal-scrollbar-hover: #bdbdbd;
+
+  /* Compatibility aliases for the migrated shell components. */
+  --app-theme-accent-hover: #3160db;
+  --app-theme-border-subtle: #e4e4e7;
+  --app-theme-control-hover: #f4f4f5;
+  --app-theme-dialog-shadow: 0 24px 80px rgb(39 39 42 / 24%);
+  --app-theme-error-border: rgb(251 44 54 / 35%);
+  --app-theme-focus-ring: rgb(27 78 216 / 25%);
+  --app-theme-overlay: rgb(39 39 42 / 35%);
+  --app-theme-success: #1b4ed8;
+  --app-theme-success-surface: #e0e6f7;
+  --app-theme-text-placeholder: #71717b;
+  --app-theme-text-secondary: #27272a;
+  --app-theme-text-subtle: #71717b;
+}
+
+:root.dark,
+:root[data-theme-appearance="dark"] {
+  color-scheme: dark;
+
+  --app-theme-canvas: #0a0a0a;
+  --app-theme-chrome: #0a0a0a;
+  --app-theme-toolbar: #0a0a0a;
+  --app-theme-toolbar-foreground: #f5f5f5;
+  --app-theme-toolbar-border: #191919;
+  --app-theme-toolbar-control: #191919;
+  --app-theme-toolbar-control-foreground: #f5f5f5;
+  --app-theme-toolbar-control-hover: #141414;
+  --app-theme-surface: #111111;
+  --app-theme-surface-raised: #141414;
+  --app-theme-surface-overlay: #191919;
+  --app-theme-text: #f5f5f5;
+  --app-theme-text-muted: #818181;
+  --app-theme-border: #191919;
+  --app-theme-input: #1e1e1e;
+  --app-theme-focus: #346bf1;
+  --app-theme-accent: #346bf1;
+  --app-theme-accent-foreground: #ffffff;
+  --app-theme-secondary: #141414;
+  --app-theme-secondary-foreground: #f5f5f5;
+  --app-theme-muted: #141414;
+  --app-theme-muted-foreground: #818181;
+  --app-theme-placeholder: #818181;
+  --app-theme-secondary-label: #818181;
+  --app-theme-icon-muted: #818181;
+  --app-theme-error: #fb414a;
+  --app-theme-error-foreground: #ff6467;
+  --app-theme-error-surface: #301214;
+  --app-theme-warning: #fe9a00;
+  --app-theme-warning-foreground: #ffb900;
+  --app-theme-warning-surface: #312108;
+  --app-theme-update: #346bf1;
+  --app-theme-update-foreground: #51a2ff;
+  --app-theme-update-surface: #121b34;
+  --app-theme-accent-surface: #141414;
+  --app-theme-accent-surface-foreground: #f5f5f5;
+  --app-theme-message-surface: #141414;
+  --app-theme-message-foreground: #f5f5f5;
+  --app-theme-message-action: #346bf1;
+  --app-theme-message-action-foreground: #ffffff;
+  --app-theme-message-action-hover: #3061d9;
+  --app-theme-code-background: #111111;
+  --app-theme-code-foreground: #f5f5f5;
+  --app-theme-sidebar: #000000;
+  --app-theme-sidebar-foreground: #f1f3f7;
+  --app-theme-sidebar-muted-foreground: #a3a3a3;
+  --app-theme-sidebar-control-surface: #0a0a0a;
+  --app-theme-sidebar-row-hover: #131313;
+  --app-theme-sidebar-row-active: #1a1b1b;
+  --app-theme-sidebar-row-selected: #111111;
+  --app-theme-sidebar-border: #141414;
+  --app-theme-terminal-background: #0a0a0a;
+  --app-theme-terminal-foreground: #f5f5f5;
+  --app-theme-terminal-cursor: #b4cbff;
+  --app-theme-terminal-selection-background: #343a47;
+  --app-theme-terminal-scrollbar: #222222;
+  --app-theme-terminal-scrollbar-hover: #363636;
+
+  --app-theme-accent-hover: #3061d9;
+  --app-theme-border-subtle: #191919;
+  --app-theme-control-hover: #141414;
+  --app-theme-dialog-shadow: 0 24px 80px rgb(0 0 0 / 45%);
+  --app-theme-error-border: rgb(251 65 74 / 35%);
+  --app-theme-focus-ring: rgb(52 107 241 / 28%);
+  --app-theme-overlay: rgb(0 0 0 / 55%);
+  --app-theme-success: #346bf1;
+  --app-theme-success-surface: #121b34;
+  --app-theme-text-placeholder: #818181;
+  --app-theme-text-secondary: #f5f5f5;
+  --app-theme-text-subtle: #818181;
+}
+
+:root.no-transitions,
+:root.no-transitions * {
+  transition-duration: 0s !important;
+  animation-duration: 0s !important;
+}
