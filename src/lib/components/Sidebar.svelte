@@ -1,6 +1,6 @@
 <script lang="ts">
   import { ChevronRight } from "@lucide/svelte";
-  import type { RepositorySnapshot } from "$lib/types/repository";
+  import type { ChangedFile, RepositorySnapshot } from "$lib/types/repository";
 
   type Props = {
     snapshot: RepositorySnapshot | null;
@@ -20,6 +20,15 @@
 	function toggle(section: keyof typeof open) {
 		open[section] = !open[section];
 	}
+
+  function changedFileKey(file: ChangedFile) {
+    return `${file.path}\0${file.originalPath ?? ""}\0${file.indexStatus}${file.worktreeStatus}`;
+  }
+
+  function changedFileTitle(file: ChangedFile) {
+    const status = `${file.indexStatus}${file.worktreeStatus}`;
+    return file.originalPath ? `${status}: ${file.originalPath} -> ${file.path}` : `${status}: ${file.path}`;
+  }
 </script>
 
 <aside class="min-h-0 border-r border-[#d8dde4] bg-[#fbfcfd]">
@@ -94,8 +103,11 @@
         <div class="min-h-0 flex-1 overflow-auto">
           {#if snapshot?.status.changedFiles.length}
             <ul class="space-y-1">
-              {#each snapshot.status.changedFiles as file (file.path)}
-                <li class="flex min-w-0 items-center gap-2 rounded-md px-3 py-2 text-sm text-[#36414d] hover:bg-[#eef2f5]">
+              {#each snapshot.status.changedFiles as file (changedFileKey(file))}
+                <li
+                  class="flex min-w-0 items-center gap-2 rounded-md px-3 py-2 text-sm text-[#36414d] hover:bg-[#eef2f5]"
+                  title={changedFileTitle(file)}
+                >
                   <code class="shrink-0 font-mono text-xs text-[#4d9d91]">{file.indexStatus}{file.worktreeStatus}</code>
                   <span class="truncate">{file.path}</span>
                 </li>

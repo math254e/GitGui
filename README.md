@@ -12,11 +12,21 @@ GitGui is a modern Git desktop GUI inspired by tools like GitKraken, built as a 
 ## Architecture
 
 ```text
-SvelteKit UI
-  -> Tauri commands
-  -> Rust repository services
+SvelteKit UI (Tauri webview or browser)
+  -> GitGui Rust server (same-origin HTTP + WebSocket)
+  -> gitgui-core repository services
   -> Git CLI
 ```
+
+The Rust server can serve the compiled SvelteKit application alongside its API and WebSocket. This gives GitGui the same local-web shape as T3 Code: one process and one origin for the browser UI and the machine-local Git host. The Tauri desktop app still uses the same server as its local backend.
+
+To run the local browser version:
+
+```text
+npm run web:serve
+```
+
+Then open `http://127.0.0.1:3774`. The standalone server auto-detects `./build/index.html`; use `--web-dir <path>` or `GITGUI_SERVER_WEB_DIR` when the compiled web app lives elsewhere.
 
 Rust owns repository detection, command execution, parsing, state shaping, commit loading, and future graph algorithms. The frontend renders structured data returned by Rust and never shells out to Git directly.
 

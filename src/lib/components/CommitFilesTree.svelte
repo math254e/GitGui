@@ -11,6 +11,7 @@
   type FileTreeNode = {
     name: string;
     path: string;
+    key: string;
     children: FileTreeNode[];
     file: CommitFile | null;
   };
@@ -38,6 +39,7 @@
           folderNode = {
             name: segment,
             path: folderPath,
+            key: folderPath,
             children: [],
             file: null,
           };
@@ -52,6 +54,7 @@
       siblings.push({
         name: fileName,
         path: file.path,
+        key: fileKey(file),
         children: [],
         file,
       });
@@ -71,14 +74,18 @@
         return 1;
       }
 
-      return first.name.localeCompare(second.name);
+      return first.name.localeCompare(second.name) || first.key.localeCompare(second.key);
     });
+  }
+
+  function fileKey(file: CommitFile) {
+    return `${file.path}\0${file.originalPath ?? ""}\0${file.status}`;
   }
 
 </script>
 
 <div class="min-h-0 flex-1 overflow-auto py-1">
-  {#each tree as node (node.path)}
+  {#each tree as node (node.key)}
     <CommitFilesTreeNode {node} depth={0} {selectedFile} {onSelectFile} bind:collapsedFolders />
   {/each}
 </div>

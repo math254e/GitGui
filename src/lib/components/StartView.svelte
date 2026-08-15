@@ -12,18 +12,22 @@
     recentRepos: RecentRepo[];
     loading: boolean;
     error: string;
+    connectionError?: boolean;
     onChooseRepository: () => void;
     onOpenRecent: (path: string) => void;
     onRemoveRecent: (path: string) => void;
+    onRetryConnection?: () => void;
   };
 
   let {
     recentRepos,
     loading,
     error,
+    connectionError = false,
     onChooseRepository,
     onOpenRecent,
     onRemoveRecent,
+    onRetryConnection,
   }: Props = $props();
 
   let search = $state("");
@@ -90,8 +94,18 @@
     </div>
 
     {#if error}
-      <div class="mt-4 rounded border border-[#f1c7c7] bg-[#fff0f0] px-4 py-3 text-sm text-[#8b2d2d]">
-        {error}
+      <div class="mt-4 flex flex-wrap items-center justify-between gap-3 rounded border border-[#f1c7c7] bg-[#fff0f0] px-4 py-3 text-sm text-[#8b2d2d]">
+        <span>{error}</span>
+        {#if connectionError && onRetryConnection}
+          <button
+            class="inline-flex h-8 items-center justify-center rounded border border-[#d8aaaa] bg-white px-3 text-sm font-medium text-[#8b2d2d] transition hover:bg-[#fff8f8] disabled:cursor-not-allowed disabled:opacity-55"
+            type="button"
+            disabled={loading}
+            onclick={onRetryConnection}
+          >
+            {loading ? "Restarting…" : "Retry connection"}
+          </button>
+        {/if}
       </div>
     {/if}
 

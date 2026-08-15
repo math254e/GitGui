@@ -4,6 +4,7 @@
   export type FileTreeNode = {
     name: string;
     path: string;
+    key: string;
     children: FileTreeNode[];
     file: CommitFile | null;
   };
@@ -25,7 +26,7 @@
 
   const isFolder = $derived(!node.file);
   const isCollapsed = $derived(collapsedFolders.has(node.path));
-  const isSelected = $derived(Boolean(node.file && selectedFile?.path === node.file.path));
+  const isSelected = $derived(Boolean(node.file && selectedFile && sameFile(selectedFile, node.file)));
   const hiddenFileCount = $derived(countFiles(node));
 
   function toggleFolder(path: string) {
@@ -58,6 +59,14 @@
     }
   }
 
+  function sameFile(first: CommitFile, second: CommitFile) {
+    return (
+      first.path === second.path &&
+      first.originalPath === second.originalPath &&
+      first.status === second.status
+    );
+  }
+
   function countFiles(treeNode: FileTreeNode): number {
     if (treeNode.file) {
       return 1;
@@ -88,7 +97,7 @@
   </button>
 
   {#if !isCollapsed}
-    {#each node.children as child (child.path)}
+    {#each node.children as child (child.key)}
       <CommitFilesTreeNode node={child} depth={depth + 1} {selectedFile} {onSelectFile} bind:collapsedFolders />
     {/each}
   {/if}

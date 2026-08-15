@@ -21,6 +21,18 @@ pub struct RepositorySnapshot {
     pub refs: Vec<CommitRef>,
 }
 
+/// Lightweight repository result for server status requests.
+///
+/// This deliberately contains no commit history, graph, or ref data. It is
+/// the reusable core operation used by the standalone server's first Git RPC
+/// slice.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepositoryStatusSnapshot {
+    pub info: RepositoryInfo,
+    pub status: RepositoryStatus,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct RepositoryStatus {
@@ -133,6 +145,19 @@ pub fn load_repository(path: &str) -> Result<RepositorySnapshot, GitError> {
         commits,
         info,
     })
+}
+
+/// Resolves a path to its Git repository without loading history or status.
+pub fn resolve_repository(path: &str) -> Result<RepositoryInfo, GitError> {
+    detect_repository(path)
+}
+
+/// Resolves a repository and loads only its current working-tree status.
+pub fn load_repository_status(path: &str) -> Result<RepositoryStatusSnapshot, GitError> {
+    let info = detect_repository(path)?;
+    let status = repository_status(Path::new(&info.root))?;
+
+    Ok(RepositoryStatusSnapshot { info, status })
 }
 
 pub fn load_commit_files_from_root(

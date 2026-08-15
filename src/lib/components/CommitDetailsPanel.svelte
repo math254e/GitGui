@@ -1,50 +1,60 @@
 <script lang="ts">
-  import { invoke } from "@tauri-apps/api/core";
   import CommitFilesTree from "$lib/components/CommitFilesTree.svelte";
+  import type { GitGuiClient } from "$lib/client-runtime/client";
+  import { onDestroy } from "svelte";
   import type { CommitFile, CommitInfo, RepositorySnapshot } from "$lib/types/repository";
 
   type Props = {
+    client: GitGuiClient;
+    repositoryId: string;
     snapshot: RepositorySnapshot;
     selectedCommit: CommitInfo;
     selectedFile: CommitFile | null;
     onSelectFile: (file: CommitFile) => void;
   };
 
-  let { snapshot, selectedCommit, selectedFile, onSelectFile }: Props = $props();
+  let { client, repositoryId, snapshot, selectedCommit, selectedFile, onSelectFile }: Props = $props();
   let commitFiles = $state<CommitFile[]>([]);
   let filesLoading = $state(false);
   let filesError = $state("");
   let activeFilesRequest = 0;
+  let destroyed = false;
 
   $effect(() => {
-    void loadFiles(snapshot.info.root, selectedCommit.hash);
+    void loadFiles(repositoryId, selectedCommit.hash);
+  });
+
+  onDestroy(() => {
+    destroyed = true;
+    activeFilesRequest += 1;
   });
 
   function formatDate(timestamp: number) {
     return new Date(timestamp * 1000).toLocaleString();
   }
 
-  async function loadFiles(repositoryPath: string, commitHash: string) {
+  async function loadFiles(repositoryId: string, commitHash: string) {
+    if (destroyed) {
+      return;
+    }
+
     const request = ++activeFilesRequest;
     commitFiles = [];
     filesError = "";
     filesLoading = true;
 
     try {
-      const files = await invoke<CommitFile[]>("load_commit_files", {
-        path: repositoryPath,
-        commitHash,
-      });
+      const result = await client.getCommitFiles(repositoryId, commitHash);
 
-      if (request === activeFilesRequest) {
-        commitFiles = files;
+      if (!destroyed && request === activeFilesRequest) {
+        commitFiles = result.files;
       }
     } catch (caught) {
-      if (request === activeFilesRequest) {
+      if (!destroyed && request === activeFilesRequest) {
         filesError = formatError(caught);
       }
     } finally {
-      if (request === activeFilesRequest) {
+      if (!destroyed && request === activeFilesRequest) {
         filesLoading = false;
       }
     }

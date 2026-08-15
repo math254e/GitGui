@@ -1,5 +1,6 @@
 <script lang="ts">
   import { Cloud, Monitor } from "@lucide/svelte";
+  import { onDestroy } from "svelte";
   import type { CommitInfo, CommitRef, GraphCommit, RepositorySnapshot } from "$lib/types/repository";
 
   type ColumnId = "branch" | "graph" | "message";
@@ -122,6 +123,11 @@
     } catch {
       localStorage.removeItem(columnStorageKey);
     }
+  });
+
+  onDestroy(() => {
+    window.removeEventListener("pointermove", resizeColumn);
+    resizeState = null;
   });
 
   const hasChanges = $derived(Boolean(snapshot?.status.changedFiles.length));
@@ -343,19 +349,15 @@
 
     for (const [hash, refsForCommit] of candidates) {
       const dedupedRefs = dedupeRemoteRefsWhenLocalExists(refsForCommit);
-      grouped.set(hash, bestBranchRef(dedupedRefs));
+      grouped.set(hash, bestBranchRef(dedupedRefs, currentSnapshot));
     }
 
     return grouped;
   }
 
-  function bestBranchRef(refs: CommitRef[]) {
-    if (!snapshot) {
-      return refs[0];
-    }
-
-    const commitByHash = new Map(snapshot.commits.map((commit) => [commit.hash, commit]));
-    const currentBranch = snapshot.status.currentBranch;
+  function bestBranchRef(refs: CommitRef[], currentSnapshot: RepositorySnapshot) {
+    const commitByHash = new Map(currentSnapshot.commits.map((commit) => [commit.hash, commit]));
+    const currentBranch = currentSnapshot.status.currentBranch;
     const rankedRefs = [...refs].sort((first, second) => {
       if (currentBranch) {
         const firstIsCurrent = displayRefName(first) === currentBranch;
@@ -682,7 +684,7 @@
       const directBranchRefs = (refsByCommit.get(graphCommit.hash) ?? []).filter((ref) => ref.refType !== "tag");
 
       if (directBranchRefs.length) {
-        const branchRef = bestBranchRef(directBranchRefs);
+        const branchRef = bestBranchRef(directBranchRefs, currentSnapshot);
 
         if (branchRef) {
           laneRefs.set(graphCommit.lane, branchRef);
@@ -1024,7 +1026,7 @@
   }
 
   function refKey(ref: CommitRef) {
-    return `${ref.name}-${ref.target}`;
+    return `${ref.refType}\0${ref.name}\0${ref.target}`;
   }
 
   function startResize(event: PointerEvent, column: HistoryColumn) {

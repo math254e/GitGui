@@ -6,10 +6,16 @@
   "scripts": {
     "dev": "vite dev",
     "build": "vite build",
+    "server:dev": "cargo run -p gitgui-server -- --port 3774",
+    "web:serve": "npm run build && cargo run -p gitgui-server -- --bind 127.0.0.1 --port 3774",
+    "protocol:generate": "cargo run -p gitgui-protocol --bin generate-typescript --quiet",
     "preview": "vite preview",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "tauri:prepare-sidecar": "node scripts/prepare-gitgui-server.mjs",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build"
   },
   "license": "MIT",
   "dependencies": {

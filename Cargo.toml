@@ -1,0 +1,8 @@
+[workspace]
+members = [
+    "src-tauri",
+    "crates/gitgui-core",
+    "crates/gitgui-protocol",
+    "crates/gitgui-server",
+]
+resolver = "2"

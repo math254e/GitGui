@@ -1,17 +1,23 @@
 <script lang="ts">
-  import { invoke } from "@tauri-apps/api/core";
-  import { open } from "@tauri-apps/plugin-dialog";
   import { onDestroy, onMount } from "svelte";
+  import {
+    ClientWorkspace,
+    GitGuiClient,
+    LocalStorageWorkspaceMetadataAdapter,
+    type ClientWorkspaceState,
+  } from "$lib/client-runtime";
   import CommitDetailsPanel from "$lib/components/CommitDetailsPanel.svelte";
   import CommitFileDiffViewer from "$lib/components/CommitFileDiffViewer.svelte";
   import EmptyDetailsPanel from "$lib/components/EmptyDetailsPanel.svelte";
   import GitGraph from "$lib/components/GitGraph.svelte";
   import ResizablePaneGroup, { type ResizablePane } from "$lib/components/ResizablePaneGroup.svelte";
   import RepositoryDetailsPanel from "$lib/components/RepositoryDetailsPanel.svelte";
+  import RepositoryPathDialog from "$lib/components/RepositoryPathDialog.svelte";
   import Sidebar from "$lib/components/Sidebar.svelte";
   import StartView from "$lib/components/StartView.svelte";
   import TopMenu, { type RepoTab } from "$lib/components/TopMenu.svelte";
   import WorkingTreePanel from "$lib/components/WorkingTreePanel.svelte";
+  import type { RepositorySummary } from "$lib/generated/protocol";
   import type { CommitFile, CommitInfo, RepositorySnapshot } from "$lib/types/repository";
 
   type ActiveView = "start" | "repo";
@@ -23,28 +29,55 @@
   type BackendWorkspaceRepo = {
     id: string;
     title: string;
-    snapshot: RepositorySnapshot;
+    root: string;
+    snapshot?: RepositorySnapshot;
     error?: string | null;
+    loading: boolean;
   };
   type WorkspaceRepo = BackendWorkspaceRepo & {
     selectedGraphItem: SelectedGraphItem | null;
     selectedFile: CommitFile | null;
   };
   type RecentRepo = {
+    repositoryId: string;
     root: string;
     title: string;
     snapshot?: RepositorySnapshot;
   };
-  type WorkspaceSnapshot = {
-    activeRepoId?: string | null;
-    openRepos: BackendWorkspaceRepo[];
-    recentRepos: RecentRepo[];
+  type LocalServerConnection = {
+    httpUrl: string;
+    websocketUrl: string;
+    sessionToken: string;
+    serverId: string;
+    protocolVersion: number;
+    capabilities: string[];
+  };
+  type LegacyWorkspaceMigration = {
+    available: boolean;
+    source: string;
+    version: number;
+    activeRepositoryPath: string | null;
+    openRepositoryPaths: string[];
+    recentRepositoryPaths: string[];
+  };
+  type RuntimeHandle = {
+    client: GitGuiClient;
+    workspace: ClientWorkspace;
+    unsubscribeWorkspace: (() => void) | null;
+    unsubscribeClient: (() => void) | null;
+  };
+  type BootstrapOptions = {
+    restartServer?: boolean;
+  };
+  type BrowserServerConnection = {
+    httpUrl: string;
+    sessionToken?: string;
   };
 
   const layoutStorageKey = "gitgui.workspaceLayout.v1";
-  const legacyWorkspaceStorageKey = "gitgui.workspaceState.v1";
   const autoRefreshMs = 30_000;
   const initialPrefetchCommitCount = 20;
+  const localEnvironmentId = "desktop-local";
   const sidebarLimits = { default: 230, min: 180, max: 420 };
   const detailsLimits = { default: 430, min: 300, max: 620 };
 
@@ -52,15 +85,27 @@
   let activeRepoId = $state<string | null>(null);
   let openRepos = $state<WorkspaceRepo[]>([]);
   let recentRepos = $state<RecentRepo[]>([]);
+  let repositoryCatalog = $state<RepositorySummary[]>([]);
+  let workspaceState = $state<ClientWorkspaceState | null>(null);
+  let gitClient = $state<GitGuiClient | null>(null);
+  let clientWorkspace = $state<ClientWorkspace | null>(null);
   let startError = $state("");
-  let opening = $state(false);
-  let restoring = $state(false);
+  let bootstrapping = $state(false);
+  let operationPending = $state(false);
   let largeScreen = $state(false);
   let sidebarWidth = $state(sidebarLimits.default);
   let detailsWidth = $state(detailsLimits.default);
   let activeWorkspaceRequest = 0;
   let autoRefreshTimer: ReturnType<typeof setInterval> | null = null;
   let largeScreenMediaQuery: MediaQueryList | null = null;
+  let activeRuntime: RuntimeHandle | null = null;
+  let bootstrapGeneration = 0;
+  let pageDestroyed = false;
+  let connectionError = $state(false);
+  let desktopRuntime = false;
+  let repositoryPathDialogOpen = $state(false);
+  let repositoryPathValue = $state("");
+  let repositoryPathError = $state("");
   const prefetchedInitialCommits = new Map<string, string>();
   const prefetchedCommitDiffs = new Set<string>();
 
@@ -76,11 +121,17 @@
     openRepos.map((repo) => ({
       id: repo.id,
       title: repo.title,
-      root: repo.snapshot.info.root,
-      branch: repo.snapshot.status.currentBranch ?? "Detached HEAD",
-      loading: false,
+      root: repo.root,
+      branch: repo.snapshot?.status.currentBranch ?? "Detached HEAD",
+      loading: repo.loading,
       error: repo.error ?? "",
     })),
+  );
+  const loading = $derived(
+    bootstrapping ||
+      operationPending ||
+      workspaceState?.restoring === true ||
+      workspaceState?.opening === true,
   );
   const detailsPane = $derived<ResizablePane>({
     id: "details",
@@ -112,110 +163,345 @@
   ]);
 
   onMount(() => {
+    desktopRuntime = isTauriRuntime();
     restoreLayout();
     largeScreenMediaQuery = window.matchMedia("(min-width: 1024px)");
     largeScreen = largeScreenMediaQuery.matches;
     largeScreenMediaQuery.addEventListener("change", updateLargeScreen);
-    void restoreWorkspace();
-    autoRefreshTimer = setInterval(refreshOpenRepositories, autoRefreshMs);
+    void bootstrapWorkspace();
+    if (!autoRefreshTimer) {
+      autoRefreshTimer = setInterval(refreshOpenRepositories, autoRefreshMs);
+    }
     window.addEventListener("focus", refreshOpenRepositories);
     document.addEventListener("visibilitychange", refreshWhenVisible);
   });
 
   onDestroy(() => {
+    pageDestroyed = true;
+    bootstrapGeneration += 1;
+
     if (autoRefreshTimer) {
       clearInterval(autoRefreshTimer);
+      autoRefreshTimer = null;
     }
 
     window.removeEventListener("focus", refreshOpenRepositories);
     document.removeEventListener("visibilitychange", refreshWhenVisible);
     largeScreenMediaQuery?.removeEventListener("change", updateLargeScreen);
+    disposeActiveRuntime("GitGui page destroyed");
   });
 
   function updateLargeScreen(event: MediaQueryListEvent) {
     largeScreen = event.matches;
   }
 
-  async function restoreWorkspace() {
-    restoring = true;
+  async function bootstrapWorkspace(options: BootstrapOptions = {}) {
+    const generation = ++bootstrapGeneration;
+    bootstrapping = true;
+    if (!options.restartServer) {
+      startError = "";
+      connectionError = false;
+    }
+
+    disposeActiveRuntime(options.restartServer ? "Restarting the local GitGui server" : "Replacing GitGui runtime");
+
+    let connectedClient: GitGuiClient | null = null;
+    let runtime: RuntimeHandle | null = null;
+    let retainRuntime = false;
 
     try {
-      let workspace = await invoke<WorkspaceSnapshot>("restore_workspace");
+      const connection = desktopRuntime
+        ? await invokeDesktop<LocalServerConnection>(
+            options.restartServer ? "restart_local_server" : "get_local_server_connection",
+          )
+        : readBrowserServerConnection();
+      if (!isCurrentBootstrap(generation)) {
+        return;
+      }
 
-      if (!workspace.openRepos.length && !workspace.recentRepos.length) {
-        const legacyWorkspace = readLegacyWorkspace();
+      connectedClient = new GitGuiClient({
+        endpoint: connection.httpUrl,
+        ...(connection.sessionToken ? { sessionToken: connection.sessionToken } : {}),
+        ...(desktopRuntime
+          ? { expectedProtocolVersion: (connection as LocalServerConnection).protocolVersion }
+          : {}),
+      });
+      const unsubscribeClient = connectedClient.onStateChange(({ current, error }) => {
+        if (isCurrentBootstrap(generation) && isConnectionFailureState(current)) {
+          connectionError = true;
+          startError = error?.message ?? `GitGui server connection ${current}.`;
+          activeView = "start";
+        }
+      });
 
-        if (legacyWorkspace) {
-          workspace = await invoke<WorkspaceSnapshot>("import_legacy_workspace", {
-            legacyState: legacyWorkspace,
-          });
-          localStorage.removeItem(legacyWorkspaceStorageKey);
+      const welcome = await connectedClient.connect();
+      if (!isCurrentBootstrap(generation)) {
+        unsubscribeClient();
+        return;
+      }
+
+      const serverId = desktopRuntime
+        ? (connection as LocalServerConnection).serverId
+        : welcome.server_id;
+      runtime = {
+        client: connectedClient,
+        workspace: new ClientWorkspace({
+          client: connectedClient,
+          identity: {
+            environmentId: desktopRuntime ? localEnvironmentId : `browser-direct:${serverId}`,
+            serverId,
+          },
+          metadataAdapter: new LocalStorageWorkspaceMetadataAdapter(localStorage),
+        }),
+        unsubscribeWorkspace: null,
+        unsubscribeClient,
+      };
+
+      const restoredState = await runtime.workspace.restore();
+      if (!isCurrentBootstrap(generation)) {
+        return;
+      }
+
+      activeRuntime = runtime;
+      gitClient = runtime.client;
+      clientWorkspace = runtime.workspace;
+      runtime.unsubscribeWorkspace = runtime.workspace.subscribe((state) => {
+        if (isCurrentBootstrap(generation) && activeRuntime === runtime) {
+          applyWorkspaceState(state);
+        }
+      });
+
+      await refreshRepositoryCatalog(connectedClient);
+      if (!isCurrentBootstrap(generation)) {
+        return;
+      }
+
+      let migrationReportedError = false;
+      if (restoredState.legacyMigrationPending) {
+        migrationReportedError = await migrateLegacyWorkspace(runtime.workspace);
+        if (!isCurrentBootstrap(generation)) {
+          return;
         }
       }
 
-      applyWorkspace(workspace);
+      if (!desktopRuntime && !runtime.workspace.state.openRepositoryIds.length && repositoryCatalog.length === 1) {
+        await runtime.workspace.openKnownRepository(repositoryCatalog[0].id);
+        if (!isCurrentBootstrap(generation)) {
+          return;
+        }
+      }
+
+      connectionError = false;
+      if (!migrationReportedError && startError === "Restarting the local GitGui server…") {
+        startError = "";
+      }
       activeView = activeRepoId ? "repo" : "start";
+      retainRuntime = true;
     } catch (caught) {
-      startError = formatError(caught);
-      activeView = "start";
+      if (isCurrentBootstrap(generation)) {
+        startError = formatError(caught);
+        connectionError = true;
+        activeView = "start";
+      }
     } finally {
-      restoring = false;
+      if (!retainRuntime && runtime) {
+        if (activeRuntime === runtime) {
+          disposeActiveRuntime("GitGui bootstrap attempt ended");
+        } else {
+          disposeRuntime(runtime, "GitGui bootstrap attempt became stale");
+        }
+      } else if (!retainRuntime && connectedClient) {
+        connectedClient.disconnect("GitGui bootstrap attempt ended");
+      }
+
+      if (isCurrentBootstrap(generation)) {
+        bootstrapping = false;
+      }
     }
   }
 
-  function readLegacyWorkspace() {
-    const stored = localStorage.getItem(legacyWorkspaceStorageKey);
-
-    if (!stored) {
-      return null;
+  async function retryLocalConnection() {
+    if (bootstrapping) {
+      return;
     }
 
-    try {
-      return JSON.parse(stored);
-    } catch {
-      localStorage.removeItem(legacyWorkspaceStorageKey);
-      return null;
+    activeView = "start";
+    connectionError = true;
+    startError = "Restarting the local GitGui server…";
+    await bootstrapWorkspace({ restartServer: desktopRuntime });
+  }
+
+  function isTauriRuntime() {
+    return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+  }
+
+  async function invokeDesktop<T>(command: string): Promise<T> {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return invoke<T>(command);
+  }
+
+  function readBrowserServerConnection(): BrowserServerConnection {
+    const pageUrl = new URL(window.location.href);
+    const endpoint = pageUrl.searchParams.get("server")?.trim() || window.location.origin;
+    const fragment = new URLSearchParams(pageUrl.hash.replace(/^#/, ""));
+    const sessionToken = fragment.get("session_token")?.trim();
+
+    if (!endpoint) {
+      throw new Error(
+        "Browser mode needs a GitGui server URL, or the page must be served by GitGui itself.",
+      );
+    }
+
+    const serverUrl = new URL(endpoint);
+    const isLoopback = serverUrl.hostname === "127.0.0.1"
+      || serverUrl.hostname === "localhost"
+      || serverUrl.hostname === "[::1]";
+    if (serverUrl.protocol !== "https:" && !(serverUrl.protocol === "http:" && isLoopback)) {
+      throw new Error("Browser connections require HTTPS, except for a loopback development server.");
+    }
+    if (window.location.protocol === "https:" && serverUrl.protocol !== "https:") {
+      throw new Error("An HTTPS GitGui page requires an HTTPS/WSS GitGui server.");
+    }
+
+    pageUrl.hash = "";
+    window.history.replaceState(window.history.state, "", pageUrl);
+    return {
+      httpUrl: serverUrl.toString(),
+      ...(sessionToken ? { sessionToken } : {}),
+    };
+  }
+
+  function isConnectionError(caught: unknown) {
+    if (typeof caught !== "object" || caught === null || !("code" in caught)) {
+      return false;
+    }
+
+    const code = caught.code;
+    return typeof code === "string"
+      && [
+        "connection_failed",
+        "not_connected",
+        "websocket_unavailable",
+        "incompatible_protocol",
+        "unauthorized",
+        "authentication_required",
+        "forbidden",
+        "disconnected",
+      ].includes(code);
+  }
+
+  function isCurrentBootstrap(generation: number) {
+    return !pageDestroyed && generation === bootstrapGeneration;
+  }
+
+  function isConnectionFailureState(state: string) {
+    return state === "failed"
+      || state === "incompatible"
+      || state === "unauthorized"
+      || state === "disconnected";
+  }
+
+  function disposeActiveRuntime(reason: string) {
+    const runtime = activeRuntime;
+    activeRuntime = null;
+    gitClient = null;
+    clientWorkspace = null;
+
+    if (runtime) {
+      disposeRuntime(runtime, reason);
+    }
+  }
+
+  function disposeRuntime(runtime: RuntimeHandle, reason: string) {
+    runtime.unsubscribeWorkspace?.();
+    runtime.unsubscribeClient?.();
+    runtime.unsubscribeWorkspace = null;
+    runtime.unsubscribeClient = null;
+    runtime.client.disconnect(reason);
+  }
+
+  async function refreshRepositoryCatalog(client: GitGuiClient = gitClient!) {
+    if (!client) {
+      return;
+    }
+
+    const repositories = await client.listRepositories();
+    repositoryCatalog = mergeRepositoryCatalog(repositories, workspaceState);
+    if (workspaceState) {
+      applyWorkspaceState(workspaceState);
     }
   }
 
   async function chooseRepository() {
     startError = "";
 
+    if (!desktopRuntime) {
+      repositoryPathValue = "";
+      repositoryPathError = "";
+      repositoryPathDialogOpen = true;
+      return;
+    }
+
     try {
-      const selectedPath = await open({
-        directory: true,
-        multiple: false,
-        title: "Open repository",
-      });
+      const selectedPath = await chooseDesktopRepository();
 
       if (typeof selectedPath === "string") {
-        await runWorkspaceCommand(() =>
-          invoke<WorkspaceSnapshot>("open_workspace_repository", { path: selectedPath }),
-        );
+        await runWorkspaceCommand(() => requireWorkspace().openRepositoryPath(selectedPath));
       }
     } catch (caught) {
       startError = formatError(caught);
     }
   }
 
+  function closeRepositoryPathDialog() {
+    if (!operationPending) {
+      repositoryPathDialogOpen = false;
+      repositoryPathError = "";
+    }
+  }
+
+  async function submitRepositoryPath() {
+    const path = repositoryPathValue.trim();
+    if (!path) {
+      repositoryPathError = "Enter a repository path on the connected host.";
+      return;
+    }
+
+    repositoryPathError = "";
+    const opened = await runWorkspaceCommand(() => requireWorkspace().openRepositoryPath(path));
+    if (opened) {
+      repositoryPathDialogOpen = false;
+      repositoryPathValue = "";
+    } else {
+      repositoryPathError = startError || "The repository could not be opened.";
+    }
+  }
+
+  async function chooseDesktopRepository() {
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    return open({
+      directory: true,
+      multiple: false,
+      title: "Open repository",
+    });
+  }
+
   async function openRecentRepository(root: string) {
+    const repository = findRepositoryByPath(root);
     await runWorkspaceCommand(() =>
-      invoke<WorkspaceSnapshot>("open_recent_workspace_repository", { root }),
+      repository
+        ? requireWorkspace().openKnownRepository(repository.id)
+        : requireWorkspace().openRepositoryPath(root),
     );
-    void refreshRepository(root);
   }
 
   async function selectRepo(repoId: string) {
-    await runWorkspaceCommand(() =>
-      invoke<WorkspaceSnapshot>("select_workspace_repository", { repoId }),
-    );
+    await runWorkspaceCommand(() => requireWorkspace().selectRepository(repoId));
   }
 
   async function closeRepo(repoId: string) {
     const wasVisibleActive = activeView === "repo" && activeRepoId === repoId;
-    await runWorkspaceCommand(() =>
-      invoke<WorkspaceSnapshot>("close_workspace_repository", { repoId }),
-    );
+    await runWorkspaceCommand(() => requireWorkspace().closeRepository(repoId));
 
     if (wasVisibleActive) {
       activeView = activeRepoId ? "repo" : "start";
@@ -223,54 +509,94 @@
   }
 
   async function removeRecentRepo(root: string) {
-    await runWorkspaceCommand(() =>
-      invoke<WorkspaceSnapshot>("remove_recent_workspace_repository", { root }),
-    );
+    const repository = findRepositoryByPath(root);
+
+    if (!repository) {
+      return;
+    }
+
+    await runWorkspaceCommand(() => requireWorkspace().removeRecentRepository(repository.id));
 
     if (!activeRepoId) {
       activeView = "start";
     }
   }
 
-  async function runWorkspaceCommand(loadWorkspace: () => Promise<WorkspaceSnapshot>) {
+  async function runWorkspaceCommand(action: () => Promise<unknown>): Promise<boolean> {
     const request = ++activeWorkspaceRequest;
-    opening = true;
+    operationPending = true;
     startError = "";
 
     try {
-      const workspace = await loadWorkspace();
-
+      await action();
       if (request === activeWorkspaceRequest) {
-        applyWorkspace(workspace);
         activeView = activeRepoId ? "repo" : activeView;
       }
+      return true;
     } catch (caught) {
       if (request === activeWorkspaceRequest) {
         startError = formatError(caught);
+        if (isConnectionError(caught)) {
+          connectionError = true;
+          activeView = "start";
+        }
       }
+      return false;
     } finally {
       if (request === activeWorkspaceRequest) {
-        opening = false;
+        operationPending = false;
       }
     }
   }
 
-  function applyWorkspace(workspace: WorkspaceSnapshot) {
+  function applyWorkspaceState(state: ClientWorkspaceState) {
+    workspaceState = state;
     const previousRepos = openRepos;
-    activeRepoId = workspace.activeRepoId ?? null;
-    recentRepos = workspace.recentRepos;
-    openRepos = workspace.openRepos.map((repo) => {
-      const previousRepo = previousRepos.find((candidate) => candidate.id === repo.id);
-      const selectedGraphItem = reconcileSelection(previousRepo?.selectedGraphItem ?? null, repo.snapshot);
+    repositoryCatalog = mergeRepositoryCatalog(repositoryCatalog, state);
+    activeRepoId = state.activeRepositoryId;
+    recentRepos = state.recentRepositories.flatMap((recent) => {
+      const repository = repositoryCatalog.find((candidate) => candidate.id === recent.repositoryId);
 
-      return {
-        ...repo,
+      return repository
+        ? [{
+            repositoryId: repository.id,
+            root: repository.root,
+            title: repositoryTitle(repository),
+          }]
+        : [];
+    });
+    openRepos = state.openRepositoryIds.flatMap((repositoryId) => {
+      const repositoryState = state.repositories[repositoryId];
+
+      if (!repositoryState) {
+        return [];
+      }
+
+      const snapshot = repositoryState.snapshot;
+      const previousRepo = previousRepos.find((candidate) => candidate.id === repositoryId);
+      const selectedGraphItem = snapshot
+        ? reconcileSelection(previousRepo?.selectedGraphItem ?? null, snapshot)
+        : previousRepo?.selectedGraphItem ?? null;
+
+      return [{
+        id: repositoryState.repository.id,
+        title: repositoryTitle(repositoryState.repository),
+        root: repositoryState.repository.root,
+        snapshot,
+        error: repositoryState.error?.message ?? null,
+        loading: repositoryState.loading || repositoryState.refreshing,
         selectedGraphItem,
-        selectedFile: reconcileSelectedFile(previousRepo?.selectedFile ?? null, repo.snapshot),
-      };
+        selectedFile: snapshot
+          ? reconcileSelectedFile(previousRepo?.selectedFile ?? null, snapshot)
+          : previousRepo?.selectedFile ?? null,
+      }];
     });
     prunePrefetchState(openRepos);
     prefetchInitialCommitFiles(openRepos);
+
+    if (state.error) {
+      startError = state.error.message;
+    }
   }
 
   function prunePrefetchState(repos: WorkspaceRepo[]) {
@@ -293,6 +619,10 @@
 
   function prefetchInitialCommitFiles(repos: WorkspaceRepo[]) {
     for (const repo of repos) {
+      if (!repo.snapshot || !clientWorkspace) {
+        continue;
+      }
+
       const commitHashes = repo.snapshot.commits
         .slice(0, initialPrefetchCommitCount)
         .map((commit) => commit.hash);
@@ -308,10 +638,7 @@
       }
 
       prefetchedInitialCommits.set(repo.id, signature);
-      void invoke("prefetch_first_commit_files", {
-        repoRoot: repo.snapshot.info.root,
-        commitHashes,
-      }).catch(() => {
+      void clientWorkspace.prefetchCommitFiles(repo.id, commitHashes).catch(() => {
         prefetchedInitialCommits.delete(repo.id);
       });
     }
@@ -324,27 +651,97 @@
   }
 
   async function refreshOpenRepositories() {
-    if (!openRepos.length || restoring) {
+    if (bootstrapping || connectionError || !openRepos.length || !clientWorkspace || workspaceState?.restoring) {
       return;
     }
 
     try {
-      applyWorkspace(await invoke<WorkspaceSnapshot>("refresh_workspace_repositories"));
+      await clientWorkspace.refreshAllRepositories();
     } catch {
       // Refresh errors are returned as per-repo tab errors when possible.
     }
   }
 
   async function refreshRepository(repoId: string) {
-    if (!openRepos.some((repo) => repo.id === repoId)) {
+    if (connectionError || !openRepos.some((repo) => repo.id === repoId) || !clientWorkspace) {
       return;
     }
 
     try {
-      applyWorkspace(await invoke<WorkspaceSnapshot>("refresh_workspace_repository", { repoId }));
+      await clientWorkspace.refreshRepository(repoId);
     } catch {
       // Refresh errors are returned as per-repo tab errors when possible.
     }
+  }
+
+  async function migrateLegacyWorkspace(workspace: ClientWorkspace): Promise<boolean> {
+    const legacy = desktopRuntime
+      ? await invokeDesktop<LegacyWorkspaceMigration>("read_legacy_workspace_migration")
+      : {
+          available: false,
+          source: "browser",
+          version: 1,
+          activeRepositoryPath: null,
+          openRepositoryPaths: [],
+          recentRepositoryPaths: [],
+        } satisfies LegacyWorkspaceMigration;
+    const result = await workspace.importLegacyWorkspace({
+      activeRepositoryPath: legacy.available ? legacy.activeRepositoryPath : null,
+      openRepositoryPaths: legacy.available ? legacy.openRepositoryPaths : [],
+      recentRepositoryPaths: legacy.available ? legacy.recentRepositoryPaths : [],
+    });
+
+    await refreshRepositoryCatalog();
+
+    if (result.errors.length) {
+      const details = result.errors
+        .map(({ operation, path, error }) => `${operation}${path ? ` ${path}` : ""}: ${error.message}`)
+        .join(" ");
+      startError = `Some legacy repositories could not be migrated. ${details}`;
+    }
+
+    return result.errors.length > 0;
+  }
+
+  function requireWorkspace() {
+    if (!clientWorkspace) {
+      throw new Error("The local GitGui server is not connected.");
+    }
+
+    return clientWorkspace;
+  }
+
+  function findRepositoryByPath(path: string) {
+    return repositoryCatalog.find(
+      (repository) => pathsEqual(repository.path, path) || pathsEqual(repository.root, path),
+    );
+  }
+
+  function mergeRepositoryCatalog(
+    repositories: RepositorySummary[],
+    state: ClientWorkspaceState | null,
+  ): RepositorySummary[] {
+    const merged = new Map(repositories.map((repository) => [repository.id, repository]));
+
+    for (const repositoryState of state ? Object.values(state.repositories) : []) {
+      merged.set(repositoryState.repository.id, repositoryState.repository);
+    }
+
+    return [...merged.values()];
+  }
+
+  function repositoryTitle(repository: RepositorySummary) {
+    const normalizedRoot = repository.root.replace(/[\\/]+$/, "");
+    const separator = Math.max(normalizedRoot.lastIndexOf("/"), normalizedRoot.lastIndexOf("\\"));
+    return normalizedRoot.slice(separator + 1) || repository.root;
+  }
+
+  function pathsEqual(left: string, right: string) {
+    return normalizePath(left) === normalizePath(right);
+  }
+
+  function normalizePath(path: string) {
+    return path.replace(/[\\/]+$/, "").toLowerCase();
   }
 
   function initialGraphSelection(nextSnapshot: RepositorySnapshot): SelectedGraphItem | null {
@@ -400,8 +797,8 @@
   }
 
   function selectCommit(commit: CommitInfo) {
-    if (snapshot) {
-      prefetchCommitDiffs(snapshot.info.root, commit);
+    if (snapshot && activeRepoId) {
+      void prefetchCommitDiffs(activeRepoId, commit);
     }
 
     updateActiveRepo((repo) => ({
@@ -411,22 +808,28 @@
     }));
   }
 
-  function prefetchCommitDiffs(repositoryPath: string, commit: CommitInfo) {
+  async function prefetchCommitDiffs(repositoryId: string, commit: CommitInfo) {
     const parentHash = commit.parents[0] ?? null;
-    const signature = `${repositoryPath}:${commit.hash}:${parentHash ?? ""}`;
+    const signature = `${repositoryId}:${commit.hash}:${parentHash ?? ""}`;
 
-    if (prefetchedCommitDiffs.has(signature)) {
+    if (prefetchedCommitDiffs.has(signature) || !gitClient || !clientWorkspace) {
       return;
     }
 
     prefetchedCommitDiffs.add(signature);
-    void invoke("prefetch_commit_file_diffs", {
-      path: repositoryPath,
-      commitHash: commit.hash,
-      parentHash,
-    }).catch(() => {
+    try {
+      const result = await gitClient.getCommitFiles(repositoryId, commit.hash);
+      await clientWorkspace.prefetchCommitDiffs({
+        repositoryId,
+        targets: result.files.map((file) => ({
+          commitHash: commit.hash,
+          ...(parentHash ? { parentHash } : {}),
+          filePath: file.path,
+        })),
+      });
+    } catch {
       prefetchedCommitDiffs.delete(signature);
-    });
+    }
   }
 
   function selectChanges() {
@@ -522,11 +925,13 @@
     {#if activeView === "start" || !activeRepo}
       <StartView
         recentRepos={recentRepos}
-        loading={opening || restoring}
+        {loading}
         error={startError}
+        {connectionError}
         onChooseRepository={chooseRepository}
         onOpenRecent={openRecentRepository}
         onRemoveRecent={removeRecentRepo}
+        onRetryConnection={retryLocalConnection}
       />
     {:else}
       {#if !largeScreen}
@@ -534,6 +939,8 @@
         {#if snapshot && selectedFile && (selectedCommit || changesSelected)}
           <div class="h-full min-h-0">
             <CommitFileDiffViewer
+              client={gitClient!}
+              repositoryId={activeRepoId!}
               {snapshot}
               diffSource={changesSelected ? "workingTree" : "commit"}
               selectedCommit={selectedCommit}
@@ -554,7 +961,14 @@
         {#if snapshot && changesSelected}
           <WorkingTreePanel {snapshot} {selectedFile} onSelectFile={selectFile} />
         {:else if snapshot && selectedCommit}
-          <CommitDetailsPanel {snapshot} {selectedCommit} {selectedFile} onSelectFile={selectFile} />
+          <CommitDetailsPanel
+            client={gitClient!}
+            repositoryId={activeRepoId!}
+            {snapshot}
+            {selectedCommit}
+            {selectedFile}
+            onSelectFile={selectFile}
+          />
         {:else if snapshot}
           <RepositoryDetailsPanel {snapshot} />
         {:else}
@@ -567,6 +981,8 @@
           <ResizablePaneGroup panes={diffPanes} onResize={resizePane}>
             {#snippet pane0()}
               <CommitFileDiffViewer
+                client={gitClient!}
+                repositoryId={activeRepoId!}
                 snapshot={snapshot!}
                 diffSource={changesSelected ? "workingTree" : "commit"}
                 selectedCommit={selectedCommit}
@@ -579,7 +995,14 @@
               {#if changesSelected}
                 <WorkingTreePanel snapshot={snapshot!} {selectedFile} onSelectFile={selectFile} />
               {:else if selectedCommit}
-                <CommitDetailsPanel snapshot={snapshot!} {selectedCommit} {selectedFile} onSelectFile={selectFile} />
+                <CommitDetailsPanel
+                  client={gitClient!}
+                  repositoryId={activeRepoId!}
+                  snapshot={snapshot!}
+                  {selectedCommit}
+                  {selectedFile}
+                  onSelectFile={selectFile}
+                />
               {/if}
             {/snippet}
           </ResizablePaneGroup>
@@ -603,7 +1026,14 @@
               {#if snapshot && changesSelected}
                 <WorkingTreePanel {snapshot} {selectedFile} onSelectFile={selectFile} />
               {:else if snapshot && selectedCommit}
-                <CommitDetailsPanel {snapshot} {selectedCommit} {selectedFile} onSelectFile={selectFile} />
+                <CommitDetailsPanel
+                  client={gitClient!}
+                  repositoryId={activeRepoId!}
+                  {snapshot}
+                  {selectedCommit}
+                  {selectedFile}
+                  onSelectFile={selectFile}
+                />
               {:else if snapshot}
                 <RepositoryDetailsPanel {snapshot} />
               {:else}
@@ -617,3 +1047,16 @@
     {/if}
   </section>
 </main>
+
+<RepositoryPathDialog
+  open={repositoryPathDialogOpen}
+  value={repositoryPathValue}
+  error={repositoryPathError}
+  loading={operationPending}
+  onValueChange={(value) => {
+    repositoryPathValue = value;
+    repositoryPathError = "";
+  }}
+  onSubmit={submitRepositoryPath}
+  onCancel={closeRepositoryPathDialog}
+/>

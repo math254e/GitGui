@@ -1,7 +1,7 @@
 <script lang="ts">
-  import { invoke } from "@tauri-apps/api/core";
   import { X } from "@lucide/svelte";
   import { onDestroy, onMount, tick } from "svelte";
+  import type { GitGuiClient } from "$lib/client-runtime/client";
   import type { CommitFile, CommitFileDiff, CommitInfo, RepositorySnapshot } from "$lib/types/repository";
 
   type Monaco = typeof import("monaco-editor");
@@ -13,6 +13,8 @@
   type DiffSource = "commit" | "workingTree";
 
   type Props = {
+    client: GitGuiClient;
+    repositoryId: string;
     snapshot: RepositorySnapshot;
     diffSource: DiffSource;
     selectedCommit: CommitInfo | null;
@@ -20,7 +22,7 @@
     onClose: () => void;
   };
 
-  let { snapshot, diffSource, selectedCommit, selectedFile, onClose }: Props = $props();
+  let { client, repositoryId, snapshot, diffSource, selectedCommit, selectedFile, onClose }: Props = $props();
   let diffContainer: HTMLDivElement;
   let fileContainer: HTMLDivElement;
   let monaco: Monaco | null = null;
@@ -37,9 +39,10 @@
   let wordWrap = $state(false);
   let activeRequest = 0;
   let activeDiffRequestKey = "";
-  let renderingDiffView = false;
-  let renderingFileView = false;
-  const diffRequestKey = $derived(buildDiffRequestKey(snapshot, diffSource, selectedCommit, selectedFile));
+  let renderingDiffRequest: number | null = null;
+  let renderingFileRequest: number | null = null;
+  let destroyed = false;
+  const diffRequestKey = $derived(buildDiffRequestKey(repositoryId, snapshot, diffSource, selectedCommit, selectedFile));
 
   $effect(() => {
     const requestKey = diffRequestKey;
@@ -49,7 +52,7 @@
     }
 
     activeDiffRequestKey = requestKey;
-    void loadDiff(snapshot.info.root, diffSource, selectedCommit, selectedFile);
+    void loadDiff(repositoryId, diffSource, selectedCommit, selectedFile);
   });
 
   $effect(() => {
@@ -65,12 +68,14 @@
 
   onMount(async () => {
     await ensureMonaco();
-    if (diff && !diff.isBinary) {
+    if (!destroyed && diff && !diff.isBinary) {
       await renderSelectedView(diff, activeRequest);
     }
   });
 
   onDestroy(() => {
+    destroyed = true;
+    activeRequest += 1;
     diffEditor?.dispose();
     fileEditor?.dispose();
     originalModel?.dispose();
@@ -79,11 +84,15 @@
   });
 
   async function loadDiff(
-    repositoryPath: string,
+    repositoryId: string,
     source: DiffSource,
     commit: CommitInfo | null,
     file: CommitFile,
   ) {
+    if (destroyed) {
+      return;
+    }
+
     const request = ++activeRequest;
     diff = null;
     error = "";
@@ -99,21 +108,22 @@
         throw new Error("No commit is selected.");
       }
 
-      const nextDiff =
+      const result =
         source === "commit"
-          ? await invoke<CommitFileDiff>("load_commit_file_diff", {
-              path: repositoryPath,
-              commitHash,
-              parentHash,
-              file,
+          ? await client.getCommitFileDiff({
+              repositoryId,
+              commitHash: commitHash ?? "",
+              ...(parentHash ? { parentHash } : {}),
+              filePath: file.path,
             })
-          : await invoke<CommitFileDiff>("load_working_tree_file_diff", {
-              path: repositoryPath,
-              headHash,
-              file,
+          : await client.getWorkingTreeFileDiff({
+              repositoryId,
+              ...(headHash ? { headHash } : {}),
+              filePath: file.path,
             });
+      const nextDiff: CommitFileDiff = result.diff;
 
-      if (request === activeRequest) {
+      if (!destroyed && request === activeRequest) {
         diff = nextDiff;
         if (!nextDiff.isBinary) {
           await renderSelectedView(nextDiff, request);
@@ -121,17 +131,18 @@
         }
       }
     } catch (caught) {
-      if (request === activeRequest) {
+      if (!destroyed && request === activeRequest) {
         error = formatError(caught);
       }
     } finally {
-      if (request === activeRequest) {
+      if (!destroyed && request === activeRequest) {
         loading = false;
       }
     }
   }
 
   function buildDiffRequestKey(
+    currentRepositoryId: string,
     currentSnapshot: RepositorySnapshot,
     source: DiffSource,
     commit: CommitInfo | null,
@@ -142,7 +153,7 @@
     const originalPath = file.originalPath ?? "";
 
     return [
-      currentSnapshot.info.root,
+      currentRepositoryId,
       source,
       commitHash,
       parentHash,
@@ -203,86 +214,116 @@
   }
 
   async function renderSelectedView(nextDiff: CommitFileDiff, request: number) {
-    if (request !== activeRequest) {
+    if (destroyed || request !== activeRequest) {
       return;
     }
 
-    if (contentViewMode === "file") {
-      await renderFileView(nextDiff, request);
-      return;
-    }
+    try {
+      if (contentViewMode === "file") {
+        await renderFileView(nextDiff, request);
+        return;
+      }
 
-    await renderDiffView(nextDiff, request);
+      await renderDiffView(nextDiff, request);
+    } catch (caught) {
+      if (!destroyed && request === activeRequest) {
+        error = formatError(caught);
+      }
+    }
   }
 
   async function renderInactiveView(nextDiff: CommitFileDiff, request: number) {
-    if (request !== activeRequest) {
+    if (destroyed || request !== activeRequest) {
       return;
     }
 
-    if (contentViewMode === "file") {
-      await renderDiffView(nextDiff, request);
-      return;
-    }
+    try {
+      if (contentViewMode === "file") {
+        await renderDiffView(nextDiff, request);
+        return;
+      }
 
-    await renderFileView(nextDiff, request);
+      await renderFileView(nextDiff, request);
+    } catch (caught) {
+      if (!destroyed && request === activeRequest) {
+        error = formatError(caught);
+      }
+    }
   }
 
   async function renderDiffView(nextDiff: CommitFileDiff, request: number) {
-    if ((originalModel && modifiedModel) || renderingDiffView) {
+    if ((originalModel && modifiedModel) || renderingDiffRequest !== null) {
       return;
     }
 
-    renderingDiffView = true;
-    const currentMonaco = await ensureMonaco();
-    const currentDiffEditor = await ensureDiffEditor();
+    renderingDiffRequest = request;
 
-    if (request !== activeRequest) {
-      renderingDiffView = false;
-      return;
+    try {
+      const currentMonaco = await ensureMonaco();
+      const currentDiffEditor = await ensureDiffEditor();
+
+      if (destroyed || request !== activeRequest) {
+        return;
+      }
+
+      originalModel = currentMonaco.editor.createModel(
+        nextDiff.originalContent,
+        languageForPath(nextDiff.originalPath ?? nextDiff.modifiedPath),
+      );
+      modifiedModel = currentMonaco.editor.createModel(
+        nextDiff.modifiedContent,
+        languageForPath(nextDiff.modifiedPath),
+      );
+      currentDiffEditor.setModel({
+        original: originalModel,
+        modified: modifiedModel,
+      });
+      await animationFrame();
+
+      if (!destroyed && request === activeRequest) {
+        currentDiffEditor.layout();
+      }
+    } finally {
+      if (renderingDiffRequest === request) {
+        renderingDiffRequest = null;
+      }
     }
-
-    originalModel = currentMonaco.editor.createModel(
-      nextDiff.originalContent,
-      languageForPath(nextDiff.originalPath ?? nextDiff.modifiedPath),
-    );
-    modifiedModel = currentMonaco.editor.createModel(
-      nextDiff.modifiedContent,
-      languageForPath(nextDiff.modifiedPath),
-    );
-    currentDiffEditor.setModel({
-      original: originalModel,
-      modified: modifiedModel,
-    });
-    await animationFrame();
-    currentDiffEditor.layout();
-    renderingDiffView = false;
   }
 
   async function renderFileView(nextDiff: CommitFileDiff, request: number) {
-    if (fileModel || renderingFileView) {
+    if (fileModel || renderingFileRequest !== null) {
       return;
     }
 
-    renderingFileView = true;
-    const currentMonaco = await ensureMonaco();
-    const currentFileEditor = await ensureFileEditor();
+    renderingFileRequest = request;
 
-    if (request !== activeRequest) {
-      renderingFileView = false;
-      return;
+    try {
+      const currentMonaco = await ensureMonaco();
+      const currentFileEditor = await ensureFileEditor();
+
+      if (destroyed || request !== activeRequest) {
+        return;
+      }
+
+      fileModel = currentMonaco.editor.createModel(nextDiff.modifiedContent, languageForPath(nextDiff.modifiedPath));
+      currentFileEditor.setModel(fileModel);
+      await animationFrame();
+
+      if (!destroyed && request === activeRequest) {
+        currentFileEditor.layout();
+      }
+    } finally {
+      if (renderingFileRequest === request) {
+        renderingFileRequest = null;
+      }
     }
-
-    fileModel = currentMonaco.editor.createModel(nextDiff.modifiedContent, languageForPath(nextDiff.modifiedPath));
-    currentFileEditor.setModel(fileModel);
-    await animationFrame();
-    currentFileEditor.layout();
-    renderingFileView = false;
   }
 
   function scheduleInactiveView(nextDiff: CommitFileDiff, request: number) {
     const render = () => {
-      void renderInactiveView(nextDiff, request);
+      if (!destroyed) {
+        void renderInactiveView(nextDiff, request);
+      }
     };
 
     const idleWindow = window as Window & {
@@ -304,8 +345,8 @@
     originalModel = null;
     modifiedModel = null;
     fileModel = null;
-    renderingDiffView = false;
-    renderingFileView = false;
+    renderingDiffRequest = null;
+    renderingFileRequest = null;
     diffEditor?.setModel(null);
     fileEditor?.setModel(null);
   }
@@ -352,6 +393,10 @@
 
     fileEditor?.updateOptions({ wordWrap: wrap });
     requestAnimationFrame(() => {
+      if (destroyed) {
+        return;
+      }
+
       if (view === "diff") {
         diffEditor?.layout();
       } else {
