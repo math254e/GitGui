@@ -1,6 +1,5 @@
 import type {
   ProtocolError,
-  RepositoriesOpenResult,
   RepositoryRefreshItem,
   RepositorySnapshot,
   RepositorySummary,
@@ -9,7 +8,6 @@ import { assertRepositoryId, GitGuiClient } from "./client";
 import {
   createEmptyWorkspaceMetadata,
   InMemoryWorkspaceMetadataAdapter,
-  WORKSPACE_METADATA_MIGRATION_VERSION,
   type WorkspaceMetadata,
   type WorkspaceMetadataAdapter,
   type WorkspaceMetadataIdentity,
@@ -18,31 +16,6 @@ import {
 import type { Unsubscribe } from "./types";
 
 const DEFAULT_RECENT_LIMIT = 50;
-
-export interface LegacyWorkspaceImport {
-  activeRepositoryPath: string | null;
-  openRepositoryPaths: string[];
-  recentRepositoryPaths: string[];
-}
-
-export type LegacyWorkspaceImportOperation = "active" | "open" | "recent" | "lifecycle";
-
-export interface LegacyWorkspaceImportError {
-  operation: LegacyWorkspaceImportOperation;
-  path: string | null;
-  error: WorkspaceRepositoryError;
-}
-
-export interface LegacyWorkspaceImportResult {
-  /** Whether this call observed a previously completed migration and did no work. */
-  alreadyMigrated: boolean;
-  /** Whether migration completion was persisted by this call or was already persisted. */
-  completed: boolean;
-  openRepositoryIds: string[];
-  recentRepositoryIds: string[];
-  activeRepositoryId: string | null;
-  errors: LegacyWorkspaceImportError[];
-}
 
 export interface WorkspaceRepositoryState {
   repository: RepositorySummary;
@@ -62,7 +35,6 @@ export interface ClientWorkspaceState {
   openRepositoryIds: string[];
   recentRepositories: WorkspaceRecentMetadata[];
   activeRepositoryId: string | null;
-  legacyMigrationPending: boolean;
   repositories: Record<string, WorkspaceRepositoryState>;
   restoring: boolean;
   opening: boolean;
@@ -90,8 +62,6 @@ export class ClientWorkspace {
   private metadataLoad?: Promise<WorkspaceMetadata>;
   private metadataLoaded = false;
   private metadata?: WorkspaceMetadata;
-  private migrationVersion = 0;
-  private legacyImportPromise?: Promise<LegacyWorkspaceImportResult>;
   private stateOperation: Promise<void> = Promise.resolve();
   private lifecycleGeneration = 0;
   private nextRequestGeneration = 0;
@@ -110,7 +80,6 @@ export class ClientWorkspace {
       openRepositoryIds: [],
       recentRepositories: [],
       activeRepositoryId: null,
-      legacyMigrationPending: true,
       repositories: {},
       restoring: false,
       opening: false,
@@ -163,7 +132,6 @@ export class ClientWorkspace {
         openRepositoryIds: openIds,
         recentRepositories,
         activeRepositoryId,
-        legacyMigrationPending: metadata.migrationVersion < WORKSPACE_METADATA_MIGRATION_VERSION,
         repositories: repositoryStates,
         restoring: true,
         opening: false,
@@ -182,26 +150,6 @@ export class ClientWorkspace {
       }
       throw error;
     }
-  }
-
-  /**
-   * Imports the old path-based workspace exactly once for this environment/server identity.
-   * Paths are sent to the server and are never written to client metadata.
-   */
-  importLegacyWorkspace(input: LegacyWorkspaceImport): Promise<LegacyWorkspaceImportResult> {
-    if (this.legacyImportPromise) return this.legacyImportPromise;
-
-    const promise = this.serializeStateOperation(() => this.runLegacyWorkspaceImport(input));
-    this.legacyImportPromise = promise;
-    promise.then(
-      () => {
-        if (this.legacyImportPromise === promise) this.legacyImportPromise = undefined;
-      },
-      () => {
-        if (this.legacyImportPromise === promise) this.legacyImportPromise = undefined;
-      },
-    );
-    return promise;
   }
 
   async openRepositoryPath(path: string): Promise<ClientWorkspaceState> {
@@ -341,151 +289,6 @@ export class ClientWorkspace {
     return this.state;
   }
 
-  private async runLegacyWorkspaceImport(input: LegacyWorkspaceImport): Promise<LegacyWorkspaceImportResult> {
-    const metadata = await this.loadMetadata();
-    if (metadata.migrationVersion >= WORKSPACE_METADATA_MIGRATION_VERSION) {
-      if (this._state.legacyMigrationPending) this.update({ legacyMigrationPending: false });
-      return this.legacyImportResult(true, true, [], [], []);
-    }
-
-    const lifecycle = this.lifecycleGeneration;
-    const errors: LegacyWorkspaceImportError[] = [];
-    const openPaths = normalizeLegacyPaths(input?.openRepositoryPaths, "open", errors);
-    const recentPaths = normalizeLegacyPaths(input?.recentRepositoryPaths, "recent", errors);
-    const activePath = normalizeLegacyActivePath(input?.activeRepositoryPath, errors);
-    const openPathSet = new Set(openPaths);
-    const openedByPath = new Map<string, RepositoriesOpenResult>();
-    const opened: RepositoriesOpenResult[] = [];
-
-    for (const path of openPaths) {
-      const result = await this.importRepositoryPath(path, "open", errors);
-      if (!result) continue;
-      openedByPath.set(path, result);
-      opened.push(result);
-    }
-
-    const recentResults: RepositoriesOpenResult[] = [];
-    for (const path of recentPaths) {
-      if (openPathSet.has(path)) {
-        const result = openedByPath.get(path);
-        if (result) recentResults.push(result);
-        continue;
-      }
-
-      const result = await this.importRepositoryPath(path, "recent", errors);
-      if (result) recentResults.push(result);
-    }
-
-    if (lifecycle !== this.lifecycleGeneration) {
-      errors.push({
-        operation: "lifecycle",
-        path: null,
-        error: { code: "workspace_lifecycle_changed", message: "Legacy workspace import was cancelled because the workspace changed" },
-      });
-      return this.legacyImportResult(false, false, [], [], errors);
-    }
-
-    const importedOpenIds: string[] = [];
-    const repositories = { ...this._state.repositories };
-    for (const result of opened) {
-      const id = repositoryIdFromOpenResult(result);
-      if (!id) {
-        errors.push(invalidImportResultError("open", result.repository?.path ?? null));
-        continue;
-      }
-      if (!importedOpenIds.includes(id)) importedOpenIds.push(id);
-      repositories[id] = {
-        repository: result.repository,
-        snapshot: result.snapshot,
-        loading: false,
-        refreshing: false,
-      };
-    }
-
-    const importedRecentIds: string[] = [];
-    for (const result of [...recentResults, ...opened]) {
-      const id = repositoryIdFromOpenResult(result);
-      if (id && !importedRecentIds.includes(id)) importedRecentIds.push(id);
-    }
-
-    const openRepositoryIds = [...this._state.openRepositoryIds];
-    for (const id of importedOpenIds) {
-      if (!openRepositoryIds.includes(id)) openRepositoryIds.push(id);
-    }
-
-    const activeImportedId = activePath
-      ? repositoryIdFromOpenResult(openedByPath.get(activePath))
-      : null;
-    const activeRepositoryId = activeImportedId
-      ?? (this._state.activeRepositoryId && openRepositoryIds.includes(this._state.activeRepositoryId)
-        ? this._state.activeRepositoryId
-        : openRepositoryIds[0] ?? null);
-    const recentRepositories = mergeImportedRecents(
-      this._state.recentRepositories,
-      importedRecentIds,
-      this.recentLimit,
-    );
-
-    this.replace({
-      openRepositoryIds,
-      recentRepositories,
-      activeRepositoryId,
-      repositories,
-      legacyMigrationPending: true,
-      error: undefined,
-    });
-
-    try {
-      await this.persist(WORKSPACE_METADATA_MIGRATION_VERSION);
-    } catch (error) {
-      if (lifecycle === this.lifecycleGeneration) this.update({ error: toWorkspaceError(error) });
-      throw error;
-    }
-
-    return this.legacyImportResult(
-      false,
-      true,
-      importedOpenIds,
-      importedRecentIds,
-      errors,
-    );
-  }
-
-  private async importRepositoryPath(
-    path: string,
-    operation: Exclude<LegacyWorkspaceImportOperation, "active">,
-    errors: LegacyWorkspaceImportError[],
-  ): Promise<RepositoriesOpenResult | undefined> {
-    try {
-      const result = await this.client.openRepository(path);
-      if (!repositoryIdFromOpenResult(result)) {
-        errors.push(invalidImportResultError(operation, path));
-        return undefined;
-      }
-      return result;
-    } catch (error) {
-      errors.push({ operation, path, error: toWorkspaceError(error) });
-      return undefined;
-    }
-  }
-
-  private legacyImportResult(
-    alreadyMigrated: boolean,
-    completed: boolean,
-    openRepositoryIds: string[],
-    recentRepositoryIds: string[],
-    errors: LegacyWorkspaceImportError[],
-  ): LegacyWorkspaceImportResult {
-    return {
-      alreadyMigrated,
-      completed,
-      openRepositoryIds: [...openRepositoryIds],
-      recentRepositoryIds: [...recentRepositoryIds],
-      activeRepositoryId: this._state.activeRepositoryId,
-      errors: errors.map((entry) => ({ ...entry, error: { ...entry.error } })),
-    };
-  }
-
   private applyRefreshItem(repositoryId: string, item: RepositoryRefreshItem | undefined): void {
     if (!item) {
       this.setRepositoryError(repositoryId, { code: "missing_refresh_result", message: "The server did not return a refresh result" });
@@ -565,18 +368,13 @@ export class ClientWorkspace {
     for (const listener of this.listeners) listener(state);
   }
 
-  private async persist(requestedMigrationVersion = this.migrationVersion): Promise<void> {
+  private async persist(): Promise<void> {
     this.metadataWrite = this.metadataWrite.catch(() => undefined).then(async () => {
       await this.loadMetadata();
-      const migrationVersion = Math.max(this.migrationVersion, requestedMigrationVersion);
-      const metadata = stateToMetadata(this._state, migrationVersion);
+      const metadata = stateToMetadata(this._state);
       await this.metadataAdapter.save(this.identity, metadata);
       this.metadata = metadata;
-      this.migrationVersion = migrationVersion;
       this.metadataLoaded = true;
-      if (migrationVersion >= WORKSPACE_METADATA_MIGRATION_VERSION && this._state.legacyMigrationPending) {
-        this.update({ legacyMigrationPending: false });
-      }
     });
     return this.metadataWrite;
   }
@@ -606,12 +404,8 @@ export class ClientWorkspace {
       this.metadataLoad.then(
         (metadata) => {
           this.metadata = metadata;
-          this.migrationVersion = metadata.migrationVersion;
           this.metadataLoaded = true;
           this.metadataLoad = undefined;
-          if (metadata.migrationVersion >= WORKSPACE_METADATA_MIGRATION_VERSION && this._state.legacyMigrationPending) {
-            this.update({ legacyMigrationPending: false });
-          }
         },
         () => {
           this.metadataLoad = undefined;
@@ -626,10 +420,9 @@ function normalizeMetadata(metadata: WorkspaceMetadata | null): WorkspaceMetadat
   return metadata ?? createEmptyWorkspaceMetadata();
 }
 
-function stateToMetadata(state: ClientWorkspaceState, migrationVersion: number): WorkspaceMetadata {
+function stateToMetadata(state: ClientWorkspaceState): WorkspaceMetadata {
   return {
     schemaVersion: 1,
-    migrationVersion,
     openRepositoryIds: [...state.openRepositoryIds],
     recentRepositories: state.recentRepositories.map((recent) => ({ ...recent })),
     activeRepositoryId: state.activeRepositoryId,
@@ -659,79 +452,6 @@ function uniqueValidIds(ids: string[]): string[] {
     }
   }
   return valid;
-}
-
-function normalizeLegacyPaths(
-  paths: unknown,
-  operation: Exclude<LegacyWorkspaceImportOperation, "active">,
-  errors: LegacyWorkspaceImportError[],
-): string[] {
-  if (!Array.isArray(paths)) {
-    errors.push({
-      operation,
-      path: null,
-      error: { code: "invalid_legacy_paths", message: `Legacy ${operation} repository paths must be an array` },
-    });
-    return [];
-  }
-
-  const normalized: string[] = [];
-  for (const path of paths) {
-    if (typeof path !== "string" || !path.trim()) {
-      errors.push({
-        operation,
-        path: typeof path === "string" ? path : null,
-        error: { code: "invalid_legacy_path", message: "Legacy repository path must be a non-empty string" },
-      });
-      continue;
-    }
-    if (!normalized.includes(path)) normalized.push(path);
-  }
-  return normalized;
-}
-
-function normalizeLegacyActivePath(path: unknown, errors: LegacyWorkspaceImportError[]): string | null {
-  if (path === null || path === undefined) return null;
-  if (typeof path !== "string" || !path.trim()) {
-    errors.push({
-      operation: "active",
-      path: typeof path === "string" ? path : null,
-      error: { code: "invalid_legacy_path", message: "Legacy active repository path must be null or a non-empty string" },
-    });
-    return null;
-  }
-  return path;
-}
-
-function repositoryIdFromOpenResult(result: RepositoriesOpenResult | undefined): string | undefined {
-  if (!result || !result.repository || !isRepositorySummary(result.repository) || !result.snapshot) return undefined;
-  try {
-    return assertRepositoryId(result.repository.id);
-  } catch {
-    return undefined;
-  }
-}
-
-function invalidImportResultError(operation: Exclude<LegacyWorkspaceImportOperation, "active">, path: string | null): LegacyWorkspaceImportError {
-  return {
-    operation,
-    path,
-    error: { code: "invalid_server_result", message: "The server returned an invalid repository result" },
-  };
-}
-
-function mergeImportedRecents(
-  current: WorkspaceRecentMetadata[],
-  importedIds: string[],
-  limit: number,
-): WorkspaceRecentMetadata[] {
-  const now = Date.now();
-  const imported = importedIds.map((repositoryId, order) => ({ repositoryId, lastOpenedAt: now, order }));
-  const importedSet = new Set(importedIds);
-  const existing = current
-    .filter((recent) => !importedSet.has(recent.repositoryId))
-    .map((recent, index) => ({ ...recent, order: imported.length + index }));
-  return [...imported, ...existing].slice(0, limit);
 }
 
 function isRepositorySummary(value: unknown): value is RepositorySummary {

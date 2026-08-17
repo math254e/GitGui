@@ -59,6 +59,8 @@
   --app-theme-terminal-selection-background: #d0d6dd;
   --app-theme-terminal-scrollbar: #d6d6d6;
   --app-theme-terminal-scrollbar-hover: #bdbdbd;
+  --app-scrollbar-thumb: #d6d6d6;
+  --app-scrollbar-thumb-hover: #bdbdbd;
 
   /* Compatibility aliases for the migrated shell components. */
   --app-theme-accent-hover: #3160db;
@@ -136,6 +138,8 @@
   --app-theme-terminal-selection-background: #343a47;
   --app-theme-terminal-scrollbar: #222222;
   --app-theme-terminal-scrollbar-hover: #363636;
+  --app-scrollbar-thumb: #222222;
+  --app-scrollbar-thumb-hover: #363636;
 
   --app-theme-accent-hover: #3061d9;
   --app-theme-border-subtle: #191919;

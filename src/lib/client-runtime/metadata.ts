@@ -1,5 +1,4 @@
 export const WORKSPACE_METADATA_SCHEMA_VERSION = 1;
-export const WORKSPACE_METADATA_MIGRATION_VERSION = 1;
 
 export interface WorkspaceMetadataIdentity {
   /** Stable client-side environment identity. */
@@ -17,7 +16,6 @@ export interface WorkspaceRecentMetadata {
 /** Persisted workspace metadata. It intentionally contains IDs only. */
 export interface WorkspaceMetadata {
   schemaVersion: number;
-  migrationVersion: number;
   openRepositoryIds: string[];
   recentRepositories: WorkspaceRecentMetadata[];
   activeRepositoryId: string | null;
@@ -92,7 +90,6 @@ export function workspaceMetadataKey(identity: WorkspaceMetadataIdentity): strin
 export function createEmptyWorkspaceMetadata(): WorkspaceMetadata {
   return {
     schemaVersion: WORKSPACE_METADATA_SCHEMA_VERSION,
-    migrationVersion: 0,
     openRepositoryIds: [],
     recentRepositories: [],
     activeRepositoryId: null,
@@ -103,9 +100,6 @@ function parseMetadata(value: unknown): WorkspaceMetadata {
   if (!isRecord(value)) throw new TypeError("Invalid workspace metadata");
   if (
     value.schemaVersion !== WORKSPACE_METADATA_SCHEMA_VERSION
-    || typeof value.migrationVersion !== "number"
-    || !Number.isInteger(value.migrationVersion)
-    || value.migrationVersion < 0
   ) {
     throw new TypeError("Unsupported workspace metadata version");
   }
@@ -130,7 +124,6 @@ function parseMetadata(value: unknown): WorkspaceMetadata {
 
   return {
     schemaVersion: value.schemaVersion,
-    migrationVersion: value.migrationVersion,
     openRepositoryIds: [...new Set(value.openRepositoryIds)],
     recentRepositories,
     activeRepositoryId: value.activeRepositoryId,

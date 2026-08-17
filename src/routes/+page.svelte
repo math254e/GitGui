@@ -53,14 +53,6 @@
     protocolVersion: number;
     capabilities: string[];
   };
-  type LegacyWorkspaceMigration = {
-    available: boolean;
-    source: string;
-    version: number;
-    activeRepositoryPath: string | null;
-    openRepositoryPaths: string[];
-    recentRepositoryPaths: string[];
-  };
   type RuntimeHandle = {
     client: GitGuiClient;
     workspace: ClientWorkspace;
@@ -258,7 +250,7 @@
         unsubscribeClient,
       };
 
-      const restoredState = await runtime.workspace.restore();
+      await runtime.workspace.restore();
       if (!isCurrentBootstrap(generation)) {
         return;
       }
@@ -277,14 +269,6 @@
         return;
       }
 
-      let migrationReportedError = false;
-      if (restoredState.legacyMigrationPending) {
-        migrationReportedError = await migrateLegacyWorkspace(runtime.workspace);
-        if (!isCurrentBootstrap(generation)) {
-          return;
-        }
-      }
-
       if (!desktopRuntime && !runtime.workspace.state.openRepositoryIds.length && repositoryCatalog.length === 1) {
         await runtime.workspace.openKnownRepository(repositoryCatalog[0].id);
         if (!isCurrentBootstrap(generation)) {
@@ -293,7 +277,7 @@
       }
 
       connectionError = false;
-      if (!migrationReportedError && startError === "Restarting the local GitGui server…") {
+      if (startError === "Restarting the local GitGui server…") {
         startError = "";
       }
       if (activeView !== "settings") {
@@ -675,35 +659,6 @@
     } catch {
       // Refresh errors are returned as per-repo tab errors when possible.
     }
-  }
-
-  async function migrateLegacyWorkspace(workspace: ClientWorkspace): Promise<boolean> {
-    const legacy = desktopRuntime
-      ? await invokeDesktop<LegacyWorkspaceMigration>("read_legacy_workspace_migration")
-      : {
-          available: false,
-          source: "browser",
-          version: 1,
-          activeRepositoryPath: null,
-          openRepositoryPaths: [],
-          recentRepositoryPaths: [],
-        } satisfies LegacyWorkspaceMigration;
-    const result = await workspace.importLegacyWorkspace({
-      activeRepositoryPath: legacy.available ? legacy.activeRepositoryPath : null,
-      openRepositoryPaths: legacy.available ? legacy.openRepositoryPaths : [],
-      recentRepositoryPaths: legacy.available ? legacy.recentRepositoryPaths : [],
-    });
-
-    await refreshRepositoryCatalog();
-
-    if (result.errors.length) {
-      const details = result.errors
-        .map(({ operation, path, error }) => `${operation}${path ? ` ${path}` : ""}: ${error.message}`)
-        .join(" ");
-      startError = `Some legacy repositories could not be migrated. ${details}`;
-    }
-
-    return result.errors.length > 0;
   }
 
   function requireWorkspace() {

@@ -83,21 +83,30 @@ ownership, or client/server responsibilities.
 
 ## Ways to run GitGui
 
-### UI-only development
+### Desktop development
 
-Use this for layout and component work:
+Use the single development command for the full desktop app. It prepares the
+server sidecar, starts the Vite frontend, launches Tauri, and lets Tauri start
+and manage the local GitGui server:
 
 ```sh
 npm run dev
 ```
 
-This starts the SvelteKit/Vite development server at:
+The Tauri window loads the SvelteKit/Vite development server at:
 
 ```text
 http://localhost:1420
 ```
 
-The UI may not have a GitGui server unless one is provided separately.
+For frontend-only work without the desktop shell, use:
+
+```sh
+npm run ui:dev
+```
+
+The UI may not have a GitGui server in this mode unless one is provided
+separately.
 
 ### Browser client with a separate development server
 
@@ -110,7 +119,7 @@ npm run server:dev
 Terminal 2:
 
 ```sh
-npm run dev
+npm run ui:dev
 ```
 
 Open:
@@ -158,15 +167,9 @@ to non-loopback interfaces or using persistent data directories.
 
 ### Tauri development
 
-```sh
-npm run tauri:dev
-```
-
-This prepares the Rust sidecar, starts the Vite frontend, launches the Tauri
-desktop shell, and lets Tauri manage the local GitGui server.
-
-Use this for desktop lifecycle, native dialogs, server startup, shutdown,
-restart, and desktop-only behavior.
+`npm run dev` is the canonical desktop development command. The
+`tauri:dev` script remains available as an explicit alias for tooling that
+already calls it directly.
 
 ### Frontend preview
 

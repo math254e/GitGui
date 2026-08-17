@@ -1,7 +1,6 @@
-mod legacy_workspace;
 mod server_manager;
 
-use tauri::{AppHandle, Manager, State};
+use tauri::{Manager, State};
 
 #[tauri::command]
 fn get_local_server_connection(
@@ -15,13 +14,6 @@ fn restart_local_server(
     state: State<'_, server_manager::SharedLocalServerManager>,
 ) -> Result<server_manager::LocalServerConnection, String> {
     server_manager::restart_shared(state.inner())
-}
-
-#[tauri::command]
-fn read_legacy_workspace_migration(
-    app: AppHandle,
-) -> Result<legacy_workspace::LegacyWorkspaceMigration, String> {
-    legacy_workspace::read_migration(&app)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -49,7 +41,6 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_local_server_connection,
             restart_local_server,
-            read_legacy_workspace_migration,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

@@ -16,10 +16,6 @@ export {
 } from "./environment";
 export {
   ClientWorkspace,
-  type LegacyWorkspaceImport,
-  type LegacyWorkspaceImportError,
-  type LegacyWorkspaceImportOperation,
-  type LegacyWorkspaceImportResult,
   type ClientWorkspaceOptions,
   type ClientWorkspaceState,
   type WorkspaceRepositoryError,
@@ -30,7 +26,6 @@ export {
   InMemoryWorkspaceMetadataAdapter,
   LocalStorageWorkspaceMetadataAdapter,
   workspaceMetadataKey,
-  WORKSPACE_METADATA_MIGRATION_VERSION,
   WORKSPACE_METADATA_SCHEMA_VERSION,
   type WorkspaceMetadata,
   type WorkspaceMetadataAdapter,

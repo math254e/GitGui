@@ -10,5 +10,86 @@
 
   * {
     @apply box-border;
+
+    /* Keep native overflow surfaces aligned with T3's themed scroll areas. */
+    scrollbar-color: var(--app-scrollbar-thumb, var(--app-theme-terminal-scrollbar))
+      transparent;
+    scrollbar-width: thin;
+  }
+
+  *::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  *::-webkit-scrollbar-thumb {
+    min-height: 32px;
+    border: 2px solid transparent;
+    border-radius: 999px;
+    background-color: var(--app-scrollbar-thumb, var(--app-theme-terminal-scrollbar));
+    background-clip: padding-box;
+  }
+
+  *::-webkit-scrollbar-thumb:hover,
+  *::-webkit-scrollbar-thumb:active {
+    background-color: var(
+      --app-scrollbar-thumb-hover,
+      var(--app-theme-terminal-scrollbar-hover)
+    );
+  }
+
+  *::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+
+  /* Monaco owns its editor chrome; keep it outside the app scrollbar theme. */
+  .monaco-editor,
+  .monaco-editor *,
+  .monaco-diff-editor,
+  .monaco-diff-editor * {
+    scrollbar-color: auto;
+    scrollbar-width: auto;
+  }
+
+  .monaco-editor::-webkit-scrollbar,
+  .monaco-editor *::-webkit-scrollbar,
+  .monaco-diff-editor::-webkit-scrollbar,
+  .monaco-diff-editor *::-webkit-scrollbar {
+    width: revert;
+    height: revert;
+  }
+
+  .monaco-editor::-webkit-scrollbar-track,
+  .monaco-editor *::-webkit-scrollbar-track,
+  .monaco-diff-editor::-webkit-scrollbar-track,
+  .monaco-diff-editor *::-webkit-scrollbar-track,
+  .monaco-editor::-webkit-scrollbar-corner,
+  .monaco-editor *::-webkit-scrollbar-corner,
+  .monaco-diff-editor::-webkit-scrollbar-corner,
+  .monaco-diff-editor *::-webkit-scrollbar-corner {
+    background: revert;
+  }
+
+  .monaco-editor::-webkit-scrollbar-thumb,
+  .monaco-editor *::-webkit-scrollbar-thumb,
+  .monaco-diff-editor::-webkit-scrollbar-thumb,
+  .monaco-diff-editor *::-webkit-scrollbar-thumb,
+  .monaco-editor::-webkit-scrollbar-thumb:hover,
+  .monaco-editor *::-webkit-scrollbar-thumb:hover,
+  .monaco-diff-editor::-webkit-scrollbar-thumb:hover,
+  .monaco-diff-editor *::-webkit-scrollbar-thumb:hover,
+  .monaco-editor::-webkit-scrollbar-thumb:active,
+  .monaco-editor *::-webkit-scrollbar-thumb:active,
+  .monaco-diff-editor::-webkit-scrollbar-thumb:active,
+  .monaco-diff-editor *::-webkit-scrollbar-thumb:active {
+    min-height: revert;
+    border: revert;
+    border-radius: revert;
+    background-color: revert;
+    background-clip: revert;
   }
 }

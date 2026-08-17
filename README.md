@@ -20,6 +20,14 @@ SvelteKit UI (Tauri webview or browser)
 
 The Rust server can serve the compiled SvelteKit application alongside its API and WebSocket. This gives GitGui the same local-web shape as T3 Code: one process and one origin for the browser UI and the machine-local Git host. The Tauri desktop app still uses the same server as its local backend.
 
+To run the complete desktop app, use the single development command:
+
+```text
+npm run dev
+```
+
+This starts the Vite frontend and Tauri desktop shell; Tauri starts and manages the local GitGui server for the desktop window. Use `npm run ui:dev` only when you intentionally want the frontend without the desktop shell.
+
 To run the local browser version:
 
 ```text

@@ -921,6 +921,8 @@ function removeThemeVariables(root: HTMLElement): void {
     "--app-theme-text-placeholder",
     "--app-theme-text-secondary",
     "--app-theme-text-subtle",
+    "--app-scrollbar-thumb",
+    "--app-scrollbar-thumb-hover",
   ]) {
     root.style.removeProperty(variable);
   }
@@ -932,6 +934,8 @@ function removeThemeVariables(root: HTMLElement): void {
  * recolor the existing shell consistently during the migration.
  */
 function applyCompatibilityThemeVariables(root: HTMLElement, colors: ThemeColors): void {
+  root.style.setProperty("--app-scrollbar-thumb", colors.terminalScrollbar);
+  root.style.setProperty("--app-scrollbar-thumb-hover", colors.terminalScrollbarHover);
   root.style.setProperty("--app-theme-accent-hover", colors.messageActionHover);
   root.style.setProperty("--app-theme-border-subtle", colors.border);
   root.style.setProperty("--app-theme-control-hover", colors.toolbarControlHover);
