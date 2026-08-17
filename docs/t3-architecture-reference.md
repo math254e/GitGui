@@ -198,7 +198,7 @@ The first end-to-end migration slice is deliberately narrow:
 1. Start `gitgui-server` independently.
 2. Report readiness over HTTP.
 3. Establish a WebSocket connection and send a welcome message.
-4. Implement `server.get_info`, `repositories.list`, and `vcs.status`.
+4. Implement `server.get_info`, `repositories.list`, and `git.status`.
 5. Have Tauri start or attach to the local server.
 6. Have the SvelteKit client runtime connect and render a repository list and status.
 
@@ -212,11 +212,11 @@ After the first status slice, the current desktop viewer migrates through these 
 repositories.open
 repositories.get_snapshot
 repositories.refresh
-vcs.commit_files
-vcs.commit_file_diff
-vcs.working_tree_file_diff
-vcs.prefetch_commit_files
-vcs.prefetch_commit_diffs
+git.commit_files
+git.commit_file_diff
+git.working_tree_file_diff
+git.prefetch_commit_files
+git.prefetch_commit_diffs
 ```
 
 `repositories.refresh` returns per-repository success or error results so one inaccessible repository does not erase every open tab. Prefetch calls are performance hints only; normal reads remain correct without them.

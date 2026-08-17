@@ -10,6 +10,7 @@
   import CommitFileDiffViewer from "$lib/components/CommitFileDiffViewer.svelte";
   import EmptyDetailsPanel from "$lib/components/EmptyDetailsPanel.svelte";
   import GitGraph from "$lib/components/GitGraph.svelte";
+  import HistoryToolbar from "$lib/components/HistoryToolbar.svelte";
   import ResizablePaneGroup, { type ResizablePane } from "$lib/components/ResizablePaneGroup.svelte";
   import RepositoryDetailsPanel from "$lib/components/RepositoryDetailsPanel.svelte";
   import RepositoryPathDialog from "$lib/components/RepositoryPathDialog.svelte";
@@ -17,8 +18,8 @@
   import Sidebar from "$lib/components/Sidebar.svelte";
   import StartView from "$lib/components/StartView.svelte";
   import TopMenu, { type RepoTab } from "$lib/components/TopMenu.svelte";
-  import WorkingTreePanel from "$lib/components/WorkingTreePanel.svelte";
-  import type { RepositorySummary } from "$lib/generated/protocol";
+  import WorkingTreePanel, { type CommitMessageDraft } from "$lib/components/WorkingTreePanel.svelte";
+  import type { ChangedFile, RepositorySummary } from "$lib/generated/protocol";
   import type { CommitFile, CommitInfo, RepositorySnapshot } from "$lib/types/repository";
 
   type ActiveView = "start" | "repo" | "settings";
@@ -85,6 +86,8 @@
   let startError = $state("");
   let bootstrapping = $state(false);
   let operationPending = $state(false);
+  let gitActionPending = $state(false);
+  let gitActionError = $state("");
   let largeScreen = $state(false);
   let sidebarWidth = $state(sidebarLimits.default);
   let detailsWidth = $state(detailsLimits.default);
@@ -809,6 +812,111 @@
     }));
   }
 
+  async function runGitAction(action: () => Promise<unknown>) {
+    const repositoryId = activeRepoId;
+    if (!repositoryId || !gitClient || !clientWorkspace || gitActionPending) {
+      return;
+    }
+
+    gitActionPending = true;
+    gitActionError = "";
+    try {
+      await action();
+      await clientWorkspace.refreshRepository(repositoryId);
+    } catch (caught) {
+      gitActionError = formatError(caught);
+      // Pull and stash-pop can leave conflict markers or partial changes even
+      // when Git exits non-zero, so make the visible working tree authoritative
+      // before surfacing the error.
+      await clientWorkspace.refreshRepository(repositoryId).catch(() => undefined);
+    } finally {
+      gitActionPending = false;
+    }
+  }
+
+  function stageFile(file: ChangedFile) {
+    void runGitAction(() => gitClient!.stage(activeRepoId!, [file.path]));
+  }
+
+  function unstageFile(file: ChangedFile) {
+    void runGitAction(() => gitClient!.unstage(activeRepoId!, [file.path]));
+  }
+
+  function stageAll() {
+    void runGitAction(() => gitClient!.stage(activeRepoId!));
+  }
+
+  function unstageAll() {
+    void runGitAction(() => gitClient!.unstage(activeRepoId!));
+  }
+
+  function commitChanges(draft: CommitMessageDraft) {
+    void runGitAction(() => gitClient!.commit({
+      repositoryId: activeRepoId!,
+      summary: draft.summary,
+      ...(draft.description ? { description: draft.description } : {}),
+    }));
+  }
+
+  function fetchRepository() {
+    void runGitAction(() => gitClient!.fetch(activeRepoId!));
+  }
+
+  function pullRepository() {
+    void runGitAction(() => gitClient!.pull(activeRepoId!));
+  }
+
+  function pushRepository() {
+    void runGitAction(() => gitClient!.push(activeRepoId!));
+  }
+
+  async function manageBranches() {
+    if (!activeRepoId || !gitClient || gitActionPending) {
+      return;
+    }
+
+    try {
+      const result = await gitClient.listBranches(activeRepoId);
+      const branchList = result.branches.map((branch) => `${branch.current ? "* " : "  "}${branch.name}`).join("\n");
+      const requested = window.prompt(`Branches:\n${branchList}\n\nEnter a branch name to switch to or create:`, snapshot?.status.currentBranch ?? "");
+      if (!requested?.trim()) {
+        return;
+      }
+
+      const name = requested.trim();
+      if (result.branches.some((branch) => branch.name === name)) {
+        void runGitAction(() => gitClient!.switchBranch({ repositoryId: activeRepoId!, name }));
+        return;
+      }
+
+      if (window.confirm(`Create and switch to '${name}'?`)) {
+        void runGitAction(() => gitClient!.createBranch({
+          repositoryId: activeRepoId!,
+          name,
+          checkout: true,
+        }));
+      }
+    } catch (caught) {
+      gitActionError = formatError(caught);
+    }
+  }
+
+  function stashChanges() {
+    const message = window.prompt("Stash message (optional):", "");
+    if (message === null) {
+      return;
+    }
+    void runGitAction(() => gitClient!.stashPush({
+      repositoryId: activeRepoId!,
+      message: message.trim() || undefined,
+      includeUntracked: true,
+    }));
+  }
+
+  function popStash() {
+    void runGitAction(() => gitClient!.stashPop(activeRepoId!));
+  }
+
   function closeDiff() {
     updateActiveRepo((repo) => ({
       ...repo,
@@ -902,6 +1010,7 @@
       {#if !largeScreen}
       <div class="grid h-full min-h-0 grid-cols-1 overflow-hidden">
         {#if snapshot && selectedFile && (selectedCommit || changesSelected)}
+          <Sidebar {snapshot} />
           <div class="h-full min-h-0">
             <CommitFileDiffViewer
               client={gitClient!}
@@ -915,16 +1024,44 @@
           </div>
         {:else}
           <Sidebar {snapshot} />
-          <GitGraph
-            {snapshot}
-            {selectedCommit}
-            {changesSelected}
-            onSelectChanges={selectChanges}
-            onSelectCommit={selectCommit}
-          />
+          <div class="flex min-h-0 flex-col overflow-hidden">
+            <HistoryToolbar
+              onFetch={fetchRepository}
+              onPull={pullRepository}
+              onPush={pushRepository}
+              onBranch={manageBranches}
+              onStash={stashChanges}
+              onPop={popStash}
+              pending={gitActionPending}
+            />
+            {#if gitActionError}
+              <div class="shrink-0 border-b border-[var(--app-theme-error)]/30 bg-[var(--app-theme-error)]/10 px-3 py-2 text-xs text-[var(--app-theme-error)]" role="alert">
+                {gitActionError}
+              </div>
+            {/if}
+            <div class="min-h-0 flex-1">
+              <GitGraph
+                {snapshot}
+                {selectedCommit}
+                {changesSelected}
+                onSelectChanges={selectChanges}
+                onSelectCommit={selectCommit}
+              />
+            </div>
+          </div>
         {/if}
         {#if snapshot && changesSelected}
-          <WorkingTreePanel {snapshot} {selectedFile} onSelectFile={selectFile} />
+          <WorkingTreePanel
+            {snapshot}
+            {selectedFile}
+            onSelectFile={selectFile}
+            onStageFile={stageFile}
+            onUnstageFile={unstageFile}
+            onStageAll={stageAll}
+            onUnstageAll={unstageAll}
+            onCommit={commitChanges}
+            pending={gitActionPending}
+          />
         {:else if snapshot && selectedCommit}
           <CommitDetailsPanel
             client={gitClient!}
@@ -958,7 +1095,17 @@
 
             {#snippet pane1()}
               {#if changesSelected}
-                <WorkingTreePanel snapshot={snapshot!} {selectedFile} onSelectFile={selectFile} />
+                <WorkingTreePanel
+                  snapshot={snapshot!}
+                  {selectedFile}
+                  onSelectFile={selectFile}
+                  onStageFile={stageFile}
+                  onUnstageFile={unstageFile}
+                  onStageAll={stageAll}
+                  onUnstageAll={unstageAll}
+                  onCommit={commitChanges}
+                  pending={gitActionPending}
+                />
               {:else if selectedCommit}
                 <CommitDetailsPanel
                   client={gitClient!}
@@ -978,18 +1125,46 @@
             {/snippet}
 
             {#snippet pane1()}
-              <GitGraph
-                {snapshot}
-                {selectedCommit}
-                {changesSelected}
-                onSelectChanges={selectChanges}
-                onSelectCommit={selectCommit}
-              />
+              <div class="flex h-full min-h-0 flex-col overflow-hidden">
+                <HistoryToolbar
+                  onFetch={fetchRepository}
+                  onPull={pullRepository}
+                  onPush={pushRepository}
+                  onBranch={manageBranches}
+                  onStash={stashChanges}
+                  onPop={popStash}
+                  pending={gitActionPending}
+                />
+                {#if gitActionError}
+                  <div class="shrink-0 border-b border-[var(--app-theme-error)]/30 bg-[var(--app-theme-error)]/10 px-3 py-2 text-xs text-[var(--app-theme-error)]" role="alert">
+                    {gitActionError}
+                  </div>
+                {/if}
+                <div class="min-h-0 flex-1">
+                  <GitGraph
+                    {snapshot}
+                    {selectedCommit}
+                    {changesSelected}
+                    onSelectChanges={selectChanges}
+                    onSelectCommit={selectCommit}
+                  />
+                </div>
+              </div>
             {/snippet}
 
             {#snippet pane2()}
               {#if snapshot && changesSelected}
-                <WorkingTreePanel {snapshot} {selectedFile} onSelectFile={selectFile} />
+                <WorkingTreePanel
+                  {snapshot}
+                  {selectedFile}
+                  onSelectFile={selectFile}
+                  onStageFile={stageFile}
+                  onUnstageFile={unstageFile}
+                  onStageAll={stageAll}
+                  onUnstageAll={unstageAll}
+                  onCommit={commitChanges}
+                  pending={gitActionPending}
+                />
               {:else if snapshot && selectedCommit}
                 <CommitDetailsPanel
                   client={gitClient!}

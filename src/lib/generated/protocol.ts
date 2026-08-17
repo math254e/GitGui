@@ -5,65 +5,65 @@
 /** Any JSON value accepted by the GitGui wire protocol. */
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 
-export type RequestEnvelope = { 
+export type RequestEnvelope = {
 /**
  * Client-chosen identifier echoed by the response.
  */
-id: string, 
+id: string,
 /**
  * Canonical method name.
  */
-method: string, 
+method: string,
 /**
  * Method-specific parameters. An omitted `params` field is treated as `{}`.
  */
 params: JsonValue, };
 
-export type ProtocolError = { 
+export type ProtocolError = {
 /**
  * Stable machine-readable error code.
  */
-code: string, 
+code: string,
 /**
  * Safe human-readable explanation.
  */
-message: string, 
+message: string,
 /**
  * Optional structured context. This must never contain secrets.
  */
 details?: JsonValue | null, };
 
-export type ResponseSuccessEnvelope = { 
+export type ResponseSuccessEnvelope = {
 /**
  * Envelope discriminator.
  */
-type: "response", 
+type: "response",
 /**
  * Identifier from the corresponding request.
  */
-id: string, 
+id: string,
 /**
  * Successful response discriminator.
  */
-ok: true, 
+ok: true,
 /**
  * Method result payload.
  */
 result: JsonValue, };
 
-export type ResponseErrorEnvelope = { 
+export type ResponseErrorEnvelope = {
 /**
  * Envelope discriminator.
  */
-type: "response", 
+type: "response",
 /**
  * Identifier from the corresponding request.
  */
-id: string, 
+id: string,
 /**
  * Error response discriminator.
  */
-ok: false, 
+ok: false,
 /**
  * Structured protocol error.
  */
@@ -71,51 +71,51 @@ error: ProtocolError, };
 
 export type ResponseEnvelope = ResponseSuccessEnvelope | ResponseErrorEnvelope;
 
-export type WelcomePayload = { 
+export type WelcomePayload = {
 /**
  * Stable identity of the running server process.
  */
-server_id: string, 
+server_id: string,
 /**
  * Public protocol version understood by this server.
  */
-protocol_version: number, 
+protocol_version: number,
 /**
  * Server capabilities available to the client.
  */
 capabilities: Array<string>, };
 
-export type WelcomeMessage = { 
+export type WelcomeMessage = {
 /**
  * Envelope discriminator.
  */
-type: "welcome", 
+type: "welcome",
 /**
  * Stable identity of the running server process.
  */
-server_id: string, 
+server_id: string,
 /**
  * Public protocol version understood by this server.
  */
-protocol_version: number, 
+protocol_version: number,
 /**
  * Server capabilities available to the client.
  */
 capabilities: Array<string>, };
 
-export type OrderedEventEnvelope = { 
+export type OrderedEventEnvelope = {
 /**
  * Envelope discriminator.
  */
-type: "event", 
+type: "event",
 /**
  * Monotonic event sequence number.
  */
-sequence: number, 
+sequence: number,
 /**
  * Canonical event name.
  */
-event: string, 
+event: string,
 /**
  * Event-specific payload.
  */
@@ -123,151 +123,151 @@ payload: JsonValue, };
 
 export type ServerLifecycle = "starting" | "ready" | "stopping" | "stopped" | "failed";
 
-export type ServerInfo = { 
+export type ServerInfo = {
 /**
  * Stable identity of this server process.
  */
-server_id: string, 
+server_id: string,
 /**
  * Public protocol version.
  */
-protocol_version: number, 
+protocol_version: number,
 /**
  * GitGui server package version.
  */
-server_version: string, 
+server_version: string,
 /**
  * Address selected by the server after binding, including an ephemeral port.
  */
-bind_address: string, 
+bind_address: string,
 /**
  * Methods and features understood by this server.
  */
 capabilities: Array<string>, };
 
-export type ServerReadiness = { 
+export type ServerReadiness = {
 /**
  * Whether a client may begin a session.
  */
-ready: boolean, 
+ready: boolean,
 /**
  * Current lifecycle state.
  */
-lifecycle: ServerLifecycle, 
+lifecycle: ServerLifecycle,
 /**
  * Server identity for correlating readiness with a process.
  */
-server_id: string, 
+server_id: string,
 /**
  * Protocol version exposed by the server.
  */
 protocol_version: number, };
 
-export type ServerStatus = { 
+export type ServerStatus = {
 /**
  * Current lifecycle state.
  */
-lifecycle: ServerLifecycle, 
+lifecycle: ServerLifecycle,
 /**
  * Whether the server is currently ready.
  */
-ready: boolean, 
+ready: boolean,
 /**
  * Stable server identity.
  */
-server_id: string, 
+server_id: string,
 /**
  * Public protocol version.
  */
-protocol_version: number, 
+protocol_version: number,
 /**
  * Whole seconds since the server entered its running state.
  */
 uptime_seconds: number, };
 
-export type RepositorySummary = { 
+export type RepositorySummary = {
 /**
  * Stable host-local repository identifier.
  */
-id: string, 
+id: string,
 /**
  * Canonical path used to perform operations.
  */
-path: string, 
+path: string,
 /**
  * Canonical Git repository root.
  */
 root: string, };
 
-export type RepositoriesListResult = { 
+export type RepositoriesListResult = {
 /**
  * Configured repositories. This is empty when the host has no entries.
  */
 repositories: Array<RepositorySummary>, };
 
-export type RepositoriesOpenParams = { 
+export type RepositoriesOpenParams = {
 /**
  * Path on the server host to resolve as a Git repository.
  */
 path: string, };
 
-export type RepositoriesOpenResult = { 
+export type RepositoriesOpenResult = {
 /**
  * Server-owned repository catalog entry.
  */
-repository: RepositorySummary, 
+repository: RepositorySummary,
 /**
  * Fresh snapshot computed for the calling client.
  */
 snapshot: RepositorySnapshot, };
 
-export type RepositorySnapshotParams = { 
+export type RepositorySnapshotParams = {
 /**
  * Stable ID from the host's configured repository catalog.
  */
 repositoryId: string, };
 
-export type RepositorySnapshotResult = { 
+export type RepositorySnapshotResult = {
 /**
  * Server-owned repository catalog entry.
  */
-repository: RepositorySummary, 
+repository: RepositorySummary,
 /**
  * Fresh repository snapshot.
  */
 snapshot: RepositorySnapshot, };
 
-export type RepositoriesRefreshParams = { 
+export type RepositoriesRefreshParams = {
 /**
  * Stable IDs from the host's configured repository catalog.
  */
 repositoryIds: Array<string>, };
 
-export type RepositoryRefreshItem = { 
+export type RepositoryRefreshItem = {
 /**
  * Stable ID requested by the client.
  */
-repositoryId: string, 
+repositoryId: string,
 /**
  * Repository catalog entry on success.
  */
-repository?: RepositorySummary, 
+repository?: RepositorySummary,
 /**
  * Fresh snapshot on success.
  */
-snapshot?: RepositorySnapshot, 
+snapshot?: RepositorySnapshot,
 /**
  * Per-repository failure on error.
  */
 error?: ProtocolError, };
 
-export type RepositoriesRefreshResult = { 
+export type RepositoriesRefreshResult = {
 /**
  * One independent success or failure item per requested repository ID.
  */
 repositories: Array<RepositoryRefreshItem>, };
 
-export type VcsStatusParams = { 
+export type GitStatusParams = {
 /**
  * Stable ID from the host's configured repository catalog.
  */
@@ -277,143 +277,231 @@ export type ChangedFile = { path: string, originalPath: string | null, indexStat
 
 export type RepositoryStatus = { currentBranch: string | null, headOid: string | null, ahead: number, behind: number, changedFiles: Array<ChangedFile>, };
 
-export type VcsStatusResult = { repository: RepositorySummary, status: RepositoryStatus, };
+export type GitStatusResult = { repository: RepositorySummary, status: RepositoryStatus, };
 
-export type CommitFilesParams = { 
+export type GitPathsParams = {
 /**
  * Stable ID from the host's configured repository catalog.
  */
-repositoryId: string, 
+repositoryId: string,
+/**
+ * Repository-relative paths. An empty list means all working-tree paths.
+ */
+paths: Array<string>, };
+
+export type GitStageResult = { repository: RepositorySummary, snapshot: RepositorySnapshot, };
+
+export type GitUnstageResult = { repository: RepositorySummary, snapshot: RepositorySnapshot, };
+
+export type GitCommitParams = {
+/**
+ * Stable ID from the host's configured repository catalog.
+ */
+repositoryId: string,
+/**
+ * The commit title or summary line.
+ */
+summary: string,
+/**
+ * Optional commit description following the summary line.
+ */
+description?: string, };
+
+export type GitCommitResult = { repository: RepositorySummary, snapshot: RepositorySnapshot,
+/**
+ * Object ID of the newly created commit.
+ */
+commitHash: string, };
+
+export type GitRepositoryParams = {
+/**
+ * Stable ID from the host's configured repository catalog.
+ */
+repositoryId: string, };
+
+export type GitFetchResult = { repository: RepositorySummary, snapshot: RepositorySnapshot, };
+
+export type GitPullResult = { repository: RepositorySummary, snapshot: RepositorySnapshot, };
+
+export type GitPushResult = { repository: RepositorySummary, snapshot: RepositorySnapshot, };
+
+export type GitBranchListParams = { repositoryId: string, };
+
+export type GitBranch = { name: string, current: boolean, };
+
+export type GitBranchListResult = { repository: RepositorySummary, branches: Array<GitBranch>, snapshot: RepositorySnapshot, };
+
+export type GitBranchCreateParams = { repositoryId: string,
+/**
+ * New local branch name.
+ */
+name: string,
+/**
+ * Optional starting ref or object ID. Defaults to the current HEAD.
+ */
+startPoint?: string,
+/**
+ * Whether to switch to the new branch after creating it.
+ */
+checkout: boolean, };
+
+export type GitBranchCreateResult = { repository: RepositorySummary, snapshot: RepositorySnapshot, };
+
+export type GitBranchSwitchParams = { repositoryId: string, name: string, };
+
+export type GitBranchSwitchResult = { repository: RepositorySummary, snapshot: RepositorySnapshot, };
+
+export type GitStashPushParams = { repositoryId: string,
+/**
+ * Optional stash message.
+ */
+message?: string,
+/**
+ * Include untracked files in the stash. Defaults to true.
+ */
+includeUntracked: boolean, };
+
+export type GitStashPushResult = { repository: RepositorySummary, snapshot: RepositorySnapshot, };
+
+export type GitStashPopParams = { repositoryId: string, };
+
+export type GitStashPopResult = { repository: RepositorySummary, snapshot: RepositorySnapshot, };
+
+export type CommitFilesParams = {
+/**
+ * Stable ID from the host's configured repository catalog.
+ */
+repositoryId: string,
 /**
  * Commit object ID to inspect.
  */
 commitHash: string, };
 
-export type CommitFilesResult = { 
+export type CommitFilesResult = {
 /**
  * Files changed by the requested commit.
  */
 files: Array<CommitFile>, };
 
-export type CommitFileDiffParams = { 
+export type CommitFileDiffParams = {
 /**
  * Stable ID from the host's configured repository catalog.
  */
-repositoryId: string, 
+repositoryId: string,
 /**
  * Commit object ID to inspect.
  */
-commitHash: string, 
+commitHash: string,
 /**
  * Optional explicit parent; the server may otherwise use the first parent.
  */
-parentHash?: string, 
+parentHash?: string,
 /**
  * Repository-relative path to inspect.
  */
 filePath: string, };
 
-export type WorkingTreeFileDiffParams = { 
+export type WorkingTreeFileDiffParams = {
 /**
  * Stable ID from the host's configured repository catalog.
  */
-repositoryId: string, 
+repositoryId: string,
 /**
  * Optional head object ID used as the comparison base.
  */
-headHash?: string, 
+headHash?: string,
 /**
  * Repository-relative path to inspect.
  */
 filePath: string, };
 
-export type FileDiffResult = { 
+export type FileDiffResult = {
 /**
  * Structured file diff payload.
  */
 diff: CommitFileDiff, };
 
-export type PrefetchCommitFilesParams = { 
+export type PrefetchCommitFilesParams = {
 /**
  * Stable ID from the host's configured repository catalog.
  */
-repositoryId: string, 
+repositoryId: string,
 /**
  * Commit IDs to prefetch; servers must enforce `MAX_PREFETCH_COMMIT_HASHES`.
  */
 commitHashes: Array<string>, };
 
-export type PrefetchCommitFilesResult = { 
+export type PrefetchCommitFilesResult = {
 /**
  * Whether the server accepted the hint for processing.
  */
-accepted: boolean, 
+accepted: boolean,
 /**
  * Number of commit hashes accepted by the server.
  */
 count: number, };
 
-export type PrefetchCommitDiffTarget = { 
+export type PrefetchCommitDiffTarget = {
 /**
  * Commit object ID to inspect.
  */
-commitHash: string, 
+commitHash: string,
 /**
  * Optional explicit parent; the server may otherwise use the first parent.
  */
-parentHash?: string, 
+parentHash?: string,
 /**
  * Repository-relative path to prefetch.
  */
 filePath: string, };
 
-export type PrefetchCommitDiffsParams = { 
+export type PrefetchCommitDiffsParams = {
 /**
  * Stable ID from the host's configured repository catalog.
  */
-repositoryId: string, 
+repositoryId: string,
 /**
  * Typed diff targets; servers must enforce `MAX_PREFETCH_COMMIT_DIFF_TARGETS`.
  */
 targets: Array<PrefetchCommitDiffTarget>, };
 
-export type PrefetchCommitDiffsResult = { 
+export type PrefetchCommitDiffsResult = {
 /**
  * Whether the server accepted the hint for processing.
  */
-accepted: boolean, 
+accepted: boolean,
 /**
  * Number of targets accepted by the server.
  */
 count: number, };
 
-export type RepositoryInfo = { 
+export type RepositoryInfo = {
 /**
  * Path originally used to resolve the repository.
  */
-path: string, 
+path: string,
 /**
  * Canonical Git repository root.
  */
 root: string, };
 
-export type RepositorySnapshot = { 
+export type RepositorySnapshot = {
 /**
  * Path and canonical-root metadata.
  */
-info: RepositoryInfo, 
+info: RepositoryInfo,
 /**
  * Current working-tree status.
  */
-status: RepositoryStatus, 
+status: RepositoryStatus,
 /**
  * Commits included in the snapshot.
  */
-commits: Array<CommitInfo>, 
+commits: Array<CommitInfo>,
 /**
  * Renderable commit graph.
  */
-graph: CommitGraph, 
+graph: CommitGraph,
 /**
  * Local branches, remote branches, and tags.
  */
@@ -437,11 +525,11 @@ export type CommitFile = { path: string, originalPath: string | null, status: st
 
 export type CommitFileDiff = { originalPath: string | null, modifiedPath: string, originalContent: string, modifiedContent: string, isBinary: boolean, message: string | null, };
 
-export type ProtocolErrorMessage = { 
+export type ProtocolErrorMessage = {
 /**
  * Envelope discriminator.
  */
-type: "protocol_error", 
+type: "protocol_error",
 /**
  * Structured protocol error.
  */

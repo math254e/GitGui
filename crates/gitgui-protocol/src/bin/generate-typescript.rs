@@ -14,8 +14,13 @@ use gitgui_protocol::{
     RepositoriesRefreshResult, RepositoryInfo, RepositoryRefreshItem, RepositorySnapshot,
     RepositorySnapshotParams, RepositorySnapshotResult, RepositoryStatus, RepositorySummary,
     RequestEnvelope, ResponseEnvelope, ResponseErrorEnvelope, ResponseSuccessEnvelope, ServerInfo,
-    ServerLifecycle, ServerReadiness, ServerStatus, VcsStatusParams, VcsStatusResult,
-    WelcomeMessage, WelcomePayload, WorkingTreeFileDiffParams,
+    GitBranch, GitBranchCreateParams, GitBranchCreateResult, GitBranchListParams,
+    GitBranchListResult, GitBranchSwitchParams, GitBranchSwitchResult, GitCommitParams,
+    GitCommitResult, GitFetchResult, GitPathsParams, GitPullResult, GitPushResult,
+    GitRepositoryParams, GitStageResult, GitStashPopParams, GitStashPopResult,
+    GitStashPushParams, GitStashPushResult, GitStatusParams, GitStatusResult, GitUnstageResult,
+    ServerLifecycle, ServerReadiness, ServerStatus, WelcomeMessage, WelcomePayload,
+    WorkingTreeFileDiffParams,
 };
 use std::{
     fs, io,
@@ -59,10 +64,30 @@ fn main() -> io::Result<()> {
         <RepositoriesRefreshParams as TS>::decl(&config),
         <RepositoryRefreshItem as TS>::decl(&config),
         <RepositoriesRefreshResult as TS>::decl(&config),
-        <VcsStatusParams as TS>::decl(&config),
+        <GitStatusParams as TS>::decl(&config),
         <ChangedFile as TS>::decl(&config),
         <RepositoryStatus as TS>::decl(&config),
-        <VcsStatusResult as TS>::decl(&config),
+        <GitStatusResult as TS>::decl(&config),
+        <GitPathsParams as TS>::decl(&config),
+        <GitStageResult as TS>::decl(&config),
+        <GitUnstageResult as TS>::decl(&config),
+        <GitCommitParams as TS>::decl(&config),
+        <GitCommitResult as TS>::decl(&config),
+        <GitRepositoryParams as TS>::decl(&config),
+        <GitFetchResult as TS>::decl(&config),
+        <GitPullResult as TS>::decl(&config),
+        <GitPushResult as TS>::decl(&config),
+        <GitBranchListParams as TS>::decl(&config),
+        <GitBranch as TS>::decl(&config),
+        <GitBranchListResult as TS>::decl(&config),
+        <GitBranchCreateParams as TS>::decl(&config),
+        <GitBranchCreateResult as TS>::decl(&config),
+        <GitBranchSwitchParams as TS>::decl(&config),
+        <GitBranchSwitchResult as TS>::decl(&config),
+        <GitStashPushParams as TS>::decl(&config),
+        <GitStashPushResult as TS>::decl(&config),
+        <GitStashPopParams as TS>::decl(&config),
+        <GitStashPopResult as TS>::decl(&config),
         <CommitFilesParams as TS>::decl(&config),
         <CommitFilesResult as TS>::decl(&config),
         <CommitFileDiffParams as TS>::decl(&config),
@@ -89,8 +114,11 @@ fn main() -> io::Result<()> {
 
     let mut output = String::from(HEADER);
     for declaration in declarations {
-        output.push_str(&export_declaration(&declaration));
-        output.push_str("\n\n");
+        for line in export_declaration(&declaration).lines() {
+            output.push_str(line.trim_end());
+            output.push('\n');
+        }
+        output.push('\n');
     }
 
     if let Some(parent) = output_path.parent() {

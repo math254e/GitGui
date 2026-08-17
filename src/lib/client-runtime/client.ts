@@ -4,6 +4,24 @@ import type {
   CommitFilesParams,
   CommitFilesResult,
   FileDiffResult,
+  GitBranchCreateParams,
+  GitBranchCreateResult,
+  GitBranchListResult,
+  GitBranchSwitchParams,
+  GitBranchSwitchResult,
+  GitCommitParams,
+  GitCommitResult,
+  GitFetchResult,
+  GitPathsParams,
+  GitPullResult,
+  GitPushResult,
+  GitStageResult,
+  GitStashPopResult,
+  GitStashPushParams,
+  GitStashPushResult,
+  GitStatusParams,
+  GitStatusResult,
+  GitUnstageResult,
   PrefetchCommitDiffsParams,
   PrefetchCommitDiffsResult,
   PrefetchCommitFilesParams,
@@ -20,8 +38,6 @@ import type {
   ServerInfo,
   ServerReadiness,
   ServerStatus,
-  VcsStatusParams,
-  VcsStatusResult,
   WelcomeMessage,
   WorkingTreeFileDiffParams,
 } from "$lib/generated/protocol";
@@ -220,18 +236,18 @@ export class GitGuiClient {
       repositoryId: assertRepositoryId(repositoryId),
       commitHash,
     };
-    return this.request<CommitFilesResult>("vcs.commit_files", params);
+    return this.request<CommitFilesResult>("git.commit_files", params);
   }
 
   getCommitFileDiff(params: CommitFileDiffParams): Promise<FileDiffResult> {
-    return this.request<FileDiffResult>("vcs.commit_file_diff", {
+    return this.request<FileDiffResult>("git.commit_file_diff", {
       ...params,
       repositoryId: assertRepositoryId(params.repositoryId),
     } satisfies CommitFileDiffParams);
   }
 
   getWorkingTreeFileDiff(params: WorkingTreeFileDiffParams): Promise<FileDiffResult> {
-    return this.request<FileDiffResult>("vcs.working_tree_file_diff", {
+    return this.request<FileDiffResult>("git.working_tree_file_diff", {
       ...params,
       repositoryId: assertRepositoryId(params.repositoryId),
     } satisfies WorkingTreeFileDiffParams);
@@ -242,19 +258,77 @@ export class GitGuiClient {
       repositoryId: assertRepositoryId(repositoryId),
       commitHashes: [...commitHashes],
     };
-    return this.request<PrefetchCommitFilesResult>("vcs.prefetch_commit_files", params);
+    return this.request<PrefetchCommitFilesResult>("git.prefetch_commit_files", params);
   }
 
   prefetchCommitDiffs(params: PrefetchCommitDiffsParams): Promise<PrefetchCommitDiffsResult> {
-    return this.request<PrefetchCommitDiffsResult>("vcs.prefetch_commit_diffs", {
+    return this.request<PrefetchCommitDiffsResult>("git.prefetch_commit_diffs", {
       ...params,
       repositoryId: assertRepositoryId(params.repositoryId),
     } satisfies PrefetchCommitDiffsParams);
   }
 
-  getVcsStatus(repositoryId: string): Promise<VcsStatusResult> {
-    const params: VcsStatusParams = { repositoryId: assertRepositoryId(repositoryId) };
-    return this.request<VcsStatusResult>("vcs.status", params);
+  getGitStatus(repositoryId: string): Promise<GitStatusResult> {
+    const params: GitStatusParams = { repositoryId: assertRepositoryId(repositoryId) };
+    return this.request<GitStatusResult>("git.status", params);
+  }
+
+  stage(repositoryId: string, paths: string[] = []): Promise<GitStageResult> {
+    const params: GitPathsParams = { repositoryId: assertRepositoryId(repositoryId), paths: [...paths] };
+    return this.request<GitStageResult>("git.stage", params);
+  }
+
+  unstage(repositoryId: string, paths: string[] = []): Promise<GitUnstageResult> {
+    const params: GitPathsParams = { repositoryId: assertRepositoryId(repositoryId), paths: [...paths] };
+    return this.request<GitUnstageResult>("git.unstage", params);
+  }
+
+  commit(params: GitCommitParams): Promise<GitCommitResult> {
+    return this.request<GitCommitResult>("git.commit", {
+      ...params,
+      repositoryId: assertRepositoryId(params.repositoryId),
+    } satisfies GitCommitParams);
+  }
+
+  fetch(repositoryId: string): Promise<GitFetchResult> {
+    return this.request<GitFetchResult>("git.fetch", { repositoryId: assertRepositoryId(repositoryId) });
+  }
+
+  pull(repositoryId: string): Promise<GitPullResult> {
+    return this.request<GitPullResult>("git.pull", { repositoryId: assertRepositoryId(repositoryId) });
+  }
+
+  push(repositoryId: string): Promise<GitPushResult> {
+    return this.request<GitPushResult>("git.push", { repositoryId: assertRepositoryId(repositoryId) });
+  }
+
+  listBranches(repositoryId: string): Promise<GitBranchListResult> {
+    return this.request<GitBranchListResult>("git.branch.list", { repositoryId: assertRepositoryId(repositoryId) });
+  }
+
+  createBranch(params: GitBranchCreateParams): Promise<GitBranchCreateResult> {
+    return this.request<GitBranchCreateResult>("git.branch.create", {
+      ...params,
+      repositoryId: assertRepositoryId(params.repositoryId),
+    } satisfies GitBranchCreateParams);
+  }
+
+  switchBranch(params: GitBranchSwitchParams): Promise<GitBranchSwitchResult> {
+    return this.request<GitBranchSwitchResult>("git.branch.switch", {
+      ...params,
+      repositoryId: assertRepositoryId(params.repositoryId),
+    } satisfies GitBranchSwitchParams);
+  }
+
+  stashPush(params: GitStashPushParams): Promise<GitStashPushResult> {
+    return this.request<GitStashPushResult>("git.stash.push", {
+      ...params,
+      repositoryId: assertRepositoryId(params.repositoryId),
+    } satisfies GitStashPushParams);
+  }
+
+  stashPop(repositoryId: string): Promise<GitStashPopResult> {
+    return this.request<GitStashPopResult>("git.stash.pop", { repositoryId: assertRepositoryId(repositoryId) });
   }
 
   request<T>(method: string, params: unknown = {}): Promise<T> {

@@ -31,6 +31,22 @@
 - Merge and rebase workflows
 - Remote fetch, pull, and push operations
 
+## Git Operations Rollout
+
+The first mutation flow will cover staging, un-staging, commit creation, fetch,
+pull, push, branch switching/creation, and stash/pop. These operations should
+be reliable before adding the following advanced features:
+
+- Amend commits
+- Interactive or partial staging
+- Stash apply and stash drop
+- Branch deletion
+- Progress streaming for long-running Git commands
+
+The advanced features are intentionally deferred so they do not complicate the
+initial protocol, server lifecycle, or working-tree UI before the basic Git
+mutation flow is proven.
+
 ## Deferred Technical Work
 
 These items are intentionally deferred while the project remains a personal read-only viewer:

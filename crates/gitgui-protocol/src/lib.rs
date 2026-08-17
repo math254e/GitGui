@@ -27,17 +27,39 @@ pub const METHOD_REPOSITORIES_GET_SNAPSHOT: &str = "repositories.get_snapshot";
 /// Canonical method for refreshing multiple repository snapshots.
 pub const METHOD_REPOSITORIES_REFRESH: &str = "repositories.refresh";
 /// Canonical method for repository working-tree status reads.
-pub const METHOD_VCS_STATUS: &str = "vcs.status";
+pub const METHOD_GIT_STATUS: &str = "git.status";
 /// Canonical method for listing the files changed by a commit.
-pub const METHOD_VCS_COMMIT_FILES: &str = "vcs.commit_files";
+pub const METHOD_GIT_COMMIT_FILES: &str = "git.commit_files";
 /// Canonical method for reading one committed file diff.
-pub const METHOD_VCS_COMMIT_FILE_DIFF: &str = "vcs.commit_file_diff";
+pub const METHOD_GIT_COMMIT_FILE_DIFF: &str = "git.commit_file_diff";
 /// Canonical method for reading one working-tree file diff.
-pub const METHOD_VCS_WORKING_TREE_FILE_DIFF: &str = "vcs.working_tree_file_diff";
+pub const METHOD_GIT_WORKING_TREE_FILE_DIFF: &str = "git.working_tree_file_diff";
 /// Canonical performance hint for prefetching commit file lists.
-pub const METHOD_VCS_PREFETCH_COMMIT_FILES: &str = "vcs.prefetch_commit_files";
+pub const METHOD_GIT_PREFETCH_COMMIT_FILES: &str = "git.prefetch_commit_files";
 /// Canonical performance hint for prefetching commit file diffs.
-pub const METHOD_VCS_PREFETCH_COMMIT_DIFFS: &str = "vcs.prefetch_commit_diffs";
+pub const METHOD_GIT_PREFETCH_COMMIT_DIFFS: &str = "git.prefetch_commit_diffs";
+/// Canonical method for staging working-tree paths.
+pub const METHOD_GIT_STAGE: &str = "git.stage";
+/// Canonical method for removing paths from the index.
+pub const METHOD_GIT_UNSTAGE: &str = "git.unstage";
+/// Canonical method for creating a commit from staged changes.
+pub const METHOD_GIT_COMMIT: &str = "git.commit";
+/// Canonical method for fetching and pruning remote refs.
+pub const METHOD_GIT_FETCH: &str = "git.fetch";
+/// Canonical method for pulling the current configured branch.
+pub const METHOD_GIT_PULL: &str = "git.pull";
+/// Canonical method for pushing the current configured branch.
+pub const METHOD_GIT_PUSH: &str = "git.push";
+/// Canonical method for listing local branches.
+pub const METHOD_GIT_BRANCH_LIST: &str = "git.branch.list";
+/// Canonical method for creating a local branch.
+pub const METHOD_GIT_BRANCH_CREATE: &str = "git.branch.create";
+/// Canonical method for switching the current branch.
+pub const METHOD_GIT_BRANCH_SWITCH: &str = "git.branch.switch";
+/// Canonical method for creating a stash.
+pub const METHOD_GIT_STASH_PUSH: &str = "git.stash.push";
+/// Canonical method for applying and removing the latest stash.
+pub const METHOD_GIT_STASH_POP: &str = "git.stash.pop";
 
 /// Maximum number of commit hashes accepted by one commit-file prefetch hint.
 pub const MAX_PREFETCH_COMMIT_HASHES: usize = 256;
@@ -57,17 +79,39 @@ pub const CAPABILITY_REPOSITORIES_GET_SNAPSHOT: &str = "repositories.get_snapsho
 /// Capability advertised when batch repository refresh is available.
 pub const CAPABILITY_REPOSITORIES_REFRESH: &str = "repositories.refresh";
 /// Capability advertised when Git status is available.
-pub const CAPABILITY_VCS_STATUS: &str = "vcs.status";
+pub const CAPABILITY_GIT_STATUS: &str = "git.status";
 /// Capability advertised when commit file listing is available.
-pub const CAPABILITY_VCS_COMMIT_FILES: &str = "vcs.commit_files";
+pub const CAPABILITY_GIT_COMMIT_FILES: &str = "git.commit_files";
 /// Capability advertised when committed file diffs are available.
-pub const CAPABILITY_VCS_COMMIT_FILE_DIFF: &str = "vcs.commit_file_diff";
+pub const CAPABILITY_GIT_COMMIT_FILE_DIFF: &str = "git.commit_file_diff";
 /// Capability advertised when working-tree file diffs are available.
-pub const CAPABILITY_VCS_WORKING_TREE_FILE_DIFF: &str = "vcs.working_tree_file_diff";
+pub const CAPABILITY_GIT_WORKING_TREE_FILE_DIFF: &str = "git.working_tree_file_diff";
 /// Capability advertised when commit-file prefetch hints are available.
-pub const CAPABILITY_VCS_PREFETCH_COMMIT_FILES: &str = "vcs.prefetch_commit_files";
+pub const CAPABILITY_GIT_PREFETCH_COMMIT_FILES: &str = "git.prefetch_commit_files";
 /// Capability advertised when commit-diff prefetch hints are available.
-pub const CAPABILITY_VCS_PREFETCH_COMMIT_DIFFS: &str = "vcs.prefetch_commit_diffs";
+pub const CAPABILITY_GIT_PREFETCH_COMMIT_DIFFS: &str = "git.prefetch_commit_diffs";
+/// Capability advertised when Git staging is available.
+pub const CAPABILITY_GIT_STAGE: &str = "git.stage";
+/// Capability advertised when Git unstaging is available.
+pub const CAPABILITY_GIT_UNSTAGE: &str = "git.unstage";
+/// Capability advertised when Git commits are available.
+pub const CAPABILITY_GIT_COMMIT: &str = "git.commit";
+/// Capability advertised when Git fetch is available.
+pub const CAPABILITY_GIT_FETCH: &str = "git.fetch";
+/// Capability advertised when Git pull is available.
+pub const CAPABILITY_GIT_PULL: &str = "git.pull";
+/// Capability advertised when Git push is available.
+pub const CAPABILITY_GIT_PUSH: &str = "git.push";
+/// Capability advertised when local branch listing is available.
+pub const CAPABILITY_GIT_BRANCH_LIST: &str = "git.branch.list";
+/// Capability advertised when local branch creation is available.
+pub const CAPABILITY_GIT_BRANCH_CREATE: &str = "git.branch.create";
+/// Capability advertised when branch switching is available.
+pub const CAPABILITY_GIT_BRANCH_SWITCH: &str = "git.branch.switch";
+/// Capability advertised when stash creation is available.
+pub const CAPABILITY_GIT_STASH_PUSH: &str = "git.stash.push";
+/// Capability advertised when stash popping is available.
+pub const CAPABILITY_GIT_STASH_POP: &str = "git.stash.pop";
 
 /// Machine-readable protocol error codes.
 pub mod error_codes {
@@ -439,7 +483,7 @@ pub struct RepositoriesRefreshResult {
 /// Parameters for a working-tree status request.
 #[derive(Clone, Debug, Deserialize, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct VcsStatusParams {
+pub struct GitStatusParams {
     /// Stable ID from the host's configured repository catalog.
     pub repository_id: String,
 }
@@ -468,9 +512,193 @@ pub struct RepositoryStatus {
 /// Result of reading one configured repository's working-tree status.
 #[derive(Clone, Debug, Deserialize, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct VcsStatusResult {
+pub struct GitStatusResult {
     pub repository: RepositorySummary,
     pub status: RepositoryStatus,
+}
+
+/// Parameters shared by staging and unstaging operations.
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GitPathsParams {
+    /// Stable ID from the host's configured repository catalog.
+    pub repository_id: String,
+    /// Repository-relative paths. An empty list means all working-tree paths.
+    #[serde(default)]
+    pub paths: Vec<String>,
+}
+
+/// Result of a staging or unstaging operation.
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GitStageResult {
+    pub repository: RepositorySummary,
+    pub snapshot: RepositorySnapshot,
+}
+
+/// Result of removing paths from the index.
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GitUnstageResult {
+    pub repository: RepositorySummary,
+    pub snapshot: RepositorySnapshot,
+}
+
+/// Parameters for creating a commit from staged changes.
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GitCommitParams {
+    /// Stable ID from the host's configured repository catalog.
+    pub repository_id: String,
+    /// The commit title or summary line.
+    pub summary: String,
+    /// Optional commit description following the summary line.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub description: Option<String>,
+}
+
+/// Result of creating a commit.
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GitCommitResult {
+    pub repository: RepositorySummary,
+    pub snapshot: RepositorySnapshot,
+    /// Object ID of the newly created commit.
+    pub commit_hash: String,
+}
+
+/// Parameters for a repository-wide Git operation.
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GitRepositoryParams {
+    /// Stable ID from the host's configured repository catalog.
+    pub repository_id: String,
+}
+
+/// Result of fetch, pull, or push.
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GitFetchResult {
+    pub repository: RepositorySummary,
+    pub snapshot: RepositorySnapshot,
+}
+
+/// Result of pulling the current configured branch.
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GitPullResult {
+    pub repository: RepositorySummary,
+    pub snapshot: RepositorySnapshot,
+}
+
+/// Result of pushing the current configured branch.
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GitPushResult {
+    pub repository: RepositorySummary,
+    pub snapshot: RepositorySnapshot,
+}
+
+/// Parameters for listing local branches.
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GitBranchListParams {
+    pub repository_id: String,
+}
+
+/// A local branch available for checkout.
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GitBranch {
+    pub name: String,
+    pub current: bool,
+}
+
+/// Result of listing local branches.
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GitBranchListResult {
+    pub repository: RepositorySummary,
+    pub branches: Vec<GitBranch>,
+    pub snapshot: RepositorySnapshot,
+}
+
+/// Parameters for creating a local branch.
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GitBranchCreateParams {
+    pub repository_id: String,
+    /// New local branch name.
+    pub name: String,
+    /// Optional starting ref or object ID. Defaults to the current HEAD.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub start_point: Option<String>,
+    /// Whether to switch to the new branch after creating it.
+    #[serde(default)]
+    pub checkout: bool,
+}
+
+/// Result of creating a local branch.
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GitBranchCreateResult {
+    pub repository: RepositorySummary,
+    pub snapshot: RepositorySnapshot,
+}
+
+/// Parameters for switching to a local branch.
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GitBranchSwitchParams {
+    pub repository_id: String,
+    pub name: String,
+}
+
+/// Result of switching branches.
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GitBranchSwitchResult {
+    pub repository: RepositorySummary,
+    pub snapshot: RepositorySnapshot,
+}
+
+/// Parameters for creating a stash.
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GitStashPushParams {
+    pub repository_id: String,
+    /// Optional stash message.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub message: Option<String>,
+    /// Include untracked files in the stash. Defaults to true.
+    #[serde(default = "default_true")]
+    pub include_untracked: bool,
+}
+
+/// Result of creating a stash.
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GitStashPushResult {
+    pub repository: RepositorySummary,
+    pub snapshot: RepositorySnapshot,
+}
+
+/// Parameters for popping the latest stash.
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GitStashPopParams {
+    pub repository_id: String,
+}
+
+/// Result of popping the latest stash.
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GitStashPopResult {
+    pub repository: RepositorySummary,
+    pub snapshot: RepositorySnapshot,
 }
 
 /// Parameters for listing files changed by one commit.
@@ -719,4 +947,8 @@ impl ProtocolErrorMessage {
 
 fn empty_object() -> Value {
     Value::Object(Default::default())
+}
+
+fn default_true() -> bool {
+    true
 }

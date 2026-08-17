@@ -139,15 +139,20 @@ Initial method families:
 - `repositories.list`
 - `repositories.open`
 - `repositories.refresh`
-- `vcs.status`
-- `vcs.diff`
-- `vcs.log`
-- `vcs.stage`
-- `vcs.unstage`
-- `vcs.commit`
-- `vcs.fetch`
-- `vcs.pull`
-- `vcs.push`
+- `git.status`
+- `git.diff`
+- `git.log`
+- `git.stage`
+- `git.unstage`
+- `git.commit`
+- `git.fetch`
+- `git.pull`
+- `git.push`
+- `git.branch.list`
+- `git.branch.create`
+- `git.branch.switch`
+- `git.stash.push`
+- `git.stash.pop`
 - `events.subscribe`
 
 Acceptance:
@@ -318,6 +323,32 @@ Acceptance:
 - A client can connect and render repository metadata through the protocol.
 - Read-only Git operations work against a real local repository.
 - Errors are shown as protocol errors rather than process crashes.
+
+### HOST-007 — Roll out the first Git mutation set
+
+Depends on: HOST-004, PROTO-002.
+
+Deliverables:
+
+- Implement `git.stage`, `git.unstage`, and `git.commit` for working-tree mutations.
+- Implement `git.fetch`, `git.pull`, and `git.push` for remote synchronization.
+- Implement `git.branch.list`, `git.branch.create`, and `git.branch.switch`.
+- Implement `git.stash.push` and `git.stash.pop`.
+- Return a fresh repository snapshot after each successful mutation and serialize mutations per repository.
+- Preserve structured errors for conflicts, invalid paths, missing remotes, and Git command failures.
+
+Acceptance:
+
+- A client can stage, unstage, commit, fetch, pull, push, create or switch branches, and stash or pop changes through the protocol.
+- Each successful mutation refreshes the affected repository state without requiring a second backend implementation.
+
+Deferred Git actions:
+
+- Amend commits.
+- Interactive or partial staging.
+- Stash apply or drop.
+- Branch deletion.
+- Progress streaming.
 
 ### HOST-005 — Add initial authentication/session boundary
 

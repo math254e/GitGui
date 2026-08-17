@@ -11,15 +11,15 @@
   const emptyItems = ["No repository loaded"];
 
   let open = $state({
-		LocalBranches: true,
-		RemoteBranches: true,
-		ChangedFiles: false,
-		Stashes: false
+    LocalBranches: true,
+    RemoteBranches: true,
+    ChangedFiles: false,
+    Stashes: false,
   });
 
-	function toggle(section: keyof typeof open) {
-		open[section] = !open[section];
-	}
+  function toggle(section: keyof typeof open) {
+    open[section] = !open[section];
+  }
 
   function changedFileKey(file: ChangedFile) {
     return `${file.path}\0${file.originalPath ?? ""}\0${file.indexStatus}${file.worktreeStatus}`;

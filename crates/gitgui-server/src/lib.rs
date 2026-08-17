@@ -18,6 +18,12 @@ use gitgui_core::git::{
         SharedCommitFilesCache,
     },
     command::GitError,
+    operations::{
+        commit as run_commit, create_branch as run_create_branch, fetch as run_fetch,
+        list_local_branches, pull as run_pull, push as run_push, stage as run_stage,
+        stash_pop as run_stash_pop, stash_push as run_stash_push,
+        switch_branch as run_switch_branch, unstage as run_unstage,
+    },
     repository::{
         load_commit_file_diff as load_core_commit_file_diff,
         load_commit_files_from_root as load_core_commit_files,
@@ -41,18 +47,29 @@ use gitgui_protocol::{
     RepositoriesRefreshParams, RepositoriesRefreshResult, RepositoryInfo as ProtocolRepositoryInfo,
     RepositoryRefreshItem, RepositorySnapshot, RepositorySnapshotParams, RepositorySnapshotResult,
     RepositoryStatus as ProtocolRepositoryStatus, RepositorySummary, RequestEnvelope,
-    ResponseEnvelope, ServerInfo, ServerLifecycle, ServerReadiness, ServerStatus, VcsStatusParams,
-    VcsStatusResult, WelcomeMessage, CAPABILITY_REPOSITORIES_GET_SNAPSHOT,
+    GitBranch, GitBranchCreateParams, GitBranchCreateResult, GitBranchListParams,
+    GitBranchListResult, GitBranchSwitchParams, GitBranchSwitchResult, GitCommitParams,
+    GitCommitResult, GitFetchResult, GitPathsParams, GitPullResult, GitPushResult,
+    GitRepositoryParams, GitStageResult, GitStashPopParams, GitStashPopResult,
+    GitStashPushParams, GitStashPushResult, GitStatusParams, GitStatusResult,
+    GitUnstageResult, ResponseEnvelope, ServerInfo, ServerLifecycle, ServerReadiness, ServerStatus,
+    WelcomeMessage, CAPABILITY_GIT_BRANCH_CREATE, CAPABILITY_GIT_BRANCH_LIST,
+    CAPABILITY_GIT_BRANCH_SWITCH, CAPABILITY_GIT_COMMIT, CAPABILITY_GIT_COMMIT_FILES,
+    CAPABILITY_GIT_COMMIT_FILE_DIFF, CAPABILITY_GIT_FETCH, CAPABILITY_GIT_PREFETCH_COMMIT_DIFFS,
+    CAPABILITY_GIT_PREFETCH_COMMIT_FILES, CAPABILITY_GIT_PULL, CAPABILITY_GIT_PUSH,
+    CAPABILITY_GIT_STAGE, CAPABILITY_GIT_STASH_POP, CAPABILITY_GIT_STASH_PUSH,
+    CAPABILITY_GIT_STATUS, CAPABILITY_GIT_UNSTAGE, CAPABILITY_GIT_WORKING_TREE_FILE_DIFF,
+    CAPABILITY_REPOSITORIES_GET_SNAPSHOT,
     CAPABILITY_REPOSITORIES_LIST, CAPABILITY_REPOSITORIES_OPEN, CAPABILITY_REPOSITORIES_REFRESH,
-    CAPABILITY_SERVER_INFO, CAPABILITY_SERVER_STATUS, CAPABILITY_VCS_COMMIT_FILES,
-    CAPABILITY_VCS_COMMIT_FILE_DIFF, CAPABILITY_VCS_PREFETCH_COMMIT_DIFFS,
-    CAPABILITY_VCS_PREFETCH_COMMIT_FILES, CAPABILITY_VCS_STATUS,
-    CAPABILITY_VCS_WORKING_TREE_FILE_DIFF, MAX_PREFETCH_COMMIT_DIFF_TARGETS,
+    CAPABILITY_SERVER_INFO, CAPABILITY_SERVER_STATUS, MAX_PREFETCH_COMMIT_DIFF_TARGETS,
     MAX_PREFETCH_COMMIT_HASHES, METHOD_REPOSITORIES_GET_SNAPSHOT, METHOD_REPOSITORIES_LIST,
     METHOD_REPOSITORIES_OPEN, METHOD_REPOSITORIES_REFRESH, METHOD_SERVER_GET_INFO,
-    METHOD_SERVER_GET_STATUS, METHOD_VCS_COMMIT_FILES, METHOD_VCS_COMMIT_FILE_DIFF,
-    METHOD_VCS_PREFETCH_COMMIT_DIFFS, METHOD_VCS_PREFETCH_COMMIT_FILES, METHOD_VCS_STATUS,
-    METHOD_VCS_WORKING_TREE_FILE_DIFF, PROTOCOL_VERSION,
+    METHOD_SERVER_GET_STATUS, METHOD_GIT_BRANCH_CREATE, METHOD_GIT_BRANCH_LIST,
+    METHOD_GIT_BRANCH_SWITCH, METHOD_GIT_COMMIT, METHOD_GIT_COMMIT_FILES,
+    METHOD_GIT_COMMIT_FILE_DIFF, METHOD_GIT_FETCH, METHOD_GIT_PREFETCH_COMMIT_DIFFS,
+    METHOD_GIT_PREFETCH_COMMIT_FILES, METHOD_GIT_PULL, METHOD_GIT_PUSH, METHOD_GIT_STAGE,
+    METHOD_GIT_STASH_POP, METHOD_GIT_STASH_PUSH, METHOD_GIT_STATUS, METHOD_GIT_UNSTAGE,
+    METHOD_GIT_WORKING_TREE_FILE_DIFF, PROTOCOL_VERSION,
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -65,6 +82,7 @@ use std::{
     net::{IpAddr, SocketAddr},
     path::{Component, Path, PathBuf},
     sync::Arc,
+    collections::HashMap,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tokio::{
@@ -623,20 +641,31 @@ async fn dispatch(request: RequestEnvelope, state: &ServerState) -> ResponseEnve
         METHOD_REPOSITORIES_REFRESH => {
             repositories_refresh(request.id, request.params, state).await
         }
-        METHOD_VCS_STATUS => vcs_status(request.id, request.params, state).await,
-        METHOD_VCS_COMMIT_FILES => vcs_commit_files(request.id, request.params, state).await,
-        METHOD_VCS_COMMIT_FILE_DIFF => {
-            vcs_commit_file_diff(request.id, request.params, state).await
+        METHOD_GIT_STATUS => git_status(request.id, request.params, state).await,
+        METHOD_GIT_COMMIT_FILES => git_commit_files(request.id, request.params, state).await,
+        METHOD_GIT_COMMIT_FILE_DIFF => {
+            git_commit_file_diff(request.id, request.params, state).await
         }
-        METHOD_VCS_WORKING_TREE_FILE_DIFF => {
-            vcs_working_tree_file_diff(request.id, request.params, state).await
+        METHOD_GIT_WORKING_TREE_FILE_DIFF => {
+            git_working_tree_file_diff(request.id, request.params, state).await
         }
-        METHOD_VCS_PREFETCH_COMMIT_FILES => {
-            vcs_prefetch_commit_files(request.id, request.params, state).await
+        METHOD_GIT_PREFETCH_COMMIT_FILES => {
+            git_prefetch_commit_files(request.id, request.params, state).await
         }
-        METHOD_VCS_PREFETCH_COMMIT_DIFFS => {
-            vcs_prefetch_commit_diffs(request.id, request.params, state).await
+        METHOD_GIT_PREFETCH_COMMIT_DIFFS => {
+            git_prefetch_commit_diffs(request.id, request.params, state).await
         }
+        METHOD_GIT_STAGE => git_stage(request.id, request.params, state).await,
+        METHOD_GIT_UNSTAGE => git_unstage(request.id, request.params, state).await,
+        METHOD_GIT_COMMIT => git_commit(request.id, request.params, state).await,
+        METHOD_GIT_FETCH => git_fetch(request.id, request.params, state).await,
+        METHOD_GIT_PULL => git_pull(request.id, request.params, state).await,
+        METHOD_GIT_PUSH => git_push(request.id, request.params, state).await,
+        METHOD_GIT_BRANCH_LIST => git_branch_list(request.id, request.params, state).await,
+        METHOD_GIT_BRANCH_CREATE => git_branch_create(request.id, request.params, state).await,
+        METHOD_GIT_BRANCH_SWITCH => git_branch_switch(request.id, request.params, state).await,
+        METHOD_GIT_STASH_PUSH => git_stash_push(request.id, request.params, state).await,
+        METHOD_GIT_STASH_POP => git_stash_pop(request.id, request.params, state).await,
         _ => ResponseEnvelope::error(
             request.id,
             ProtocolError::with_details(
@@ -821,8 +850,8 @@ async fn repositories_refresh(
     response_success(request_id, RepositoriesRefreshResult { repositories })
 }
 
-async fn vcs_status(request_id: String, params: Value, state: &ServerState) -> ResponseEnvelope {
-    let params = match parse_params::<VcsStatusParams>(params, "vcs.status") {
+async fn git_status(request_id: String, params: Value, state: &ServerState) -> ResponseEnvelope {
+    let params = match parse_params::<GitStatusParams>(params, "git.status") {
         Ok(params) => params,
         Err(error) => return ResponseEnvelope::error(request_id, error),
     };
@@ -838,7 +867,7 @@ async fn vcs_status(request_id: String, params: Value, state: &ServerState) -> R
     match result {
         Ok(Ok(status)) => response_success(
             request_id,
-            VcsStatusResult {
+            GitStatusResult {
                 repository: repository_summary,
                 status: protocol_status(status),
             },
@@ -855,12 +884,342 @@ async fn vcs_status(request_id: String, params: Value, state: &ServerState) -> R
     }
 }
 
-async fn vcs_commit_files(
+async fn git_stage(request_id: String, params: Value, state: &ServerState) -> ResponseEnvelope {
+    let params = match parse_params::<GitPathsParams>(params, "git.stage") {
+        Ok(params) => params,
+        Err(error) => return ResponseEnvelope::error(request_id, error),
+    };
+    if let Err(error) = validate_repository_id(&params.repository_id)
+        .and_then(|_| validate_git_paths(&params.paths))
+    {
+        return ResponseEnvelope::error(request_id, error);
+    }
+
+    let repository_id = params.repository_id.clone();
+    let paths = params.paths;
+    match run_git_action(state, &repository_id, move |root| run_stage(root, &paths)).await {
+        Ok((repository, snapshot, _)) => response_success(
+            request_id,
+            GitStageResult { repository, snapshot },
+        ),
+        Err(error) => ResponseEnvelope::error(request_id, error),
+    }
+}
+
+async fn git_unstage(request_id: String, params: Value, state: &ServerState) -> ResponseEnvelope {
+    let params = match parse_params::<GitPathsParams>(params, "git.unstage") {
+        Ok(params) => params,
+        Err(error) => return ResponseEnvelope::error(request_id, error),
+    };
+    if let Err(error) = validate_repository_id(&params.repository_id)
+        .and_then(|_| validate_git_paths(&params.paths))
+    {
+        return ResponseEnvelope::error(request_id, error);
+    }
+
+    let repository_id = params.repository_id.clone();
+    let paths = params.paths;
+    match run_git_action(state, &repository_id, move |root| run_unstage(root, &paths)).await {
+        Ok((repository, snapshot, _)) => response_success(
+            request_id,
+            GitUnstageResult { repository, snapshot },
+        ),
+        Err(error) => ResponseEnvelope::error(request_id, error),
+    }
+}
+
+async fn git_commit(request_id: String, params: Value, state: &ServerState) -> ResponseEnvelope {
+    let params = match parse_params::<GitCommitParams>(params, "git.commit") {
+        Ok(params) => params,
+        Err(error) => return ResponseEnvelope::error(request_id, error),
+    };
+    if let Err(error) = validate_repository_id(&params.repository_id)
+        .and_then(|_| validate_commit_text(&params.summary, "summary", 4096))
+        .and_then(|_| {
+            params
+                .description
+                .as_deref()
+                .map(|description| validate_optional_text(description, "description", 64 * 1024))
+                .unwrap_or(Ok(()))
+        })
+    {
+        return ResponseEnvelope::error(request_id, error);
+    }
+
+    let repository_id = params.repository_id.clone();
+    let message = build_commit_message(&params.summary, params.description.as_deref());
+    match run_git_action(state, &repository_id, move |root| run_commit(root, &message)).await {
+        Ok((repository, snapshot, _)) => {
+            let Some(commit_hash) = snapshot.status.head_oid.clone() else {
+                return git_failure(request_id, "commit completed without a new HEAD");
+            };
+            response_success(
+                request_id,
+                GitCommitResult {
+                    repository,
+                    snapshot,
+                    commit_hash,
+                },
+            )
+        }
+        Err(error) => ResponseEnvelope::error(request_id, error),
+    }
+}
+
+async fn git_fetch(request_id: String, params: Value, state: &ServerState) -> ResponseEnvelope {
+    git_repository_action(request_id, params, state, "git.fetch", run_fetch, |repository, snapshot| {
+        GitFetchResult { repository, snapshot }
+    })
+    .await
+}
+
+async fn git_pull(request_id: String, params: Value, state: &ServerState) -> ResponseEnvelope {
+    git_repository_action(request_id, params, state, "git.pull", run_pull, |repository, snapshot| {
+        GitPullResult { repository, snapshot }
+    })
+    .await
+}
+
+async fn git_push(request_id: String, params: Value, state: &ServerState) -> ResponseEnvelope {
+    git_repository_action(request_id, params, state, "git.push", run_push, |repository, snapshot| {
+        GitPushResult { repository, snapshot }
+    })
+    .await
+}
+
+async fn git_repository_action<T, F, R>(
+    request_id: String,
+    params: Value,
+    state: &ServerState,
+    method: &str,
+    operation: F,
+    result: R,
+) -> ResponseEnvelope
+where
+    F: FnOnce(&str) -> Result<(), GitError> + Send + 'static,
+    R: FnOnce(RepositorySummary, RepositorySnapshot) -> T,
+    T: Serialize,
+{
+    let params = match parse_params::<GitRepositoryParams>(params, method) {
+        Ok(params) => params,
+        Err(error) => return ResponseEnvelope::error(request_id, error),
+    };
+    if let Err(error) = validate_repository_id(&params.repository_id) {
+        return ResponseEnvelope::error(request_id, error);
+    }
+
+    match run_git_action(state, &params.repository_id, operation).await {
+        Ok((repository, snapshot, _)) => response_success(request_id, result(repository, snapshot)),
+        Err(error) => ResponseEnvelope::error(request_id, error),
+    }
+}
+
+async fn git_branch_list(
     request_id: String,
     params: Value,
     state: &ServerState,
 ) -> ResponseEnvelope {
-    let params = match parse_params::<CommitFilesParams>(params, "vcs.commit_files") {
+    let params = match parse_params::<GitBranchListParams>(params, "git.branch.list") {
+        Ok(params) => params,
+        Err(error) => return ResponseEnvelope::error(request_id, error),
+    };
+    if let Err(error) = validate_repository_id(&params.repository_id) {
+        return ResponseEnvelope::error(request_id, error);
+    }
+
+    match run_git_action(state, &params.repository_id, |root| list_local_branches(root)).await {
+        Ok((repository, snapshot, names)) => {
+            let current = snapshot.status.current_branch.as_deref();
+            response_success(
+                request_id,
+                GitBranchListResult {
+                    repository,
+                    branches: names
+                        .into_iter()
+                        .map(|name| GitBranch {
+                            current: current == Some(name.as_str()),
+                            name,
+                        })
+                        .collect(),
+                    snapshot,
+                },
+            )
+        }
+        Err(error) => ResponseEnvelope::error(request_id, error),
+    }
+}
+
+async fn git_branch_create(
+    request_id: String,
+    params: Value,
+    state: &ServerState,
+) -> ResponseEnvelope {
+    let params = match parse_params::<GitBranchCreateParams>(params, "git.branch.create") {
+        Ok(params) => params,
+        Err(error) => return ResponseEnvelope::error(request_id, error),
+    };
+    if let Err(error) = validate_repository_id(&params.repository_id)
+        .and_then(|_| validate_branch_argument(&params.name, "name"))
+        .and_then(|_| {
+            params
+                .start_point
+                .as_deref()
+                .map(|start_point| validate_branch_argument(start_point, "startPoint"))
+                .unwrap_or(Ok(()))
+        })
+    {
+        return ResponseEnvelope::error(request_id, error);
+    }
+
+    let repository_id = params.repository_id.clone();
+    let name = params.name;
+    let start_point = params.start_point;
+    let checkout = params.checkout;
+    match run_git_action(state, &repository_id, move |root| {
+        run_create_branch(root, &name, start_point.as_deref(), checkout)
+    })
+    .await
+    {
+        Ok((repository, snapshot, _)) => response_success(
+            request_id,
+            GitBranchCreateResult { repository, snapshot },
+        ),
+        Err(error) => ResponseEnvelope::error(request_id, error),
+    }
+}
+
+async fn git_branch_switch(
+    request_id: String,
+    params: Value,
+    state: &ServerState,
+) -> ResponseEnvelope {
+    let params = match parse_params::<GitBranchSwitchParams>(params, "git.branch.switch") {
+        Ok(params) => params,
+        Err(error) => return ResponseEnvelope::error(request_id, error),
+    };
+    if let Err(error) = validate_repository_id(&params.repository_id)
+        .and_then(|_| validate_branch_argument(&params.name, "name"))
+    {
+        return ResponseEnvelope::error(request_id, error);
+    }
+
+    let repository_id = params.repository_id.clone();
+    let name = params.name;
+    match run_git_action(state, &repository_id, move |root| run_switch_branch(root, &name)).await {
+        Ok((repository, snapshot, _)) => response_success(
+            request_id,
+            GitBranchSwitchResult { repository, snapshot },
+        ),
+        Err(error) => ResponseEnvelope::error(request_id, error),
+    }
+}
+
+async fn git_stash_push(
+    request_id: String,
+    params: Value,
+    state: &ServerState,
+) -> ResponseEnvelope {
+    let params = match parse_params::<GitStashPushParams>(params, "git.stash.push") {
+        Ok(params) => params,
+        Err(error) => return ResponseEnvelope::error(request_id, error),
+    };
+    if let Err(error) = validate_repository_id(&params.repository_id).and_then(|_| {
+        params
+            .message
+            .as_deref()
+            .map(|message| validate_optional_text(message, "message", 4096))
+            .unwrap_or(Ok(()))
+    }) {
+        return ResponseEnvelope::error(request_id, error);
+    }
+
+    let repository_id = params.repository_id.clone();
+    let message = params.message;
+    let include_untracked = params.include_untracked;
+    match run_git_action(state, &repository_id, move |root| {
+        run_stash_push(root, message.as_deref(), include_untracked)
+    })
+    .await
+    {
+        Ok((repository, snapshot, _)) => response_success(
+            request_id,
+            GitStashPushResult { repository, snapshot },
+        ),
+        Err(error) => ResponseEnvelope::error(request_id, error),
+    }
+}
+
+async fn git_stash_pop(
+    request_id: String,
+    params: Value,
+    state: &ServerState,
+) -> ResponseEnvelope {
+    let params = match parse_params::<GitStashPopParams>(params, "git.stash.pop") {
+        Ok(params) => params,
+        Err(error) => return ResponseEnvelope::error(request_id, error),
+    };
+    if let Err(error) = validate_repository_id(&params.repository_id) {
+        return ResponseEnvelope::error(request_id, error);
+    }
+
+    match run_git_action(state, &params.repository_id, run_stash_pop).await {
+        Ok((repository, snapshot, _)) => response_success(
+            request_id,
+            GitStashPopResult { repository, snapshot },
+        ),
+        Err(error) => ResponseEnvelope::error(request_id, error),
+    }
+}
+
+async fn run_git_action<T, F>(
+    state: &ServerState,
+    repository_id: &str,
+    operation: F,
+) -> Result<(RepositorySummary, RepositorySnapshot, T), ProtocolError>
+where
+    T: Send + 'static,
+    F: FnOnce(&str) -> Result<T, GitError> + Send + 'static,
+{
+    let repository = state
+        .repository(repository_id)
+        .await
+        .ok_or_else(|| repository_not_configured_error(repository_id))?;
+    let lock = state.git_mutation_lock(repository_id).await;
+    let _guard = lock.lock().await;
+    let operation_path = repository.operation_path.clone();
+    let value = spawn_blocking(move || operation(&operation_path))
+        .await
+        .map_err(|error| {
+            warn!(error = %error, "Git operation worker failed");
+            git_failure_error("Git operation worker failed")
+        })?
+        .map_err(|error| {
+            warn!(error = %error.message, "Git mutation failed");
+            git_failure_error("Git operation failed")
+        })?;
+    let snapshot_repository = repository.clone();
+    let snapshot = spawn_blocking(move || load_snapshot(&snapshot_repository))
+        .await
+        .map_err(|error| {
+            warn!(error = %error, "repository refresh worker failed");
+            git_failure_error("repository snapshot refresh failed")
+        })?
+        .map_err(|error| match error {
+            RepositoryLoadError::NotFound => repository_not_found_error(),
+            RepositoryLoadError::Git(error) => {
+                warn!(error = %error.message, "Git snapshot refresh failed");
+                git_failure_error("repository snapshot could not be refreshed")
+            }
+        })?;
+    Ok((repository.summary, snapshot, value))
+}
+
+async fn git_commit_files(
+    request_id: String,
+    params: Value,
+    state: &ServerState,
+) -> ResponseEnvelope {
+    let params = match parse_params::<CommitFilesParams>(params, "git.commit_files") {
         Ok(params) => params,
         Err(error) => return ResponseEnvelope::error(request_id, error),
     };
@@ -897,13 +1256,13 @@ async fn vcs_commit_files(
     }
 }
 
-async fn vcs_commit_file_diff(
+async fn git_commit_file_diff(
     request_id: String,
     params: Value,
     state: &ServerState,
 ) -> ResponseEnvelope {
     let params =
-        match parse_params::<gitgui_protocol::CommitFileDiffParams>(params, "vcs.commit_file_diff")
+        match parse_params::<gitgui_protocol::CommitFileDiffParams>(params, "git.commit_file_diff")
         {
             Ok(params) => params,
             Err(error) => return ResponseEnvelope::error(request_id, error),
@@ -967,14 +1326,14 @@ async fn vcs_commit_file_diff(
     }
 }
 
-async fn vcs_working_tree_file_diff(
+async fn git_working_tree_file_diff(
     request_id: String,
     params: Value,
     state: &ServerState,
 ) -> ResponseEnvelope {
     let params = match parse_params::<gitgui_protocol::WorkingTreeFileDiffParams>(
         params,
-        "vcs.working_tree_file_diff",
+        "git.working_tree_file_diff",
     ) {
         Ok(params) => params,
         Err(error) => return ResponseEnvelope::error(request_id, error),
@@ -1035,13 +1394,13 @@ async fn vcs_working_tree_file_diff(
     }
 }
 
-async fn vcs_prefetch_commit_files(
+async fn git_prefetch_commit_files(
     request_id: String,
     params: Value,
     state: &ServerState,
 ) -> ResponseEnvelope {
     let params =
-        match parse_params::<PrefetchCommitFilesParams>(params, "vcs.prefetch_commit_files") {
+        match parse_params::<PrefetchCommitFilesParams>(params, "git.prefetch_commit_files") {
             Ok(params) => params,
             Err(error) => return ResponseEnvelope::error(request_id, error),
         };
@@ -1088,13 +1447,13 @@ async fn vcs_prefetch_commit_files(
     }
 }
 
-async fn vcs_prefetch_commit_diffs(
+async fn git_prefetch_commit_diffs(
     request_id: String,
     params: Value,
     state: &ServerState,
 ) -> ResponseEnvelope {
     let params =
-        match parse_params::<PrefetchCommitDiffsParams>(params, "vcs.prefetch_commit_diffs") {
+        match parse_params::<PrefetchCommitDiffsParams>(params, "git.prefetch_commit_diffs") {
             Ok(params) => params,
             Err(error) => return ResponseEnvelope::error(request_id, error),
         };
@@ -1202,9 +1561,10 @@ fn validate_relative_file_path(path: &str) -> Result<(), ProtocolError> {
         || path.starts_with('\\')
         || path.as_bytes().get(1).is_some_and(|byte| *byte == b':');
     let has_parent_segment = path.split(['/', '\\']).any(|segment| segment == "..");
-    if path.contains('\0')
+    if path.bytes().any(|byte| byte.is_ascii_control())
         || has_cross_platform_prefix
         || has_parent_segment
+        || path.split(['/', '\\']).any(|segment| segment == ".git")
         || path_object.components().any(|component| {
             matches!(
                 component,
@@ -1218,6 +1578,67 @@ fn validate_relative_file_path(path: &str) -> Result<(), ProtocolError> {
         ));
     }
     Ok(())
+}
+
+fn validate_git_paths(paths: &[String]) -> Result<(), ProtocolError> {
+    if paths.len() > 4096 {
+        return Err(ProtocolError::new(
+            error_codes::INVALID_PARAMS,
+            "paths contains too many entries",
+        ));
+    }
+    for path in paths {
+        validate_relative_file_path(path)?;
+    }
+    Ok(())
+}
+
+fn validate_commit_text(value: &str, field: &str, max_length: usize) -> Result<(), ProtocolError> {
+    if value.trim().is_empty() || value.len() > max_length || value.bytes().any(|byte| byte == 0) {
+        return Err(ProtocolError::new(
+            error_codes::INVALID_PARAMS,
+            format!("{field} must be non-empty and no longer than {max_length} bytes"),
+        ));
+    }
+    if value.contains('\r') || value.contains('\n') {
+        return Err(ProtocolError::new(
+            error_codes::INVALID_PARAMS,
+            format!("{field} must be a single line"),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_optional_text(value: &str, field: &str, max_length: usize) -> Result<(), ProtocolError> {
+    if value.len() > max_length || value.bytes().any(|byte| byte == 0) {
+        return Err(ProtocolError::new(
+            error_codes::INVALID_PARAMS,
+            format!("{field} is too long or contains invalid characters"),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_branch_argument(value: &str, field: &str) -> Result<(), ProtocolError> {
+    if value.trim().is_empty()
+        || value.len() > 1024
+        || value.starts_with('-')
+        || value.bytes().any(|byte| byte.is_ascii_control())
+    {
+        return Err(ProtocolError::new(
+            error_codes::INVALID_PARAMS,
+            format!("{field} is not a valid Git reference argument"),
+        ));
+    }
+    Ok(())
+}
+
+fn build_commit_message(summary: &str, description: Option<&str>) -> String {
+    let summary = summary.trim();
+    match description.map(str::trim).filter(|description| !description.is_empty()) {
+        Some(description) => format!("{summary}\n\n{description}\n"),
+        None => format!("{summary}\n"),
+    }
 }
 
 fn invalid_params(request_id: String, message: &str) -> ResponseEnvelope {
@@ -1283,6 +1704,7 @@ struct ServerState {
     lifecycle: RwLock<ServerLifecycle>,
     repositories: RwLock<Vec<ConfiguredRepository>>,
     catalog_mutation: Mutex<()>,
+    git_mutation_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
     data_dir: Option<PathBuf>,
     cache: SharedCommitFilesCache,
     bootstrap_token: Option<String>,
@@ -1348,6 +1770,7 @@ impl ServerState {
             lifecycle: RwLock::new(ServerLifecycle::Ready),
             repositories: RwLock::new(repositories),
             catalog_mutation: Mutex::new(()),
+            git_mutation_locks: Mutex::new(HashMap::new()),
             data_dir: config.data_dir.clone(),
             cache: SharedCommitFilesCache::default(),
             bootstrap_token: config
@@ -1383,6 +1806,14 @@ impl ServerState {
             .iter()
             .find(|repository| repository.summary.id == id)
             .cloned()
+    }
+
+    async fn git_mutation_lock(&self, id: &str) -> Arc<Mutex<()>> {
+        let mut locks = self.git_mutation_locks.lock().await;
+        locks
+            .entry(id.to_string())
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone()
     }
 
     async fn upsert_repository(
@@ -1839,12 +2270,23 @@ fn implemented_capabilities() -> Vec<String> {
         CAPABILITY_REPOSITORIES_OPEN,
         CAPABILITY_REPOSITORIES_GET_SNAPSHOT,
         CAPABILITY_REPOSITORIES_REFRESH,
-        CAPABILITY_VCS_STATUS,
-        CAPABILITY_VCS_COMMIT_FILES,
-        CAPABILITY_VCS_COMMIT_FILE_DIFF,
-        CAPABILITY_VCS_WORKING_TREE_FILE_DIFF,
-        CAPABILITY_VCS_PREFETCH_COMMIT_FILES,
-        CAPABILITY_VCS_PREFETCH_COMMIT_DIFFS,
+        CAPABILITY_GIT_STATUS,
+        CAPABILITY_GIT_COMMIT_FILES,
+        CAPABILITY_GIT_COMMIT_FILE_DIFF,
+        CAPABILITY_GIT_WORKING_TREE_FILE_DIFF,
+        CAPABILITY_GIT_PREFETCH_COMMIT_FILES,
+        CAPABILITY_GIT_PREFETCH_COMMIT_DIFFS,
+        CAPABILITY_GIT_STAGE,
+        CAPABILITY_GIT_UNSTAGE,
+        CAPABILITY_GIT_COMMIT,
+        CAPABILITY_GIT_FETCH,
+        CAPABILITY_GIT_PULL,
+        CAPABILITY_GIT_PUSH,
+        CAPABILITY_GIT_BRANCH_LIST,
+        CAPABILITY_GIT_BRANCH_CREATE,
+        CAPABILITY_GIT_BRANCH_SWITCH,
+        CAPABILITY_GIT_STASH_PUSH,
+        CAPABILITY_GIT_STASH_POP,
     ]
     .into_iter()
     .map(str::to_string)

@@ -23,3 +23,19 @@ This keeps graph algorithms close to parsed repository data and allows the Svelt
 GitGui's commit graph should match Gitamine's graph behavior as closely as practical, including ordering, lane assignment, lane reuse, and merge edge routing semantics.
 
 GitGui's visual layer may differ to fit this application's Svelte/Tauri interface.
+
+## ADR-005: Roll Out Git Mutations in Two Stages
+
+The initial Git mutation flow will focus on staging, un-staging, commit
+creation, fetch, pull, push, branch switching/creation, and stash/pop.
+
+The following features are deferred until that basic flow is reliable:
+
+- Amend commits
+- Interactive or partial staging
+- Stash apply and stash drop
+- Branch deletion
+- Progress streaming for long-running Git commands
+
+This keeps the first protocol and UI surface focused while leaving room for
+more advanced Git workflows later.
