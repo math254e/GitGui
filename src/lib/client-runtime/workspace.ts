@@ -391,7 +391,10 @@ export class ClientWorkspace {
       .catch(() => undefined)
       .then(operation)
       .finally(() => {
-        if (this.stateOperation === current) release();
+        // Every queued operation must release the promise that represents it.
+        // A later operation may already have replaced `stateOperation`, but it
+        // still waits on this operation's promise before it can start.
+        release();
       });
   }
 
