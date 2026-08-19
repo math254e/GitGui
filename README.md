@@ -20,6 +20,8 @@ SvelteKit UI (Tauri webview or browser)
 
 The Rust server can serve the compiled SvelteKit application alongside its API and WebSocket. This gives GitGui the same local-web shape as T3 Code: one process and one origin for the browser UI and the machine-local Git host. The Tauri desktop app still uses the same server as its local backend.
 
+The server-owned repository catalog is persisted when the server is started with `--data-dir` (the desktop app configures this automatically). Every client connected to that server sees the same catalog on the home page. Open repository tabs and their active selection remain client-local.
+
 To run the complete desktop app, use the single development command:
 
 ```text
@@ -46,7 +48,7 @@ The current application implements the repository viewer foundation:
 
 - Open a repository by path
 - Open repositories with the native folder picker
-- Restore open repositories and recent repositories
+- Restore open repository tabs per client
 - Detect the repository root
 - Show the current branch and ahead/behind counts
 - Show changed files from `git status --porcelain=v2 --branch`

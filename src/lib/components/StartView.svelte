@@ -1,38 +1,35 @@
 <script lang="ts">
-  import { CloudDownload, FolderOpen, PlusSquare, Search, X } from "@lucide/svelte";
-  import type { RepositorySnapshot } from "$lib/types/repository";
+  import { CloudDownload, FolderOpen, PlusSquare, Search } from "@lucide/svelte";
 
-  type RecentRepo = {
+  type Repository = {
+    repositoryId: string;
     root: string;
     title: string;
-    snapshot?: RepositorySnapshot;
   };
 
   type Props = {
-    recentRepos: RecentRepo[];
+    repositories: Repository[];
     loading: boolean;
     error: string;
     connectionError?: boolean;
     onChooseRepository: () => void;
-    onOpenRecent: (path: string) => void;
-    onRemoveRecent: (path: string) => void;
+    onOpenRepository: (repositoryId: string) => void;
     onRetryConnection?: () => void;
   };
 
   let {
-    recentRepos,
+    repositories,
     loading,
     error,
     connectionError = false,
     onChooseRepository,
-    onOpenRecent,
-    onRemoveRecent,
+    onOpenRepository,
     onRetryConnection,
   }: Props = $props();
 
   let search = $state("");
   const filteredRepos = $derived(
-    recentRepos.filter((repo) => {
+    repositories.filter((repo) => {
       const query = search.trim().toLowerCase();
 
       if (!query) {
@@ -110,41 +107,29 @@
     {/if}
 
     <section class="mt-6">
-      <h2 class="mb-2 text-[18px] font-medium text-[var(--app-theme-text)]">Recent</h2>
+      <h2 class="mb-2 text-[18px] font-medium text-[var(--app-theme-text)]">All repositories</h2>
 
       {#if filteredRepos.length}
         <ul class="space-y-1">
-          {#each filteredRepos as repo (repo.root)}
+          {#each filteredRepos as repo (repo.repositoryId)}
             <li>
-              <div class="group grid min-w-0 grid-cols-[1fr_auto] items-center gap-2 transition hover:bg-[var(--app-theme-sidebar-row-hover)]">
+              <div class="grid min-w-0 grid-cols-[1fr] items-center gap-2 transition hover:bg-[var(--app-theme-sidebar-row-hover)]">
                 <button
                   class="grid min-w-0 grid-cols-[minmax(0,auto)_1fr] items-baseline gap-4 py-0.5 text-left leading-6"
                   type="button"
-                  onclick={() => onOpenRecent(repo.root)}
+                  onclick={() => onOpenRepository(repo.repositoryId)}
                 >
                   <span class="truncate text-[18px] font-semibold text-[var(--app-theme-accent)]">{repo.title}</span>
                   <span class="truncate text-[18px] font-medium text-[var(--app-theme-text-muted)]">{repo.root}</span>
-                </button>
-                <button
-                  class="mr-1 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-[var(--app-theme-text-subtle)] opacity-0 transition hover:bg-[var(--app-theme-control-hover)] hover:text-[var(--app-theme-text)] focus:opacity-100 group-hover:opacity-100"
-                  type="button"
-                  aria-label={`Remove ${repo.title} from recent repositories`}
-                  title={`Remove ${repo.title}`}
-                  onclick={(event) => {
-                    event.stopPropagation();
-                    onRemoveRecent(repo.root);
-                  }}
-                >
-                  <X aria-hidden="true" size={14} />
                 </button>
               </div>
             </li>
           {/each}
         </ul>
-      {:else if recentRepos.length}
+      {:else if repositories.length}
         <p class="py-1 text-[17px] text-[var(--app-theme-text-subtle)]">No repositories match your search.</p>
       {:else}
-        <p class="py-1 text-[17px] text-[var(--app-theme-text-subtle)]">Recently opened repositories will appear here.</p>
+        <p class="py-1 text-[17px] text-[var(--app-theme-text-subtle)]">No repositories are configured on this server.</p>
       {/if}
     </section>
   </div>

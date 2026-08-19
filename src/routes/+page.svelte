@@ -40,11 +40,10 @@
     selectedGraphItem: SelectedGraphItem | null;
     selectedFile: CommitFile | null;
   };
-  type RecentRepo = {
+  type RepositoryListItem = {
     repositoryId: string;
     root: string;
     title: string;
-    snapshot?: RepositorySnapshot;
   };
   type LocalServerConnection = {
     httpUrl: string;
@@ -78,7 +77,6 @@
   let activeView = $state<ActiveView>("start");
   let activeRepoId = $state<string | null>(null);
   let openRepos = $state<WorkspaceRepo[]>([]);
-  let recentRepos = $state<RecentRepo[]>([]);
   let repositoryCatalog = $state<RepositorySummary[]>([]);
   let workspaceState = $state<ClientWorkspaceState | null>(null);
   let gitClient = $state<GitGuiClient | null>(null);
@@ -476,13 +474,8 @@
     });
   }
 
-  async function openRecentRepository(root: string) {
-    const repository = findRepositoryByPath(root);
-    await runWorkspaceCommand(() =>
-      repository
-        ? requireWorkspace().openKnownRepository(repository.id)
-        : requireWorkspace().openRepositoryPath(root),
-    );
+  async function openRepository(repositoryId: string) {
+    await runWorkspaceCommand(() => requireWorkspace().openKnownRepository(repositoryId));
   }
 
   async function selectRepo(repoId: string) {
@@ -495,20 +488,6 @@
 
     if (wasVisibleActive) {
       activeView = activeRepoId ? "repo" : "start";
-    }
-  }
-
-  async function removeRecentRepo(root: string) {
-    const repository = findRepositoryByPath(root);
-
-    if (!repository) {
-      return;
-    }
-
-    await runWorkspaceCommand(() => requireWorkspace().removeRecentRepository(repository.id));
-
-    if (!activeRepoId) {
-      activeView = "start";
     }
   }
 
@@ -544,17 +523,6 @@
     const previousRepos = openRepos;
     repositoryCatalog = mergeRepositoryCatalog(repositoryCatalog, state);
     activeRepoId = state.activeRepositoryId;
-    recentRepos = state.recentRepositories.flatMap((recent) => {
-      const repository = repositoryCatalog.find((candidate) => candidate.id === recent.repositoryId);
-
-      return repository
-        ? [{
-            repositoryId: repository.id,
-            root: repository.root,
-            title: repositoryTitle(repository),
-          }]
-        : [];
-    });
     openRepos = state.openRepositoryIds.flatMap((repositoryId) => {
       const repositoryState = state.repositories[repositoryId];
 
@@ -672,12 +640,6 @@
     return clientWorkspace;
   }
 
-  function findRepositoryByPath(path: string) {
-    return repositoryCatalog.find(
-      (repository) => pathsEqual(repository.path, path) || pathsEqual(repository.root, path),
-    );
-  }
-
   function mergeRepositoryCatalog(
     repositories: RepositorySummary[],
     state: ClientWorkspaceState | null,
@@ -697,13 +659,13 @@
     return normalizedRoot.slice(separator + 1) || repository.root;
   }
 
-  function pathsEqual(left: string, right: string) {
-    return normalizePath(left) === normalizePath(right);
-  }
-
-  function normalizePath(path: string) {
-    return path.replace(/[\\/]+$/, "").toLowerCase();
-  }
+  const homeRepositories = $derived<RepositoryListItem[]>(
+    repositoryCatalog.map((repository) => ({
+      repositoryId: repository.id,
+      root: repository.root,
+      title: repositoryTitle(repository),
+    })),
+  );
 
   function initialGraphSelection(nextSnapshot: RepositorySnapshot): SelectedGraphItem | null {
     if (nextSnapshot.status.changedFiles.length) {
@@ -997,13 +959,12 @@
       <SettingsView />
     {:else if activeView === "start" || !activeRepo}
       <StartView
-        recentRepos={recentRepos}
+        repositories={homeRepositories}
         {loading}
         error={startError}
         {connectionError}
         onChooseRepository={chooseRepository}
-        onOpenRecent={openRecentRepository}
-        onRemoveRecent={removeRecentRepo}
+        onOpenRepository={openRepository}
         onRetryConnection={retryLocalConnection}
       />
     {:else}
