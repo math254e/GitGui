@@ -1,33 +1,40 @@
 <script lang="ts">
   import { ChevronRight } from "@lucide/svelte";
-  import type { ChangedFile, RepositorySnapshot, StashInfo } from "$lib/types/repository";
+  import BranchTree from "$lib/components/BranchTree.svelte";
+  import type { CommitRef, RepositorySnapshot, StashInfo } from "$lib/types/repository";
 
   type Props = {
     snapshot: RepositorySnapshot | null;
+    stateKey: string | null;
+    onSelectRef?: (ref: CommitRef) => void;
   };
 
-  let { snapshot }: Props = $props();
+  type SidebarSections = {
+    LocalBranches: boolean;
+    RemoteBranches: boolean;
+    Stashes: boolean;
+  };
 
-  const emptyItems = ["No repository loaded"];
-
-  let open = $state({
+  const sidebarStateStoragePrefix = "gitgui.sidebarSections.v1";
+  const defaultOpen: SidebarSections = {
     LocalBranches: true,
     RemoteBranches: true,
-    ChangedFiles: false,
     Stashes: false,
-  });
+  };
+
+  let { snapshot, stateKey, onSelectRef }: Props = $props();
+
+  let open = $state<SidebarSections>({ ...defaultOpen });
+  let loadedStateKey = $state<string | null | undefined>(undefined);
+  let selectedRefKey = $state<string | null>(null);
+  let selectionRevision = $state(0);
+
+  const localBranches = $derived(snapshot?.refs.filter((ref) => ref.refType === "localBranch") ?? []);
+  const remoteBranches = $derived(snapshot?.refs.filter((ref) => ref.refType === "remoteBranch") ?? []);
 
   function toggle(section: keyof typeof open) {
     open[section] = !open[section];
-  }
-
-  function changedFileKey(file: ChangedFile) {
-    return `${file.path}\0${file.originalPath ?? ""}\0${file.indexStatus}${file.worktreeStatus}`;
-  }
-
-  function changedFileTitle(file: ChangedFile) {
-    const status = `${file.indexStatus}${file.worktreeStatus}`;
-    return file.originalPath ? `${status}: ${file.originalPath} -> ${file.path}` : `${status}: ${file.path}`;
+    persistOpenState();
   }
 
   function stashKey(stash: StashInfo) {
@@ -38,15 +45,80 @@
     const branch = stash.branch ? ` on ${stash.branch}` : "";
     return `${stash.selector}${branch}: ${stash.message}\nBase: ${stash.baseHash}`;
   }
+
+  $effect(() => {
+    if (stateKey === loadedStateKey) {
+      return;
+    }
+
+    loadedStateKey = stateKey;
+    open = stateKey ? readOpenState(stateKey) : { ...defaultOpen };
+    selectedRefKey = null;
+    selectionRevision += 1;
+  });
+
+  function handleSelectRef(ref: CommitRef) {
+    const nextSelectionKey = refSelectionKey(ref);
+    if (nextSelectionKey !== selectedRefKey) {
+      selectedRefKey = nextSelectionKey;
+      selectionRevision += 1;
+    }
+    onSelectRef?.(ref);
+  }
+
+  function refSelectionKey(ref: CommitRef) {
+    return `${ref.refType}:${ref.shortName}`;
+  }
+
+  function storageKey(key: string) {
+    return `${sidebarStateStoragePrefix}:${encodeURIComponent(key)}`;
+  }
+
+  function readOpenState(key: string): SidebarSections {
+    const fallback = { ...defaultOpen };
+
+    try {
+      const stored = localStorage.getItem(storageKey(key));
+      if (!stored) {
+        return fallback;
+      }
+
+      const parsed: unknown = JSON.parse(stored);
+      if (!parsed || typeof parsed !== "object") {
+        return fallback;
+      }
+
+      const value = parsed as Partial<Record<keyof SidebarSections, unknown>>;
+      return {
+        LocalBranches: typeof value.LocalBranches === "boolean" ? value.LocalBranches : fallback.LocalBranches,
+        RemoteBranches: typeof value.RemoteBranches === "boolean" ? value.RemoteBranches : fallback.RemoteBranches,
+        Stashes: typeof value.Stashes === "boolean" ? value.Stashes : fallback.Stashes,
+      };
+    } catch {
+      return fallback;
+    }
+  }
+
+  function persistOpenState() {
+    if (!stateKey) {
+      return;
+    }
+
+    try {
+      localStorage.setItem(storageKey(stateKey), JSON.stringify(open));
+    } catch {
+      // Sidebar preferences are best-effort and must not affect repository UI.
+    }
+  }
 </script>
 
 <aside class="min-h-0 border-r border-[var(--app-theme-sidebar-border)] bg-[var(--app-theme-sidebar)]">
-  <div class="flex h-full flex-col overflow-auto px-4 pt-5 pb-2">
-    <section class={`flex min-h-0 flex-col ${open.LocalBranches ? 'flex-1' : 'flex-none'}`}>
+  <div class="flex h-full flex-col overflow-auto px-2 pt-1 pb-1">
+    <section class={`flex min-h-0 flex-col border-b border-[var(--app-theme-sidebar-border)] py-2 first:pt-2 last:border-b-0 ${open.LocalBranches ? 'flex-1' : 'flex-none'}`}>
       <button
         type="button"
         onclick={() => toggle("LocalBranches")}
-        class="group mb-3 inline-flex items-center gap-1 text-xs font-bold uppercase text-[var(--app-theme-sidebar-muted-foreground)] transition-colors hover:text-[var(--app-theme-accent-surface-foreground)]"
+        class="group mb-1 inline-flex items-center gap-1 text-xs font-bold uppercase text-[var(--app-theme-sidebar-muted-foreground)] transition-colors hover:text-[var(--app-theme-accent-surface-foreground)]"
       >
         <ChevronRight
           aria-hidden="true"
@@ -54,30 +126,32 @@
           strokeWidth={2.5}
           class={`shrink-0 origin-center transition-transform duration-200 ${open.LocalBranches ? 'rotate-90' : 'rotate-0'}`}
         />
-        <span>Local branches</span>
+        <span>Local branches {snapshot ? `(${localBranches.length})` : ""}</span>
       </button>
       {#if open.LocalBranches}
         <div class="min-h-0 flex-1 overflow-auto">
-          <ul class="space-y-1">
-            {#if snapshot?.status.currentBranch}
-              <li class="rounded-md bg-[var(--app-theme-sidebar-row-active)] px-3 py-2 text-sm font-semibold text-[var(--app-theme-accent-surface-foreground)]">
-                {snapshot.status.currentBranch}
-              </li>
-            {:else}
-              {#each emptyItems as item (item)}
-                <li class="px-3 py-2 text-sm text-[var(--app-theme-text-subtle)]">{item}</li>
-              {/each}
-            {/if}
-          </ul>
+          {#if localBranches.length}
+            <BranchTree
+              refs={localBranches}
+              refType="localBranch"
+              treeId="gitgui-local-branches"
+              currentBranch={snapshot?.status.currentBranch}
+              selectedRefKey={selectedRefKey}
+              selectionRevision={selectionRevision}
+              onSelectRef={handleSelectRef}
+            />
+          {:else}
+            <p class="px-2 py-1 text-sm text-[var(--app-theme-text-subtle)]">No local branches.</p>
+          {/if}
         </div>
       {/if}
     </section>
 
-    <section class={`flex min-h-0 flex-col ${open.RemoteBranches ? 'flex-1' : 'flex-none'}`}>
+    <section class={`flex min-h-0 flex-col border-b border-[var(--app-theme-sidebar-border)] py-2 last:border-b-0 ${open.RemoteBranches ? 'flex-1' : 'flex-none'}`}>
       <button
         type="button"
         onclick={() => toggle("RemoteBranches")}
-        class="group mb-3 inline-flex items-center gap-1 text-xs font-bold uppercase text-[var(--app-theme-sidebar-muted-foreground)] transition-colors hover:text-[var(--app-theme-accent-surface-foreground)]"
+        class="group mb-1 inline-flex items-center gap-1 text-xs font-bold uppercase text-[var(--app-theme-sidebar-muted-foreground)] transition-colors hover:text-[var(--app-theme-accent-surface-foreground)]"
       >
         <ChevronRight
           aria-hidden="true"
@@ -85,55 +159,31 @@
           strokeWidth={2.5}
           class={`shrink-0 origin-center transition-transform duration-200 ${open.RemoteBranches ? 'rotate-90' : 'rotate-0'}`}
         />
-        <span>Remote branches</span>
+        <span>Remote branches {snapshot ? `(${remoteBranches.length})` : ""}</span>
       </button>
       {#if open.RemoteBranches}
         <div class="min-h-0 flex-1 overflow-auto">
-          <p class="px-3 py-2 text-sm text-[var(--app-theme-text-subtle)]">Remote refs are planned.</p>
-        </div>
-      {/if}
-    </section>
-
-    <section class={`flex min-h-0 flex-col ${open.ChangedFiles ? 'flex-1' : 'flex-none'}`}>
-      <button
-        type="button"
-        onclick={() => toggle("ChangedFiles")}
-        class="group mb-3 inline-flex items-center gap-1 text-xs font-bold uppercase text-[var(--app-theme-sidebar-muted-foreground)] transition-colors hover:text-[var(--app-theme-accent-surface-foreground)]"
-      >
-        <ChevronRight
-          aria-hidden="true"
-          size={14}
-          strokeWidth={2.5}
-          class={`shrink-0 origin-center transition-transform duration-200 ${open.ChangedFiles ? 'rotate-90' : 'rotate-0'}`}
-        />
-        <span>Changed files</span>
-      </button>
-      {#if open.ChangedFiles}
-        <div class="min-h-0 flex-1 overflow-auto">
-          {#if snapshot?.status.changedFiles.length}
-            <ul class="space-y-1">
-              {#each snapshot.status.changedFiles as file (changedFileKey(file))}
-                <li
-                  class="flex min-w-0 items-center gap-2 rounded-md px-3 py-2 text-sm text-[var(--app-theme-sidebar-foreground)] hover:bg-[var(--app-theme-sidebar-row-hover)]"
-                  title={changedFileTitle(file)}
-                >
-                  <code class="shrink-0 font-mono text-xs text-[var(--app-theme-accent)]">{file.indexStatus}{file.worktreeStatus}</code>
-                  <span class="truncate">{file.path}</span>
-                </li>
-              {/each}
-            </ul>
+          {#if remoteBranches.length}
+            <BranchTree
+              refs={remoteBranches}
+              refType="remoteBranch"
+              treeId="gitgui-remote-branches"
+              selectedRefKey={selectedRefKey}
+              selectionRevision={selectionRevision}
+              onSelectRef={handleSelectRef}
+            />
           {:else}
-            <p class="px-3 py-2 text-sm text-[var(--app-theme-text-subtle)]">Working tree is clean.</p>
+            <p class="px-2 py-1 text-sm text-[var(--app-theme-text-subtle)]">No remote branches.</p>
           {/if}
         </div>
       {/if}
     </section>
 
-    <section class={`flex min-h-0 flex-col ${open.Stashes ? 'flex-1' : 'flex-none'}`}>
+    <section class={`flex min-h-0 flex-col border-b border-[var(--app-theme-sidebar-border)] py-2 last:border-b-0 ${open.Stashes ? 'flex-1' : 'flex-none'}`}>
       <button
         type="button"
         onclick={() => toggle("Stashes")}
-        class="group mb-3 inline-flex items-center gap-1 text-xs font-bold uppercase text-[var(--app-theme-sidebar-muted-foreground)] transition-colors hover:text-[var(--app-theme-accent-surface-foreground)]"
+        class="group mb-1 inline-flex items-center gap-1 text-xs font-bold uppercase text-[var(--app-theme-sidebar-muted-foreground)] transition-colors hover:text-[var(--app-theme-accent-surface-foreground)]"
       >
         <ChevronRight
           aria-hidden="true"
@@ -149,7 +199,7 @@
             <ul class="space-y-1">
               {#each snapshot.stashes ?? [] as stash (stashKey(stash))}
                 <li
-                  class="min-w-0 rounded-md px-3 py-2 text-sm text-[var(--app-theme-sidebar-foreground)] hover:bg-[var(--app-theme-sidebar-row-hover)]"
+                  class="min-w-0 rounded-md px-2 py-1 text-sm text-[var(--app-theme-sidebar-foreground)] hover:bg-[var(--app-theme-sidebar-row-hover)]"
                   title={stashTitle(stash)}
                 >
                   <div class="flex min-w-0 items-center gap-2">
@@ -163,7 +213,7 @@
               {/each}
             </ul>
           {:else}
-            <p class="px-3 py-2 text-sm text-[var(--app-theme-text-subtle)]">No stashes.</p>
+            <p class="px-2 py-1 text-sm text-[var(--app-theme-text-subtle)]">No stashes.</p>
           {/if}
         </div>
       {/if}

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { Cloud, Monitor } from "@lucide/svelte";
-  import { onDestroy } from "svelte";
+  import { onDestroy, tick } from "svelte";
   import { drawGitGraphCanvas } from "$lib/git-graph/canvas-renderer";
   import { APP_THEME_VARIABLES, GRAPH_THEME_COLOR_ROLES } from "$lib/theme/types";
   import type { CommitInfo, CommitRef, GraphCommit, RepositorySnapshot, StashInfo } from "$lib/types/repository";
@@ -26,6 +26,7 @@
     snapshot: RepositorySnapshot | null;
     selectedCommit: CommitInfo | null;
     changesSelected: boolean;
+    scrollToCommit: { hash: string; revision: number } | null;
     onSelectChanges: () => void;
     onSelectCommit: (commit: CommitInfo) => void;
   };
@@ -38,7 +39,14 @@
   const lineWidth = 2.5;
   const columnStorageKey = "gitgui.historyColumns.v1";
   const minimumColumnWidth = 24;
-  let { snapshot, selectedCommit, changesSelected, onSelectChanges, onSelectCommit }: Props = $props();
+  let {
+    snapshot,
+    selectedCommit,
+    changesSelected,
+    scrollToCommit,
+    onSelectChanges,
+    onSelectCommit,
+  }: Props = $props();
   let columns = $state<HistoryColumn[]>([
     { id: "branch", label: "Branch", width: 118, visible: true },
     { id: "graph", label: "Graph", width: 92, visible: true },
@@ -148,6 +156,46 @@
   const stashHashes = $derived(
     new Set((snapshot?.stashes ?? []).map((stash) => stash.hash)),
   );
+
+  $effect(() => {
+    const viewport = graphViewport;
+    const targetHash = scrollToCommit?.hash;
+    const targetRevision = scrollToCommit?.revision;
+    const rowCount = graphRows.length;
+
+    if (!viewport || !targetHash || targetRevision === undefined || !rowCount) {
+      return;
+    }
+
+    void tick().then(() => {
+      if (graphViewport !== viewport || scrollToCommit?.revision !== targetRevision) {
+        return;
+      }
+
+      const targetRow = [...viewport.querySelectorAll<HTMLElement>("[data-commit-hash]")].find(
+        (row) => row.dataset.commitHash === targetHash,
+      );
+
+      if (!targetRow) {
+        return;
+      }
+
+      const viewportRect = viewport.getBoundingClientRect();
+      const targetRect = targetRow.getBoundingClientRect();
+      const targetIsInView = targetRect.bottom > viewportRect.top && targetRect.top < viewportRect.bottom;
+
+      if (targetIsInView) {
+        return;
+      }
+
+      const targetTop = targetRect.top - viewportRect.top + viewport.scrollTop;
+      const centeredTop = targetTop - (viewport.clientHeight - targetRow.offsetHeight) / 2;
+      const maximumScrollTop = Math.max(0, viewport.scrollHeight - viewport.clientHeight);
+
+      // Set scrollTop directly so branch navigation is an immediate jump.
+      viewport.scrollTop = Math.max(0, Math.min(centeredTop, maximumScrollTop));
+    });
+  });
 
   $effect(() => {
     const canvas = graphCanvas;
@@ -837,6 +885,7 @@
                 class={`grid w-full items-center border-b border-[var(--app-theme-border)] text-left transition hover:bg-[var(--app-theme-sidebar-row-hover)] focus-visible:outline-2 focus-visible:outline-[var(--app-theme-focus)] ${
                   selectedCommit?.hash === commit.hash ? "bg-[var(--app-theme-accent-surface)]" : "bg-[var(--app-theme-surface)]"
                 }`}
+                data-commit-hash={commit.hash}
                 style={`grid-template-columns: ${gridTemplate}; min-height: ${rowHeight}px;`}
                 type="button"
                 onclick={() => onSelectCommit(commit)}

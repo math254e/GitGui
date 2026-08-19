@@ -20,7 +20,7 @@
   import TopMenu, { type RepoTab } from "$lib/components/TopMenu.svelte";
   import WorkingTreePanel, { type CommitMessageDraft } from "$lib/components/WorkingTreePanel.svelte";
   import type { ChangedFile, RepositorySummary } from "$lib/generated/protocol";
-  import type { CommitFile, CommitInfo, RepositorySnapshot } from "$lib/types/repository";
+  import type { CommitFile, CommitInfo, CommitRef, RepositorySnapshot } from "$lib/types/repository";
 
   type ActiveView = "start" | "repo" | "settings";
   type SelectedGraphItem = { type: "changes" } | { type: "commit"; commit: CommitInfo };
@@ -86,6 +86,7 @@
   let operationPending = $state(false);
   let gitActionPending = $state(false);
   let gitActionError = $state("");
+  let scrollToCommit = $state<{ hash: string; revision: number } | null>(null);
   let largeScreen = $state(false);
   let sidebarWidth = $state(sidebarLimits.default);
   let detailsWidth = $state(detailsLimits.default);
@@ -105,6 +106,9 @@
 
   const activeRepo = $derived(openRepos.find((repo) => repo.id === activeRepoId) ?? null);
   const snapshot = $derived(activeRepo?.snapshot ?? null);
+  const sidebarStateKey = $derived(
+    workspaceState?.environmentId && activeRepoId ? `${workspaceState.environmentId}:${activeRepoId}` : null,
+  );
   const selectedGraphItem = $derived(activeRepo?.selectedGraphItem ?? null);
   const selectedFile = $derived(activeRepo?.selectedFile ?? null);
   const selectedCommit = $derived(
@@ -735,6 +739,17 @@
     }));
   }
 
+  function selectRef(ref: CommitRef) {
+    const commit = snapshot?.commits.find((candidate) => candidate.hash === ref.target);
+    if (commit) {
+      scrollToCommit = {
+        hash: commit.hash,
+        revision: (scrollToCommit?.revision ?? 0) + 1,
+      };
+      selectCommit(commit);
+    }
+  }
+
   async function prefetchCommitDiffs(repositoryId: string, commit: CommitInfo) {
     const parentHash = commit.parents[0] ?? null;
     const signature = `${repositoryId}:${commit.hash}:${parentHash ?? ""}`;
@@ -971,7 +986,7 @@
       {#if !largeScreen}
       <div class="grid h-full min-h-0 grid-cols-1 overflow-hidden">
         {#if snapshot && selectedFile && (selectedCommit || changesSelected)}
-          <Sidebar {snapshot} />
+          <Sidebar {snapshot} stateKey={sidebarStateKey} onSelectRef={selectRef} />
           <div class="h-full min-h-0">
             <CommitFileDiffViewer
               client={gitClient!}
@@ -984,7 +999,7 @@
             />
           </div>
         {:else}
-          <Sidebar {snapshot} />
+          <Sidebar {snapshot} stateKey={sidebarStateKey} onSelectRef={selectRef} />
           <div class="flex min-h-0 flex-col overflow-hidden">
             <HistoryToolbar
               onFetch={fetchRepository}
@@ -1005,6 +1020,7 @@
                 {snapshot}
                 {selectedCommit}
                 {changesSelected}
+                {scrollToCommit}
                 onSelectChanges={selectChanges}
                 onSelectCommit={selectCommit}
               />
@@ -1082,7 +1098,7 @@
         {:else}
           <ResizablePaneGroup panes={graphPanes} onResize={resizePane}>
             {#snippet pane0()}
-              <Sidebar {snapshot} />
+              <Sidebar {snapshot} stateKey={sidebarStateKey} onSelectRef={selectRef} />
             {/snippet}
 
             {#snippet pane1()}
@@ -1106,6 +1122,7 @@
                     {snapshot}
                     {selectedCommit}
                     {changesSelected}
+                    {scrollToCommit}
                     onSelectChanges={selectChanges}
                     onSelectCommit={selectCommit}
                   />
