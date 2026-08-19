@@ -835,6 +835,8 @@ pub struct RepositorySnapshot {
     pub graph: CommitGraph,
     /// Local branches, remote branches, and tags.
     pub refs: Vec<CommitRef>,
+    /// Local stash metadata for commits included in the history graph.
+    pub stashes: Vec<StashInfo>,
 }
 
 /// Commit metadata included in a repository snapshot.
@@ -846,6 +848,26 @@ pub struct CommitInfo {
     pub author: String,
     pub timestamp: i64,
     pub message: String,
+}
+
+/// One local stash entry and the commit it was based on.
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct StashInfo {
+    /// Commit object referenced by the stash reflog.
+    pub hash: String,
+    /// Reflog selector such as `stash@{0}`.
+    pub selector: String,
+    /// The `HEAD` commit when the stash was created.
+    pub base_hash: String,
+    /// The optional index commit created as the stash's second parent.
+    pub index_hash: Option<String>,
+    /// Branch name recorded in the stash subject, when available.
+    pub branch: Option<String>,
+    /// User-facing stash message without Git's generated branch prefix.
+    pub message: String,
+    /// Unix timestamp of the stash entry.
+    pub timestamp: i64,
 }
 
 /// Layout and connections for the rendered commit graph.

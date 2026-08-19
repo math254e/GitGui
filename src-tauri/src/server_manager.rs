@@ -17,8 +17,9 @@ use std::{
 const SERVER_BINARY_ENV: &str = "GITGUI_SERVER_BIN";
 const SERVER_BOOTSTRAP_TOKEN_ENV: &str = "GITGUI_SERVER_BOOTSTRAP_TOKEN";
 const SERVER_ALLOWED_ORIGINS_ENV: &str = "GITGUI_SERVER_ALLOWED_ORIGINS";
+const SERVER_DEV_URL_ENV: &str = "GITGUI_SERVER_DEV_URL";
 const TAURI_ALLOWED_ORIGINS: &str =
-    "http://localhost:1420,http://tauri.localhost,tauri://localhost";
+    "http://localhost:1420,http://127.0.0.1:1420,http://tauri.localhost,tauri://localhost";
 const SERVER_READY_LINE_PREFIX: &str = "GITGUI_SERVER_READY=";
 const SERVER_READY_TIMEOUT: Duration = Duration::from_secs(10);
 const HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
@@ -293,12 +294,13 @@ fn start_server_process(
 ) -> Result<(ManagedServer, LocalServerConnection), StartError> {
     let executable = locate_server_executable()?;
     let session_token = generate_session_token();
+    let server_port = if cfg!(debug_assertions) { "3774" } else { "0" };
     let mut command = Command::new(&executable);
     command
         .arg("--bind")
         .arg("127.0.0.1")
         .arg("--port")
-        .arg("0")
+        .arg(server_port)
         .arg("--data-dir")
         .arg(server_data_dir)
         .env(SERVER_BOOTSTRAP_TOKEN_ENV, &session_token)
@@ -306,6 +308,9 @@ fn start_server_process(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    if cfg!(debug_assertions) {
+        command.env(SERVER_DEV_URL_ENV, "http://localhost:1420");
+    }
 
     let mut child = command.spawn().map_err(StartError::Spawn)?;
     let pid = child.id();

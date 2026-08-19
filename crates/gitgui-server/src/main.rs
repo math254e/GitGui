@@ -1,7 +1,7 @@
 use gitgui_server::{run, ConfigError, ServerConfig};
 use tracing_subscriber::EnvFilter;
 
-const USAGE: &str = "Usage: gitgui-server [--bind <ip>] [--port <port>] [--data-dir <path>] [--web-dir <path>] [--repository <path>]...\n\nOptions: --data-dir <path> (persist host identity and repository catalog)\n         --web-dir <path> (serve the compiled SvelteKit app from this directory)\n         --repository <path> (repeatable; --repo is an alias)\nDefaults: --bind 127.0.0.1 --port 0 (ephemeral port); auto-detects ./build/index.html\nEnvironment: GITGUI_SERVER_BIND, GITGUI_SERVER_PORT, GITGUI_SERVER_DATA_DIR, GITGUI_SERVER_WEB_DIR, GITGUI_SERVER_BOOTSTRAP_TOKEN, GITGUI_SERVER_ALLOWED_ORIGINS, GITGUI_SERVER_ADDITIONAL_ORIGINS";
+const USAGE: &str = "Usage: gitgui-server [--bind <ip>] [--port <port>] [--data-dir <path>] [--web-dir <path>] [--repository <path>]...\n\nOptions: --data-dir <path> (persist host identity and repository catalog)\n         --web-dir <path> (serve the compiled SvelteKit app from this directory)\n         --repository <path> (repeatable; --repo is an alias)\nDefaults: --bind 127.0.0.1 --port 0 (ephemeral port); auto-detects ./build/index.html\nEnvironment: GITGUI_SERVER_BIND, GITGUI_SERVER_PORT, GITGUI_SERVER_DATA_DIR, GITGUI_SERVER_WEB_DIR, GITGUI_SERVER_BOOTSTRAP_TOKEN, GITGUI_SERVER_ALLOWED_ORIGINS, GITGUI_SERVER_ADDITIONAL_ORIGINS, GITGUI_SERVER_DEV_URL";
 
 #[tokio::main]
 async fn main() {

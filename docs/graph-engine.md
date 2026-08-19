@@ -1,27 +1,66 @@
-# Graph Engine Notes
+# Git Graph Engine
 
-This document is a living knowledge base for future commit graph work.
+This document describes the current commit-graph architecture and the behavior
+that future graph changes must preserve.
 
-## References
+## Reference implementations
 
-- Gitamine is the behavioral source of truth for graph layout semantics, especially commit ordering, lane assignment, lane reuse, and edge routing.
-- GitGui should reproduce Gitamine's graph behavior as closely as practical while keeping its own visual layer and application UI.
-- Initial research baseline: `pvigier/gitamine@0f66a960b1e52a5e9faba2cb791e5dfddabb3a29`.
-- Relevant Gitamine files:
-  - `src/renderer/helpers/repo-wrapper.ts`
-  - `src/renderer/helpers/commit-graph.ts`
-  - `src/renderer/components/graph-canvas.tsx`
+The layout behavior is based on Gitamine's temporal topological ordering and
+straight-branch lane algorithm. GitGud is the reference for integrating a dense
+graph into a desktop history table: one viewport-sized canvas, DOM-backed rows,
+and rendering only the visible edge range.
 
-## Terminology
+Research baselines:
 
-- DAG: Git history is a directed acyclic graph.
-- Commit node: A visual representation of a Git commit.
-- Parent edge: A connection from a commit to one of its parents.
-- Lane: A stable horizontal graph position used to reduce visual crossings.
+- `pvigier/gitamine@0f66a960b1e52a5e9faba2cb791e5dfddabb3a29`
+- `zeuros/gitgud@202e2fc576a22689befb1f0d0308408070ac4678`
 
-## Future Data Structures
+Useful upstream files:
+
+- Gitamine `src/renderer/helpers/repo-wrapper.ts`
+- Gitamine `src/renderer/helpers/commit-graph.ts`
+- Gitamine `src/renderer/components/graph-canvas.tsx`
+- GitGud `src/app/components/logs/logs.component.ts`
+- GitGud `src/app/components/logs/logs.component.html`
+- GitGud `src/app/components/logs/logs-canvas-drawer.ts`
+
+Gitamine and GitGud are GPL-licensed projects. They are behavioral and
+architectural references, not source dependencies. GitGui's implementation is
+written independently in Rust and TypeScript and does not copy their source.
+
+## Ownership and data flow
+
+There is one canonical graph layout:
+
+```text
+installed Git -> Rust commit parser -> Rust graph engine -> protocol snapshot
+                                                     -> Svelte row metadata
+                                                     -> canvas renderer
+```
+
+- `crates/gitgui-core/src/git/graph.rs` owns ordering, lane assignment, edge
+  classification, graph width, and the actual HEAD lane.
+- `RepositorySnapshot.graph` carries those decisions through the existing
+  protocol. No client-side topology is authoritative.
+- `src/lib/components/GitGraph.svelte` joins graph positions to commit and ref
+  metadata and owns selection, hover state, scrolling, and column sizing.
+- `src/lib/git-graph/canvas-renderer.ts` turns graph coordinates into pixels. It
+  does not assign rows or lanes.
+
+The canvas is deliberately presentational. Moving topology back into Svelte
+would create a second graph engine and can make rows, refs, HEAD, and edges
+disagree with the server.
+
+## Graph contract
 
 ```rust
+pub struct CommitGraph {
+    pub commits: Vec<GraphCommit>,
+    pub edges: Vec<GraphEdge>,
+    pub width: usize,
+    pub head_lane: Option<usize>,
+}
+
 pub struct GraphCommit {
     pub hash: String,
     pub row: usize,
@@ -35,76 +74,102 @@ pub struct GraphEdge {
 }
 ```
 
-## Edge Routing Ideas
+Rows are one-based because row zero is available to the client for a synthetic
+working-tree/index node. Lanes are zero-based. `width` is the maximum allocated
+lane count, including empty lanes retained for visual stability.
 
-- Use Gitamine's temporal topological ordering as the starting point for row assignment.
-- Use Gitamine's straight-branch lane algorithm for column assignment.
-- Distinguish branch children from merge children using parent order.
-- Compute forbidden columns for merge edges so edges do not overlap commits or occupied branches.
-- Prefer deterministic output so the graph does not jump between refreshes.
+An edge runs from a child commit to a parent commit. The first parent is a
+`Normal` edge; every additional parent is a `Merge` edge. Parents outside the
+loaded history window are intentionally omitted.
 
-## Gitamine Behavior Baseline
+`head_lane` is present only when the real status HEAD object exists in the
+loaded graph. The client must use `status.headOid` and `head_lane` together; the
+first visible commit is not necessarily HEAD.
 
-Gitamine builds a repository topology before graph layout:
+## Commit ordering
 
-- `parents`: commit SHA to ordered parent SHAs.
-- `children`: commit SHA to child SHAs.
-- `shaToIndex`: commit SHA to its sorted row index.
-- optional reference/stash metadata layered on top of commits.
+The engine produces a deterministic temporal topological order:
 
-Gitamine sorts commits with a temporal topological strategy:
+1. It sorts candidates by descending commit timestamp and then ascending hash.
+2. It builds child adjacency from the ordered parent lists.
+3. It visits children before emitting their parent.
+4. It uses an iterative traversal so a very deep linear history does not risk a
+   call-stack overflow.
 
-- Start by sorting commits from newest to oldest by commit date.
-- Run DFS over children before adding the current commit.
-- Store the resulting list as the visual commit order.
-- Rebuild `shaToIndex` from that order.
+The timestamp is a preference, not a correctness rule. A child always appears
+above its known parent even when clocks are skewed. Child adjacency uses first
+parent, timestamp, and hash tie-breakers so equivalent input in a different
+collection order produces the same graph.
 
-Gitamine's graph positions use a grid:
+## Lane assignment
 
-- `i`: row coordinate.
-- `j`: lane/column coordinate.
-- one commit per row.
-- an extra synthetic `index` node at row `0`, lane `0`, connected to `HEAD`.
-- real commits start at row `1`.
+The straight-branch algorithm maintains an array of active lane slots:
 
-Gitamine's lane algorithm keeps an active branch array:
+- A commit replaces the lowest usable first-parent child lane when possible.
+- Otherwise it takes the nearest empty lane to a related child.
+- Empty slots are retained and reused; removing a branch never shifts another
+  active branch sideways.
+- A root clears its lane after placement.
+- When HEAD is part of the loaded history, lane zero is reserved by a synthetic
+  index node until the HEAD commit replaces it. Disconnected roots therefore
+  cannot displace HEAD.
+- When HEAD is absent, the synthetic lane is not allocated and ordinary history
+  begins in lane zero.
 
-- Active lanes are either a commit SHA or empty.
-- The synthetic `index` lane starts at column `0`.
-- A commit can replace one branch child when that child uses the commit as first parent.
-- If it cannot replace a child, it is inserted near an existing child lane.
-- Empty lanes are reused when possible without shifting other active lanes.
-- If no acceptable empty lane exists, a new lane is appended.
-- Non-replaced branch children are removed from active lanes.
-- Root commits are removed from active lanes after placement.
+Merge children contribute forbidden lanes. Active edge spans record the lanes
+that have become occupied while those spans are open, preventing a later merge
+edge from passing through a commit node. Span expiry uses a min-priority queue,
+avoiding a full retain-and-scan of every queued span for every graph row.
 
-Gitamine classifies children by parent order:
+## Rendering
 
-- Branch child: this commit is the child's first parent.
-- Merge child: this commit is not the child's first parent.
+The history table keeps branch labels and messages as ordinary DOM content for
+accessibility, selection, and text layout. A single high-DPI canvas overlays
+only the graph column.
 
-Gitamine avoids merge-edge overlaps by tracking active columns:
+The canvas:
 
-- It computes forbidden lane indices from merge children.
-- A commit must not be placed in a forbidden lane.
-- Active node sets are updated as commits are processed.
-- A priority queue removes active-node tracking once the relevant parent span has passed.
+- is sized to the scroll viewport rather than the full repository history;
+- is repositioned and redrawn as the history container scrolls;
+- skips edges and nodes outside the viewport with a small overscan;
+- renders normal edges primarily in the child lane and merge edges primarily in
+  the parent lane;
+- uses lane color as the strongest visual signal;
+- renders merge commits with a center mark and stash commits as dashed squares;
+- attaches the dashed working-tree node to the actual HEAD lane;
+- redraws emphasis for selected and hovered commit rows.
 
-Gitamine edge semantics:
+The graph column grows to fit `graph.width`, while still respecting the user's
+resized column width. Row height, lane spacing, and padding remain UI constants;
+they are not protocol concerns.
 
-- Edges connect every positioned commit to every positioned parent.
-- First-parent edges are `Normal`.
-- Non-first-parent edges are `Merge`.
-- Rendering can choose different paths/colors for normal versus merge edges, but the backend should preserve the edge type.
+## Required invariants and coverage
 
-Gitamine renderer details that are not backend semantics:
+The Rust tests cover linear histories, forks and rejoins, first-parent edge
+classification, lane reuse, skewed timestamps, deterministic input
+permutations, disconnected roots, missing HEAD, octopus merges, and truncated
+parents.
 
-- Branch color palette.
-- Canvas row and column pixel offsets.
-- Dashed synthetic index node/edge styling.
-- Visible-range canvas optimization.
+The shared invariant checks require:
 
-## Research Questions
+- one unique graph row and position per loaded commit;
+- every known child above its parent;
+- every lane inside `graph.width`;
+- no commit node inside the vertical segment used by a normal or merge edge.
 
-- What graph fixtures are needed to prove GitGui matches Gitamine behavior?
-- Should GitGui include the synthetic `index` node in backend graph data, or should the Svelte renderer synthesize it from `HEAD`?
+When extending the engine, add the smallest DAG fixture that demonstrates the
+new topology and run the invariant checks against it. Visual verification should
+also cover scrolling, selection, a dirty working tree, and at least one merge.
+
+## Intentional limits
+
+- Stash metadata is layered onto graph commits by hash. Internal index and
+  untracked-file helper commits are removed before graph layout, while the
+  user-facing stash remains a dashed graph node without a Branch-column badge.
+- The graph is computed for the commits loaded in the snapshot. Edges to history
+  outside that set stop at the boundary.
+- Canvas hit testing is unnecessary because each commit already has a full-width
+  DOM row for pointer and keyboard interaction.
+- The current renderer redraws the visible graph on scroll. If histories become
+  large enough to require row virtualization, preserve the same backend graph
+  contract and virtualize the DOM rows independently.

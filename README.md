@@ -30,13 +30,17 @@ npm run dev
 
 This starts the Vite frontend and Tauri desktop shell; Tauri starts and manages the local GitGui server for the desktop window. Use `npm run ui:dev` only when you intentionally want the frontend without the desktop shell.
 
-To run the local browser version:
+While `npm run dev` is running, open `http://127.0.0.1:3774` in a regular browser. The Tauri-managed GitGui server redirects that request to the Vite client at `http://localhost:1420` with the local connection details, so the browser uses the same backend and repository catalog as the desktop window.
+
+To run the local browser version from the repository root:
 
 ```text
 npm run web:serve
 ```
 
 Then open `http://127.0.0.1:3774`. The standalone server auto-detects `./build/index.html`; use `--web-dir <path>` or `GITGUI_SERVER_WEB_DIR` when the compiled web app lives elsewhere.
+
+The development web commands register the current repository automatically. To expose a different repository, run the standalone server with one or more explicit `--repository <path>` arguments.
 
 Rust owns repository detection, command execution, parsing, state shaping, commit loading, and future graph algorithms. The frontend renders structured data returned by Rust and never shells out to Git directly.
 

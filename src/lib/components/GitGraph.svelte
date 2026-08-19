@@ -1,7 +1,8 @@
 <script lang="ts">
   import { Cloud, Monitor } from "@lucide/svelte";
   import { onDestroy } from "svelte";
-  import type { CommitInfo, CommitRef, GraphCommit, RepositorySnapshot } from "$lib/types/repository";
+  import { drawGitGraphCanvas } from "$lib/git-graph/canvas-renderer";
+  import type { CommitInfo, CommitRef, GraphCommit, RepositorySnapshot, StashInfo } from "$lib/types/repository";
 
   type ColumnId = "branch" | "graph" | "message";
   type HistoryColumn = {
@@ -15,49 +16,11 @@
     startX: number;
     startWidth: number;
   };
-  type Swimlane = {
-    id: string;
-    color: number;
-    isStash: boolean;
-  };
-  type ParentEdge = {
-    oid: string;
-    lane: number;
-  };
-  type RoutedGraphRow = {
-    oid: string;
+  type GraphRow = {
     commit: CommitInfo;
-    row: number;
-    lane: number;
-    circleLane: number;
-    parents: ParentEdge[];
-    inputSwimlanes: Swimlane[];
-    outputSwimlanes: Swimlane[];
+    graphCommit: GraphCommit;
+    stash: StashInfo | null;
   };
-  type RoutedGraph = {
-    rows: RoutedGraphRow[];
-    commits: Map<string, GraphCommit>;
-    maxLane: number;
-    headLane: number;
-  };
-  type GraphSegment =
-    | {
-        type: "line";
-        key: string;
-        x1: number;
-        y1: number;
-        x2: number;
-        y2: number;
-        stroke: string;
-        dashed: boolean;
-      }
-    | {
-        type: "path";
-        key: string;
-        d: string;
-        stroke: string;
-        dashed: boolean;
-      };
   type Props = {
     snapshot: RepositorySnapshot | null;
     selectedCommit: CommitInfo | null;
@@ -72,11 +35,6 @@
   const graphPadding = 14;
   const dotRadius = 7;
   const lineWidth = 2.5;
-  const workingTreeSize = 12;
-  const shiftCurveRadius = 2;
-  const curveStartY = 6;
-  const bezierControlFactor = 0.25;
-  const bezierMidFactor = 0.5;
   const columnStorageKey = "gitgui.historyColumns.v1";
   const minimumColumnWidth = 24;
   const branchColors = [
@@ -100,6 +58,11 @@
   let resizeState = $state<ResizeState | null>(null);
   let restoredColumns = false;
   let hoveredRowHash = $state<string | null>(null);
+  let graphViewport = $state<HTMLDivElement | null>(null);
+  let graphCanvas = $state<HTMLCanvasElement | null>(null);
+  let graphScrollTop = $state(0);
+  let graphViewportHeight = $state(0);
+  let graphDevicePixelRatio = $state(1);
 
   $effect(() => {
     if (restoredColumns) {
@@ -130,22 +93,45 @@
     resizeState = null;
   });
 
+  $effect(() => {
+    const viewport = graphViewport;
+
+    if (!viewport) {
+      return;
+    }
+
+    const measure = () => {
+      graphViewportHeight = viewport.clientHeight;
+      graphDevicePixelRatio = window.devicePixelRatio || 1;
+    };
+    const observer = new ResizeObserver(measure);
+    observer.observe(viewport);
+    measure();
+
+    return () => observer.disconnect();
+  });
+
   const hasChanges = $derived(Boolean(snapshot?.status.changedFiles.length));
   const visibleColumns = $derived(columns.filter((column) => column.visible));
-  const routedGraph = $derived(buildRoutedGraph(snapshot));
-  const graphRequiredWidth = $derived(Math.max(90, (routedGraph.maxLane + 2) * laneGap + 8));
-  const graphColumnWidth = $derived(columnWidth("graph"));
+  const graphRows = $derived(buildGraphRows(snapshot));
+  const graphCommitByHash = $derived(new Map((snapshot?.graph.commits ?? []).map((commit) => [commit.hash, commit])));
+  const graphRequiredWidth = $derived(
+    Math.max(90, graphPadding * 2 + Math.max(0, (snapshot?.graph.width ?? 1) - 1) * laneGap + dotRadius * 2),
+  );
+  const graphColumnWidth = $derived(renderedColumnWidth(columns.find((column) => column.id === "graph")));
+  const graphColumnOffset = $derived(
+    visibleColumns
+      .slice(0, Math.max(0, visibleColumns.findIndex((column) => column.id === "graph")))
+      .reduce((total, column) => total + renderedColumnWidth(column), 0),
+  );
   const gridTemplate = $derived(
     visibleColumns
-      .map((column) => `${column.width}px`)
+      .map((column) => `${renderedColumnWidth(column)}px`)
       .join(" "),
   );
   const totalGridWidth = $derived(
-    visibleColumns.reduce((total, column) => total + column.width, 0),
+    visibleColumns.reduce((total, column) => total + renderedColumnWidth(column), 0),
   );
-  const visibleRowCount = $derived((snapshot?.commits.length ?? 0) + (hasChanges ? 1 : 0));
-  const graphHeight = $derived(Math.max(rowHeight, visibleRowCount * rowHeight));
-  const graphCommitByHash = $derived(routedGraph.commits);
   const refsByTarget = $derived(groupRefsByTarget(snapshot?.refs ?? []));
   const branchRefByFirstParentCommit = $derived(groupBranchRefByFirstParentCommit(snapshot));
   const branchRefByLineCommit = $derived(groupBranchRefByLineCommit(snapshot));
@@ -156,10 +142,54 @@
   const branchRefByNearestDescendantCommit = $derived(
     groupBranchRefByNearestDescendantCommit(snapshot, graphCommitByHash, refsByTarget),
   );
-  const currentHeadLane = $derived(routedGraph.headLane);
+  const stashHashes = $derived(
+    new Set((snapshot?.stashes ?? []).map((stash) => stash.hash)),
+  );
 
-  function columnWidth(columnId: ColumnId) {
-    return columns.find((column) => column.id === columnId)?.width ?? 0;
+  $effect(() => {
+    const canvas = graphCanvas;
+    const currentSnapshot = snapshot;
+    const viewportHeight = graphViewportHeight;
+    const scrollTop = graphScrollTop;
+    const width = graphColumnWidth;
+    const dpr = graphDevicePixelRatio;
+    const selectedHash = selectedCommit?.hash ?? null;
+    const hoveredHash = hoveredRowHash;
+    const currentStashHashes = stashHashes;
+
+    if (!canvas || !currentSnapshot || viewportHeight <= 0 || width <= 0) {
+      return;
+    }
+
+    const surfaceColor = getComputedStyle(canvas).getPropertyValue("--app-theme-surface").trim() || "#ffffff";
+    drawGitGraphCanvas(canvas, {
+      graph: currentSnapshot.graph,
+      commits: currentSnapshot.commits,
+      headHash: currentSnapshot.status.headOid,
+      hasWorkingTreeRow: hasChanges,
+      stashHashes: currentStashHashes,
+      selectedHash,
+      hoveredHash,
+      scrollTop,
+      viewportHeight,
+      width,
+      devicePixelRatio: dpr,
+      rowHeight,
+      laneGap,
+      graphPadding,
+      dotRadius,
+      lineWidth,
+      colors: branchColors,
+      surfaceColor,
+    });
+  });
+
+  function renderedColumnWidth(column: HistoryColumn | undefined) {
+    if (!column) {
+      return 0;
+    }
+
+    return column.id === "graph" ? Math.max(column.width, graphRequiredWidth) : column.width;
   }
 
   function clampColumnWidth(width: number) {
@@ -173,122 +203,25 @@
     );
   }
 
-  function buildRoutedGraph(currentSnapshot: RepositorySnapshot | null): RoutedGraph {
-    const rows: RoutedGraphRow[] = [];
-    const commits = new Map<string, GraphCommit>();
-    let lanes: Swimlane[] = [];
-    let colorCounter = 0;
-    let maxLane = 0;
-
-    const nextColor = () => {
-      const color = colorCounter % branchColors.length;
-      colorCounter += 1;
-      return color;
-    };
-
-    for (const [index, commit] of currentSnapshot?.commits.entries() ?? []) {
-      const inputSwimlanes = lanes.map(cloneSwimlane);
-      const commitIndex = lanes.findIndex((lane) => lane.id === commit.hash);
-      const circleLane = commitIndex === -1 ? lanes.length : commitIndex;
-      const output: Swimlane[] = [];
-      const parents = commit.parents;
-      let firstParentAdded = false;
-      let commitLaneInOutput = circleLane;
-
-      if (parents.length) {
-        for (const lane of lanes) {
-          if (lane.id === commit.hash) {
-            if (!firstParentAdded) {
-              commitLaneInOutput = output.length;
-              output.push({
-                id: parents[0],
-                color: lane.color,
-                isStash: false,
-              });
-              firstParentAdded = true;
-            }
-
-            continue;
-          }
-
-          output.push(cloneSwimlane(lane));
-        }
-      } else {
-        for (const lane of lanes) {
-          if (lane.id !== commit.hash) {
-            output.push(cloneSwimlane(lane));
-          }
-        }
-      }
-
-      if (!firstParentAdded && parents.length) {
-        commitLaneInOutput = output.length;
-        output.push({
-          id: parents[0],
-          color: nextColor(),
-          isStash: false,
-        });
-      }
-
-      const parentEdges: ParentEdge[] = [];
-
-      if (parents.length) {
-        parentEdges.push({ oid: parents[0], lane: commitLaneInOutput });
-      }
-
-      for (const parent of parents.slice(1)) {
-        const existingLane = output.findIndex((lane) => lane.id === parent);
-
-        if (existingLane !== -1) {
-          parentEdges.push({ oid: parent, lane: existingLane });
-          continue;
-        }
-
-        const lane = output.length;
-        output.push({
-          id: parent,
-          color: nextColor(),
-          isStash: false,
-        });
-        parentEdges.push({ oid: parent, lane });
-      }
-
-      const outputSwimlanes = output.map(cloneSwimlane);
-      const graphRow: RoutedGraphRow = {
-        oid: commit.hash,
-        commit,
-        row: index + 1,
-        lane: commitLaneInOutput,
-        circleLane,
-        parents: parentEdges,
-        inputSwimlanes,
-        outputSwimlanes,
-      };
-
-      rows.push(graphRow);
-      commits.set(commit.hash, {
-        hash: commit.hash,
-        row: index + 1,
-        lane: circleLane,
-      });
-      maxLane = Math.max(maxLane, circleLane, inputSwimlanes.length - 1, outputSwimlanes.length - 1);
-      lanes = output;
+  function buildGraphRows(currentSnapshot: RepositorySnapshot | null): GraphRow[] {
+    if (!currentSnapshot) {
+      return [];
     }
 
-    return {
-      rows,
-      commits,
-      maxLane: Math.max(0, maxLane),
-      headLane: rows[0]?.circleLane ?? 0,
-    };
-  }
+    const commits = new Map(currentSnapshot.commits.map((commit) => [commit.hash, commit]));
+    const stashes = new Map<string, StashInfo>();
+    for (const stash of currentSnapshot.stashes ?? []) {
+      stashes.set(stash.hash, stash);
+    }
 
-  function cloneSwimlane(lane: Swimlane): Swimlane {
-    return {
-      id: lane.id,
-      color: lane.color,
-      isStash: lane.isStash,
-    };
+    return [...currentSnapshot.graph.commits]
+      .sort((first, second) => first.row - second.row)
+      .flatMap((graphCommit) => {
+        const commit = commits.get(graphCommit.hash);
+        return commit
+          ? [{ commit, graphCommit, stash: stashes.get(commit.hash) ?? null }]
+          : [];
+      });
   }
 
   function groupRefsByTarget(refs: CommitRef[]) {
@@ -780,251 +713,6 @@
     return `border-color: ${color}66; color: ${color}; background: color-mix(in srgb, ${color} ${tint}%, white);`;
   }
 
-  function xForLane(lane: number) {
-    return graphPadding + lane * laneGap;
-  }
-
-  function buildSingleLaneCurve(inX: number, outX: number, startY: number, midY: number, endY?: number) {
-    const dx = outX - inX;
-    const curve = Math.min(Math.abs(dx) * 0.5, shiftCurveRadius);
-
-    if (endY === undefined) {
-      return [
-        `M ${inX} 0`,
-        `V ${startY}`,
-        `C ${inX} ${midY - curve},`,
-        `${inX + dx * bezierControlFactor} ${midY},`,
-        `${inX + dx * bezierMidFactor} ${midY}`,
-        `H ${outX}`,
-      ].join(" ");
-    }
-
-    const controlDistance = Math.abs(endY - startY) * 0.35;
-
-    return [
-      `M ${inX} 0`,
-      `V ${startY}`,
-      `C ${inX} ${startY + controlDistance},`,
-      `${outX} ${endY - controlDistance},`,
-      `${outX} ${endY}`,
-    ].join(" ");
-  }
-
-  function buildMultiLaneCurve(inX: number, outX: number, startY: number, midY: number, direction: number, endY?: number) {
-    const firstCurveX = inX + direction * laneGap;
-
-    if (endY === undefined) {
-      return [
-        `M ${inX} 0`,
-        `V ${startY}`,
-        `C ${inX} ${midY - shiftCurveRadius},`,
-        `${inX + direction * laneGap * 0.5} ${midY},`,
-        `${firstCurveX} ${midY}`,
-        `H ${outX}`,
-      ].join(" ");
-    }
-
-    const dy = endY - startY;
-    const controlDistanceY = Math.abs(dy) * 0.7;
-
-    return [
-      `M ${inX} 0`,
-      `V ${startY}`,
-      `C ${inX} ${startY + controlDistanceY * Math.sign(dy)},`,
-      `${outX} ${endY - controlDistanceY * Math.sign(dy)},`,
-      `${outX} ${endY}`,
-    ].join(" ");
-  }
-
-  function buildConvergencePath(inLane: number, outLane: number) {
-    const inX = xForLane(inLane);
-    const outX = xForLane(outLane);
-    const laneDelta = outLane - inLane;
-    const absoluteDelta = Math.abs(laneDelta);
-    const direction = Math.sign(laneDelta);
-    const midY = rowHeight / 2;
-
-    return absoluteDelta === 1
-      ? buildSingleLaneCurve(inX, outX, curveStartY, midY)
-      : buildMultiLaneCurve(inX, outX, curveStartY, midY, direction);
-  }
-
-  function buildShiftPath(inLane: number, outLane: number) {
-    const inX = xForLane(inLane);
-    const outX = xForLane(outLane);
-    const laneDelta = outLane - inLane;
-    const absoluteDelta = Math.abs(laneDelta);
-    const direction = Math.sign(laneDelta);
-    const midY = rowHeight / 2;
-
-    return absoluteDelta === 1
-      ? buildSingleLaneCurve(inX, outX, curveStartY, midY, rowHeight)
-      : buildMultiLaneCurve(inX, outX, curveStartY, midY, direction, rowHeight);
-  }
-
-  function routeSegmentsForRow(row: RoutedGraphRow): GraphSegment[] {
-    const segments: GraphSegment[] = [];
-    const input = row.inputSwimlanes;
-    const output = row.outputSwimlanes;
-    const circleLane = row.circleLane;
-    const centerY = rowHeight / 2;
-    const centerX = xForLane(circleLane);
-    let outputSwimlaneIndex = 0;
-
-    for (let index = 0; index < input.length; index += 1) {
-      const inputLane = input[index];
-      const inputColor = branchColor(inputLane.color);
-
-      if (inputLane.id === row.oid) {
-        if (index !== circleLane) {
-          segments.push({
-            type: "path",
-            key: `conv-${row.oid}-${index}`,
-            d: buildConvergencePath(index, circleLane),
-            stroke: inputColor,
-            dashed: inputLane.isStash,
-          });
-        } else {
-          outputSwimlaneIndex += 1;
-        }
-
-        continue;
-      }
-
-      const outputLane = output[outputSwimlaneIndex];
-
-      if (!outputLane || inputLane.id !== outputLane.id) {
-        continue;
-      }
-
-      const outputColor = branchColor(outputLane.color);
-
-      if (index === outputSwimlaneIndex) {
-        const x = Math.round(xForLane(index));
-        segments.push({
-          type: "line",
-          key: `pass-${row.oid}-${index}`,
-          x1: x,
-          y1: 0,
-          x2: x,
-          y2: rowHeight,
-          stroke: outputColor,
-          dashed: outputLane.isStash,
-        });
-      } else {
-        segments.push({
-          type: "path",
-          key: `shift-${row.oid}-${index}-${outputSwimlaneIndex}`,
-          d: buildShiftPath(index, outputSwimlaneIndex),
-          stroke: outputColor,
-          dashed: outputLane.isStash,
-        });
-      }
-
-      outputSwimlaneIndex += 1;
-    }
-
-    for (let index = 1; index < row.parents.length; index += 1) {
-      const parentOid = row.parents[index].oid;
-      let parentOutputLane = -1;
-
-      for (let outputIndex = output.length - 1; outputIndex >= 0; outputIndex -= 1) {
-        if (output[outputIndex].id === parentOid) {
-          parentOutputLane = outputIndex;
-          break;
-        }
-      }
-
-      if (parentOutputLane === -1) {
-        continue;
-      }
-
-      const parentX = xForLane(parentOutputLane);
-
-      if (parentX === centerX) {
-        continue;
-      }
-
-      const arcStartX = parentOutputLane > circleLane ? parentX - laneGap : parentX + laneGap;
-      const sweepFlag = parentOutputLane > circleLane ? 1 : 0;
-
-      segments.push({
-        type: "path",
-        key: `parent-${row.oid}-${parentOid}-${index}`,
-        d: [`M ${arcStartX} ${centerY}`, `A ${laneGap} ${laneGap} 0 0 ${sweepFlag} ${parentX} ${rowHeight}`, `M ${arcStartX} ${centerY}`, `H ${centerX}`].join(" "),
-        stroke: branchColor(output[parentOutputLane].color),
-        dashed: false,
-      });
-    }
-
-    const inputIndex = input.findIndex((lane) => lane.id === row.oid);
-
-    if (inputIndex !== -1) {
-      segments.push({
-        type: "line",
-        key: `to-dot-${row.oid}`,
-        x1: centerX,
-        y1: 0,
-        x2: centerX,
-        y2: centerY,
-        stroke: branchColor(input[inputIndex].color),
-        dashed: input[inputIndex].isStash,
-      });
-    }
-
-    if (row.parents.length > 0) {
-      segments.push({
-        type: "line",
-        key: `from-dot-${row.oid}`,
-        x1: centerX,
-        y1: centerY,
-        x2: centerX,
-        y2: rowHeight,
-        stroke: commitColor(row),
-        dashed: false,
-      });
-    }
-
-    return segments;
-  }
-
-  function commitColor(row: RoutedGraphRow) {
-    const lane =
-      row.circleLane < row.outputSwimlanes.length
-        ? row.outputSwimlanes[row.circleLane]
-        : row.circleLane < row.inputSwimlanes.length
-          ? row.inputSwimlanes[row.circleLane]
-          : null;
-
-    return branchColor(lane?.color ?? 0);
-  }
-
-  function routeCommitNodeStyle(row: RoutedGraphRow) {
-    const color = commitColor(row);
-
-    return `left: ${xForLane(row.circleLane) - dotRadius}px; top: calc(50% - ${dotRadius}px); width: ${dotRadius * 2}px; height: ${dotRadius * 2}px; border-color: ${color}; color: ${color};`;
-  }
-
-  function workingTreeNodeStyle() {
-    const color = branchColor(currentHeadLane);
-
-    return `left: ${xForLane(currentHeadLane) - workingTreeSize / 2}px; top: calc(50% - ${workingTreeSize / 2}px); width: ${workingTreeSize}px; height: ${workingTreeSize}px; border-color: ${color}; background: white;`;
-  }
-
-  function workingTreePath() {
-    const x = xForLane(currentHeadLane);
-
-    return `M ${x} ${rowHeight / 2 + workingTreeSize / 2} L ${x} ${rowHeight + rowHeight / 2}`;
-  }
-
-  function segmentDash(segment: GraphSegment) {
-    return segment.dashed ? "4 3" : undefined;
-  }
-
-  function rowKey(row: RoutedGraphRow) {
-    return row.oid;
-  }
-
   function refKey(ref: CommitRef) {
     return `${ref.refType}\0${ref.name}\0${ref.target}`;
   }
@@ -1063,7 +751,7 @@
 
 </script>
 
-<section class="min-h-0 bg-[var(--app-theme-surface)]">
+<section class="h-full min-h-0 bg-[var(--app-theme-surface)]">
   {#if snapshot}
     <div class="flex h-full min-h-0 flex-col">
       <div
@@ -1085,7 +773,17 @@
         {/each}
       </div>
 
-      <div class="relative min-h-0 flex-1 overflow-auto">
+      <div
+        bind:this={graphViewport}
+        class="relative min-h-0 flex-1 overflow-auto"
+        onscroll={(event) => (graphScrollTop = event.currentTarget.scrollTop)}
+      >
+        <canvas
+          bind:this={graphCanvas}
+          class="pointer-events-none absolute z-20"
+          style={`left: ${graphColumnOffset}px; top: ${graphScrollTop}px; width: ${graphColumnWidth}px; height: ${graphViewportHeight}px;`}
+          aria-hidden="true"
+        ></canvas>
         <ol class="relative" style={`min-width: ${totalGridWidth}px;`}>
           {#if hasChanges}
             <li>
@@ -1104,20 +802,7 @@
                     </span>
                   {/if}
                 </span>
-                <span class="relative z-20 flex h-full items-center overflow-visible">
-                  <svg width={graphRequiredWidth} height={rowHeight} viewBox={`0 0 ${graphRequiredWidth} ${rowHeight}`} aria-hidden="true" class="shrink-0 overflow-visible">
-                    <path
-                      d={workingTreePath()}
-                      fill="none"
-                      stroke={branchColor(currentHeadLane)}
-                      stroke-width={lineWidth}
-                      stroke-dasharray="4 4"
-                      stroke-linecap="round"
-                      opacity="0.95"
-                    />
-                  </svg>
-                  <span class="absolute rounded border-[3px]" style={workingTreeNodeStyle()}></span>
-                </span>
+                <span class="relative h-full" aria-hidden="true"></span>
                 <span class="relative z-20 min-w-0 px-1">
                   <span class="block truncate text-xs font-semibold text-[var(--app-theme-text)]">
                     Changed files
@@ -1128,9 +813,10 @@
             </li>
           {/if}
 
-          {#each routedGraph.rows as row (rowKey(row))}
+          {#each graphRows as row (row.commit.hash)}
             {@const commit = row.commit}
-            {@const graphCommit = graphCommitByHash.get(commit.hash)}
+            {@const stash = row.stash}
+            {@const graphCommit = row.graphCommit}
             {@const commitRefs = refsByTarget.get(commit.hash) ?? []}
             {@const ghostRef = branchRefByLineCommit.get(commit.hash) ?? branchRefByNearestDescendantCommit.get(commit.hash) ?? branchRefByMergeTargetCommit.get(commit.hash) ?? branchRefByLaneCommit.get(commit.hash) ?? branchRefByFirstParentCommit.get(commit.hash)}
             <li>
@@ -1149,20 +835,22 @@
                     hoveredRowHash === commit.hash || selectedCommit?.hash === commit.hash ? "z-[120]" : "z-[80]"
                   }`}
                 >
-                    {#each commitRefs as ref (refKey(ref))}
-                      <span
-                        class="relative z-30 flex max-w-full items-center gap-0.5 rounded-sm border px-0.5 py-0 text-[10px] font-semibold leading-3.5 hover:z-[100] hover:max-w-none hover:whitespace-nowrap"
-                        style={refBadgeStyle(ref.refType, graphCommit)}
-                      >
-                        {#if ref.refType === "remoteBranch"}
-                          <Cloud class="h-2.5 w-2.5 shrink-0" size={10} strokeWidth={2.4} />
-                        {:else if ref.refType === "localBranch"}
-                          <Monitor class="h-2.5 w-2.5 shrink-0" size={10} strokeWidth={2.4} />
-                        {/if}
-                        <span class="truncate">{displayRefName(ref)}</span>
-                      </span>
-                    {/each}
-                    {#if !commitRefs.length && (hoveredRowHash === commit.hash || selectedCommit?.hash === commit.hash)}
+                    {#if !stash}
+                      {#each commitRefs as ref (refKey(ref))}
+                        <span
+                          class="relative z-30 flex max-w-full items-center gap-0.5 rounded-sm border px-0.5 py-0 text-[10px] font-semibold leading-3.5 hover:z-[100] hover:max-w-none hover:whitespace-nowrap"
+                          style={refBadgeStyle(ref.refType, graphCommit)}
+                        >
+                          {#if ref.refType === "remoteBranch"}
+                            <Cloud class="h-2.5 w-2.5 shrink-0" size={10} strokeWidth={2.4} />
+                          {:else if ref.refType === "localBranch"}
+                            <Monitor class="h-2.5 w-2.5 shrink-0" size={10} strokeWidth={2.4} />
+                          {/if}
+                          <span class="truncate">{displayRefName(ref)}</span>
+                        </span>
+                      {/each}
+                    {/if}
+                    {#if !stash && !commitRefs.length && (hoveredRowHash === commit.hash || selectedCommit?.hash === commit.hash)}
                       {#if ghostRef}
                         <span
                           class="relative z-30 flex max-w-full items-center gap-0.5 rounded-sm border border-dashed px-0.5 py-0 text-[10px] font-semibold leading-3.5 opacity-50 hover:z-[100] hover:max-w-none hover:whitespace-nowrap"
@@ -1178,37 +866,18 @@
                       {/if}
                     {/if}
                 </span>
-                <span class="relative z-20 flex h-full items-center overflow-visible">
-                  <svg width={graphRequiredWidth} height={rowHeight} viewBox={`0 0 ${graphRequiredWidth} ${rowHeight}`} aria-hidden="true" class="shrink-0 overflow-visible">
-                    {#each routeSegmentsForRow(row) as segment (segment.key)}
-                      {#if segment.type === "line"}
-                        <line
-                          x1={segment.x1}
-                          y1={segment.y1}
-                          x2={segment.x2}
-                          y2={segment.y2}
-                          stroke={segment.stroke}
-                          stroke-width={lineWidth}
-                          stroke-linecap="round"
-                          stroke-dasharray={segmentDash(segment)}
-                        />
-                      {:else}
-                        <path
-                          d={segment.d}
-                          fill="none"
-                          stroke={segment.stroke}
-                          stroke-width={lineWidth}
-                          stroke-linecap="round"
-                          stroke-linejoin="round"
-                          stroke-dasharray={segmentDash(segment)}
-                        />
+                <span class="relative h-full" aria-hidden="true"></span>
+                <span class="relative z-30 min-w-0 px-1">
+                  <span class="block truncate text-xs font-medium text-[var(--app-theme-text)]">
+                    {#if stash}
+                      {stash.message}
+                      {#if stash.branch}
+                        <span class="ml-1 text-[10px] font-medium text-[var(--app-theme-text-muted)]">on {stash.branch}</span>
                       {/if}
-                    {/each}
-                  </svg>
-                  <span class="absolute rounded-full border-[3px] bg-white" style={routeCommitNodeStyle(row)}></span>
-                </span>
-                <span class="relative z-20 min-w-0 px-1">
-                  <span class="block truncate text-xs font-medium text-[var(--app-theme-text)]">{commit.message}</span>
+                    {:else}
+                      {commit.message}
+                    {/if}
+                  </span>
                 </span>
               </button>
             </li>

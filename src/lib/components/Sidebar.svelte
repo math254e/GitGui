@@ -1,6 +1,6 @@
 <script lang="ts">
   import { ChevronRight } from "@lucide/svelte";
-  import type { ChangedFile, RepositorySnapshot } from "$lib/types/repository";
+  import type { ChangedFile, RepositorySnapshot, StashInfo } from "$lib/types/repository";
 
   type Props = {
     snapshot: RepositorySnapshot | null;
@@ -28,6 +28,15 @@
   function changedFileTitle(file: ChangedFile) {
     const status = `${file.indexStatus}${file.worktreeStatus}`;
     return file.originalPath ? `${status}: ${file.originalPath} -> ${file.path}` : `${status}: ${file.path}`;
+  }
+
+  function stashKey(stash: StashInfo) {
+    return `${stash.hash}\0${stash.selector}`;
+  }
+
+  function stashTitle(stash: StashInfo) {
+    const branch = stash.branch ? ` on ${stash.branch}` : "";
+    return `${stash.selector}${branch}: ${stash.message}\nBase: ${stash.baseHash}`;
   }
 </script>
 
@@ -132,11 +141,30 @@
           strokeWidth={2.5}
           class={`shrink-0 origin-center transition-transform duration-200 ${open.Stashes ? 'rotate-90' : 'rotate-0'}`}
         />
-        <span>Stashes</span>
+        <span>Stashes {snapshot ? `(${(snapshot.stashes ?? []).length})` : ""}</span>
       </button>
       {#if open.Stashes}
         <div class="min-h-0 flex-1 overflow-auto">
-          <p class="px-3 py-2 text-sm text-[var(--app-theme-text-subtle)]">Stash loading is planned.</p>
+          {#if snapshot?.stashes?.length}
+            <ul class="space-y-1">
+              {#each snapshot.stashes ?? [] as stash (stashKey(stash))}
+                <li
+                  class="min-w-0 rounded-md px-3 py-2 text-sm text-[var(--app-theme-sidebar-foreground)] hover:bg-[var(--app-theme-sidebar-row-hover)]"
+                  title={stashTitle(stash)}
+                >
+                  <div class="flex min-w-0 items-center gap-2">
+                    <code class="shrink-0 font-mono text-xs text-[var(--app-theme-accent)]">{stash.selector}</code>
+                    <span class="truncate">{stash.message}</span>
+                  </div>
+                  {#if stash.branch}
+                    <span class="mt-0.5 block truncate pl-[4.5rem] text-xs text-[var(--app-theme-text-subtle)]">on {stash.branch}</span>
+                  {/if}
+                </li>
+              {/each}
+            </ul>
+          {:else}
+            <p class="px-3 py-2 text-sm text-[var(--app-theme-text-subtle)]">No stashes.</p>
+          {/if}
         </div>
       {/if}
     </section>

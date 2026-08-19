@@ -19,4 +19,5 @@ export type {
   GraphEdgeType,
   RepositorySnapshot,
   RepositoryStatus,
+  StashInfo,
 } from "$lib/generated/protocol";

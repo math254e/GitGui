@@ -505,9 +505,43 @@ graph: CommitGraph,
 /**
  * Local branches, remote branches, and tags.
  */
-refs: Array<CommitRef>, };
+refs: Array<CommitRef>,
+/**
+ * Local stash entries. Stashes are displayed separately from ordinary commits.
+ */
+stashes: Array<StashInfo>, };
 
 export type CommitInfo = { hash: string, parents: Array<string>, author: string, timestamp: number, message: string, };
+
+export type StashInfo = {
+/**
+ * Commit object referenced by the stash reflog.
+ */
+hash: string,
+/**
+ * Reflog selector such as `stash@{0}`.
+ */
+selector: string,
+/**
+ * The `HEAD` commit when the stash was created.
+ */
+baseHash: string,
+/**
+ * The optional index commit created as the stash's second parent.
+ */
+indexHash: string | null,
+/**
+ * Branch name recorded in the stash subject, when available.
+ */
+branch: string | null,
+/**
+ * User-facing stash message without Git's generated branch prefix.
+ */
+message: string,
+/**
+ * Unix timestamp of the stash entry.
+ */
+timestamp: number, };
 
 export type CommitGraph = { commits: Array<GraphCommit>, edges: Array<GraphEdge>, width: number, headLane: number | null, };
 

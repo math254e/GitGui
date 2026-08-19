@@ -7,7 +7,7 @@
 use axum::{
     extract::{ws::Message, ws::WebSocket, ws::WebSocketUpgrade, Query, State},
     http::{HeaderMap, StatusCode},
-    response::{IntoResponse, Response},
+    response::{IntoResponse, Redirect, Response},
     routing::get,
     Json, Router,
 };
@@ -40,6 +40,11 @@ use gitgui_protocol::{
     CommitFileDiff as ProtocolCommitFileDiff, CommitFilesParams, CommitFilesResult,
     CommitGraph as ProtocolCommitGraph, CommitInfo as ProtocolCommitInfo,
     CommitRef as ProtocolCommitRef, CommitRefType as ProtocolCommitRefType, FileDiffResult,
+    GitBranch, GitBranchCreateParams, GitBranchCreateResult, GitBranchListParams,
+    GitBranchListResult, GitBranchSwitchParams, GitBranchSwitchResult, GitCommitParams,
+    GitCommitResult, GitFetchResult, GitPathsParams, GitPullResult, GitPushResult,
+    GitRepositoryParams, GitStageResult, GitStashPopParams, GitStashPopResult, GitStashPushParams,
+    GitStashPushResult, GitStatusParams, GitStatusResult, GitUnstageResult,
     GraphCommit as ProtocolGraphCommit, GraphEdge as ProtocolGraphEdge,
     GraphEdgeType as ProtocolGraphEdgeType, PrefetchCommitDiffsParams, PrefetchCommitDiffsResult,
     PrefetchCommitFilesParams, PrefetchCommitFilesResult, ProtocolError, ProtocolErrorMessage,
@@ -47,33 +52,29 @@ use gitgui_protocol::{
     RepositoriesRefreshParams, RepositoriesRefreshResult, RepositoryInfo as ProtocolRepositoryInfo,
     RepositoryRefreshItem, RepositorySnapshot, RepositorySnapshotParams, RepositorySnapshotResult,
     RepositoryStatus as ProtocolRepositoryStatus, RepositorySummary, RequestEnvelope,
-    GitBranch, GitBranchCreateParams, GitBranchCreateResult, GitBranchListParams,
-    GitBranchListResult, GitBranchSwitchParams, GitBranchSwitchResult, GitCommitParams,
-    GitCommitResult, GitFetchResult, GitPathsParams, GitPullResult, GitPushResult,
-    GitRepositoryParams, GitStageResult, GitStashPopParams, GitStashPopResult,
-    GitStashPushParams, GitStashPushResult, GitStatusParams, GitStatusResult,
-    GitUnstageResult, ResponseEnvelope, ServerInfo, ServerLifecycle, ServerReadiness, ServerStatus,
-    WelcomeMessage, CAPABILITY_GIT_BRANCH_CREATE, CAPABILITY_GIT_BRANCH_LIST,
-    CAPABILITY_GIT_BRANCH_SWITCH, CAPABILITY_GIT_COMMIT, CAPABILITY_GIT_COMMIT_FILES,
-    CAPABILITY_GIT_COMMIT_FILE_DIFF, CAPABILITY_GIT_FETCH, CAPABILITY_GIT_PREFETCH_COMMIT_DIFFS,
-    CAPABILITY_GIT_PREFETCH_COMMIT_FILES, CAPABILITY_GIT_PULL, CAPABILITY_GIT_PUSH,
-    CAPABILITY_GIT_STAGE, CAPABILITY_GIT_STASH_POP, CAPABILITY_GIT_STASH_PUSH,
-    CAPABILITY_GIT_STATUS, CAPABILITY_GIT_UNSTAGE, CAPABILITY_GIT_WORKING_TREE_FILE_DIFF,
-    CAPABILITY_REPOSITORIES_GET_SNAPSHOT,
+    ResponseEnvelope, ServerInfo, ServerLifecycle, ServerReadiness, ServerStatus,
+    StashInfo as ProtocolStashInfo, WelcomeMessage, CAPABILITY_GIT_BRANCH_CREATE,
+    CAPABILITY_GIT_BRANCH_LIST, CAPABILITY_GIT_BRANCH_SWITCH, CAPABILITY_GIT_COMMIT,
+    CAPABILITY_GIT_COMMIT_FILES, CAPABILITY_GIT_COMMIT_FILE_DIFF, CAPABILITY_GIT_FETCH,
+    CAPABILITY_GIT_PREFETCH_COMMIT_DIFFS, CAPABILITY_GIT_PREFETCH_COMMIT_FILES,
+    CAPABILITY_GIT_PULL, CAPABILITY_GIT_PUSH, CAPABILITY_GIT_STAGE, CAPABILITY_GIT_STASH_POP,
+    CAPABILITY_GIT_STASH_PUSH, CAPABILITY_GIT_STATUS, CAPABILITY_GIT_UNSTAGE,
+    CAPABILITY_GIT_WORKING_TREE_FILE_DIFF, CAPABILITY_REPOSITORIES_GET_SNAPSHOT,
     CAPABILITY_REPOSITORIES_LIST, CAPABILITY_REPOSITORIES_OPEN, CAPABILITY_REPOSITORIES_REFRESH,
     CAPABILITY_SERVER_INFO, CAPABILITY_SERVER_STATUS, MAX_PREFETCH_COMMIT_DIFF_TARGETS,
-    MAX_PREFETCH_COMMIT_HASHES, METHOD_REPOSITORIES_GET_SNAPSHOT, METHOD_REPOSITORIES_LIST,
-    METHOD_REPOSITORIES_OPEN, METHOD_REPOSITORIES_REFRESH, METHOD_SERVER_GET_INFO,
-    METHOD_SERVER_GET_STATUS, METHOD_GIT_BRANCH_CREATE, METHOD_GIT_BRANCH_LIST,
+    MAX_PREFETCH_COMMIT_HASHES, METHOD_GIT_BRANCH_CREATE, METHOD_GIT_BRANCH_LIST,
     METHOD_GIT_BRANCH_SWITCH, METHOD_GIT_COMMIT, METHOD_GIT_COMMIT_FILES,
     METHOD_GIT_COMMIT_FILE_DIFF, METHOD_GIT_FETCH, METHOD_GIT_PREFETCH_COMMIT_DIFFS,
     METHOD_GIT_PREFETCH_COMMIT_FILES, METHOD_GIT_PULL, METHOD_GIT_PUSH, METHOD_GIT_STAGE,
     METHOD_GIT_STASH_POP, METHOD_GIT_STASH_PUSH, METHOD_GIT_STATUS, METHOD_GIT_UNSTAGE,
-    METHOD_GIT_WORKING_TREE_FILE_DIFF, PROTOCOL_VERSION,
+    METHOD_GIT_WORKING_TREE_FILE_DIFF, METHOD_REPOSITORIES_GET_SNAPSHOT, METHOD_REPOSITORIES_LIST,
+    METHOD_REPOSITORIES_OPEN, METHOD_REPOSITORIES_REFRESH, METHOD_SERVER_GET_INFO,
+    METHOD_SERVER_GET_STATUS, PROTOCOL_VERSION,
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
+    collections::HashMap,
     env,
     error::Error,
     fmt::{self, Display, Formatter},
@@ -82,7 +83,6 @@ use std::{
     net::{IpAddr, SocketAddr},
     path::{Component, Path, PathBuf},
     sync::Arc,
-    collections::HashMap,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tokio::{
@@ -105,6 +105,8 @@ pub const BOOTSTRAP_TOKEN_ENV: &str = "GITGUI_SERVER_BOOTSTRAP_TOKEN";
 pub const ALLOWED_ORIGINS_ENV: &str = "GITGUI_SERVER_ALLOWED_ORIGINS";
 /// Environment variable containing additional exact browser origins.
 pub const ADDITIONAL_ORIGINS_ENV: &str = "GITGUI_SERVER_ADDITIONAL_ORIGINS";
+/// Environment variable pointing at the Vite development client.
+pub const DEV_URL_ENV: &str = "GITGUI_SERVER_DEV_URL";
 /// Environment variable pointing at the compiled SvelteKit web application.
 pub const WEB_DIR_ENV: &str = "GITGUI_SERVER_WEB_DIR";
 
@@ -153,6 +155,8 @@ pub struct ServerConfig {
     pub allowed_origins: Vec<String>,
     /// Optional directory containing the compiled SvelteKit app.
     pub web_dir: Option<PathBuf>,
+    /// Optional Vite development client URL used by the local browser entrypoint.
+    pub dev_url: Option<String>,
 }
 
 impl Default for ServerConfig {
@@ -175,6 +179,7 @@ impl Default for ServerConfig {
                 .map(|origin| (*origin).to_string())
                 .collect(),
             web_dir: None,
+            dev_url: None,
         }
     }
 }
@@ -195,6 +200,7 @@ impl fmt::Debug for ServerConfig {
             )
             .field("allowed_origins", &self.allowed_origins)
             .field("web_dir", &self.web_dir)
+            .field("dev_url", &self.dev_url)
             .finish()
     }
 }
@@ -227,6 +233,9 @@ impl ServerConfig {
         }
         if let Ok(origins) = env::var(ADDITIONAL_ORIGINS_ENV) {
             append_origin_list(&mut config.allowed_origins, &origins)?;
+        }
+        if let Ok(dev_url) = env::var(DEV_URL_ENV) {
+            config.dev_url = Some(parse_dev_url(&dev_url)?);
         }
         if let Ok(web_dir) = env::var(WEB_DIR_ENV) {
             config.web_dir = Some(parse_web_dir(&web_dir)?);
@@ -284,6 +293,7 @@ pub enum ConfigError {
     InvalidDataDir { value: String },
     InvalidOrigin { value: String },
     InvalidWebDir { value: String },
+    InvalidDevUrl { value: String },
     UnknownArgument(String),
     HelpRequested,
     VersionRequested,
@@ -298,6 +308,7 @@ impl Display for ConfigError {
             Self::InvalidDataDir { value } => write!(formatter, "invalid data directory: {value}"),
             Self::InvalidOrigin { value } => write!(formatter, "invalid allowed origin: {value}"),
             Self::InvalidWebDir { value } => write!(formatter, "invalid web directory: {value}"),
+            Self::InvalidDevUrl { value } => write!(formatter, "invalid development URL: {value}"),
             Self::UnknownArgument(argument) => write!(formatter, "unknown argument: {argument}"),
             Self::HelpRequested => formatter.write_str("help requested"),
             Self::VersionRequested => formatter.write_str("version requested"),
@@ -431,12 +442,24 @@ pub async fn run(config: ServerConfig) -> Result<(), ServerError> {
 }
 
 fn router(state: Arc<ServerState>, web_dir: Option<PathBuf>) -> Router {
+    let dev_url = state.dev_url.clone();
+    let server_address = state.info.bind_address.clone();
+    let session_token = state.bootstrap_token.clone();
     let router = Router::new()
         .route("/health", get(health))
         .route("/ready", get(ready))
         .route("/info", get(info))
         .route("/ws", get(websocket))
         .with_state(state);
+
+    if let Some(dev_url) = dev_url {
+        let redirect_url =
+            build_dev_redirect_url(&dev_url, &server_address, session_token.as_deref());
+        return router.route(
+            "/",
+            get(move || async move { Redirect::temporary(&redirect_url) }),
+        );
+    }
 
     let Some(web_dir) = web_dir else {
         return router;
@@ -449,6 +472,26 @@ fn router(state: Arc<ServerState>, web_dir: Option<PathBuf>) -> Router {
             .append_index_html_on_directories(true)
             .fallback(ServeFile::new(index_file)),
     )
+}
+
+fn build_dev_redirect_url(
+    dev_url: &str,
+    server_address: &str,
+    session_token: Option<&str>,
+) -> String {
+    let separator = if dev_url.ends_with('?') || dev_url.ends_with('&') {
+        ""
+    } else if dev_url.contains('?') {
+        "&"
+    } else {
+        "?"
+    };
+    let mut redirect_url = format!("{dev_url}{separator}server=http://{server_address}");
+    if let Some(session_token) = session_token {
+        redirect_url.push_str("#session_token=");
+        redirect_url.push_str(session_token);
+    }
+    redirect_url
 }
 
 #[derive(Serialize)]
@@ -900,7 +943,10 @@ async fn git_stage(request_id: String, params: Value, state: &ServerState) -> Re
     match run_git_action(state, &repository_id, move |root| run_stage(root, &paths)).await {
         Ok((repository, snapshot, _)) => response_success(
             request_id,
-            GitStageResult { repository, snapshot },
+            GitStageResult {
+                repository,
+                snapshot,
+            },
         ),
         Err(error) => ResponseEnvelope::error(request_id, error),
     }
@@ -922,7 +968,10 @@ async fn git_unstage(request_id: String, params: Value, state: &ServerState) -> 
     match run_git_action(state, &repository_id, move |root| run_unstage(root, &paths)).await {
         Ok((repository, snapshot, _)) => response_success(
             request_id,
-            GitUnstageResult { repository, snapshot },
+            GitUnstageResult {
+                repository,
+                snapshot,
+            },
         ),
         Err(error) => ResponseEnvelope::error(request_id, error),
     }
@@ -948,7 +997,11 @@ async fn git_commit(request_id: String, params: Value, state: &ServerState) -> R
 
     let repository_id = params.repository_id.clone();
     let message = build_commit_message(&params.summary, params.description.as_deref());
-    match run_git_action(state, &repository_id, move |root| run_commit(root, &message)).await {
+    match run_git_action(state, &repository_id, move |root| {
+        run_commit(root, &message)
+    })
+    .await
+    {
         Ok((repository, snapshot, _)) => {
             let Some(commit_hash) = snapshot.status.head_oid.clone() else {
                 return git_failure(request_id, "commit completed without a new HEAD");
@@ -967,23 +1020,47 @@ async fn git_commit(request_id: String, params: Value, state: &ServerState) -> R
 }
 
 async fn git_fetch(request_id: String, params: Value, state: &ServerState) -> ResponseEnvelope {
-    git_repository_action(request_id, params, state, "git.fetch", run_fetch, |repository, snapshot| {
-        GitFetchResult { repository, snapshot }
-    })
+    git_repository_action(
+        request_id,
+        params,
+        state,
+        "git.fetch",
+        run_fetch,
+        |repository, snapshot| GitFetchResult {
+            repository,
+            snapshot,
+        },
+    )
     .await
 }
 
 async fn git_pull(request_id: String, params: Value, state: &ServerState) -> ResponseEnvelope {
-    git_repository_action(request_id, params, state, "git.pull", run_pull, |repository, snapshot| {
-        GitPullResult { repository, snapshot }
-    })
+    git_repository_action(
+        request_id,
+        params,
+        state,
+        "git.pull",
+        run_pull,
+        |repository, snapshot| GitPullResult {
+            repository,
+            snapshot,
+        },
+    )
     .await
 }
 
 async fn git_push(request_id: String, params: Value, state: &ServerState) -> ResponseEnvelope {
-    git_repository_action(request_id, params, state, "git.push", run_push, |repository, snapshot| {
-        GitPushResult { repository, snapshot }
-    })
+    git_repository_action(
+        request_id,
+        params,
+        state,
+        "git.push",
+        run_push,
+        |repository, snapshot| GitPushResult {
+            repository,
+            snapshot,
+        },
+    )
     .await
 }
 
@@ -1027,7 +1104,11 @@ async fn git_branch_list(
         return ResponseEnvelope::error(request_id, error);
     }
 
-    match run_git_action(state, &params.repository_id, |root| list_local_branches(root)).await {
+    match run_git_action(state, &params.repository_id, |root| {
+        list_local_branches(root)
+    })
+    .await
+    {
         Ok((repository, snapshot, names)) => {
             let current = snapshot.status.current_branch.as_deref();
             response_success(
@@ -1082,7 +1163,10 @@ async fn git_branch_create(
     {
         Ok((repository, snapshot, _)) => response_success(
             request_id,
-            GitBranchCreateResult { repository, snapshot },
+            GitBranchCreateResult {
+                repository,
+                snapshot,
+            },
         ),
         Err(error) => ResponseEnvelope::error(request_id, error),
     }
@@ -1105,10 +1189,17 @@ async fn git_branch_switch(
 
     let repository_id = params.repository_id.clone();
     let name = params.name;
-    match run_git_action(state, &repository_id, move |root| run_switch_branch(root, &name)).await {
+    match run_git_action(state, &repository_id, move |root| {
+        run_switch_branch(root, &name)
+    })
+    .await
+    {
         Ok((repository, snapshot, _)) => response_success(
             request_id,
-            GitBranchSwitchResult { repository, snapshot },
+            GitBranchSwitchResult {
+                repository,
+                snapshot,
+            },
         ),
         Err(error) => ResponseEnvelope::error(request_id, error),
     }
@@ -1143,17 +1234,16 @@ async fn git_stash_push(
     {
         Ok((repository, snapshot, _)) => response_success(
             request_id,
-            GitStashPushResult { repository, snapshot },
+            GitStashPushResult {
+                repository,
+                snapshot,
+            },
         ),
         Err(error) => ResponseEnvelope::error(request_id, error),
     }
 }
 
-async fn git_stash_pop(
-    request_id: String,
-    params: Value,
-    state: &ServerState,
-) -> ResponseEnvelope {
+async fn git_stash_pop(request_id: String, params: Value, state: &ServerState) -> ResponseEnvelope {
     let params = match parse_params::<GitStashPopParams>(params, "git.stash.pop") {
         Ok(params) => params,
         Err(error) => return ResponseEnvelope::error(request_id, error),
@@ -1165,7 +1255,10 @@ async fn git_stash_pop(
     match run_git_action(state, &params.repository_id, run_stash_pop).await {
         Ok((repository, snapshot, _)) => response_success(
             request_id,
-            GitStashPopResult { repository, snapshot },
+            GitStashPopResult {
+                repository,
+                snapshot,
+            },
         ),
         Err(error) => ResponseEnvelope::error(request_id, error),
     }
@@ -1609,7 +1702,11 @@ fn validate_commit_text(value: &str, field: &str, max_length: usize) -> Result<(
     Ok(())
 }
 
-fn validate_optional_text(value: &str, field: &str, max_length: usize) -> Result<(), ProtocolError> {
+fn validate_optional_text(
+    value: &str,
+    field: &str,
+    max_length: usize,
+) -> Result<(), ProtocolError> {
     if value.len() > max_length || value.bytes().any(|byte| byte == 0) {
         return Err(ProtocolError::new(
             error_codes::INVALID_PARAMS,
@@ -1635,7 +1732,10 @@ fn validate_branch_argument(value: &str, field: &str) -> Result<(), ProtocolErro
 
 fn build_commit_message(summary: &str, description: Option<&str>) -> String {
     let summary = summary.trim();
-    match description.map(str::trim).filter(|description| !description.is_empty()) {
+    match description
+        .map(str::trim)
+        .filter(|description| !description.is_empty())
+    {
         Some(description) => format!("{summary}\n\n{description}\n"),
         None => format!("{summary}\n"),
     }
@@ -1709,6 +1809,7 @@ struct ServerState {
     cache: SharedCommitFilesCache,
     bootstrap_token: Option<String>,
     allowed_origins: Vec<String>,
+    dev_url: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -1778,6 +1879,7 @@ impl ServerState {
                 .clone()
                 .filter(|token| !token.is_empty()),
             allowed_origins: config.allowed_origins.clone(),
+            dev_url: config.dev_url.clone(),
         }
     }
 
@@ -2228,6 +2330,20 @@ fn parse_web_dir(value: &str) -> Result<PathBuf, ConfigError> {
     Ok(PathBuf::from(value))
 }
 
+fn parse_dev_url(value: &str) -> Result<String, ConfigError> {
+    let value = value.trim();
+    if value.is_empty()
+        || value.contains('#')
+        || value.chars().any(char::is_whitespace)
+        || !(value.starts_with("http://") || value.starts_with("https://"))
+    {
+        return Err(ConfigError::InvalidDevUrl {
+            value: value.to_string(),
+        });
+    }
+    Ok(value.to_string())
+}
+
 fn resolve_web_dir(config: &ServerConfig) -> Result<Option<PathBuf>, String> {
     let candidates = if let Some(web_dir) = config.web_dir.clone() {
         vec![web_dir]
@@ -2361,6 +2477,11 @@ fn protocol_snapshot(
             head_lane: snapshot.graph.head_lane,
         },
         refs: snapshot.refs.into_iter().map(protocol_commit_ref).collect(),
+        stashes: snapshot
+            .stashes
+            .into_iter()
+            .map(protocol_stash_info)
+            .collect(),
     }
 }
 
@@ -2403,6 +2524,18 @@ fn protocol_commit_info(commit: gitgui_core::git::repository::CommitInfo) -> Pro
         author: commit.author,
         timestamp: commit.timestamp,
         message: commit.message,
+    }
+}
+
+fn protocol_stash_info(stash: gitgui_core::git::repository::StashInfo) -> ProtocolStashInfo {
+    ProtocolStashInfo {
+        hash: stash.hash,
+        selector: stash.selector,
+        base_hash: stash.base_hash,
+        index_hash: stash.index_hash,
+        branch: stash.branch,
+        message: stash.message,
+        timestamp: stash.timestamp,
     }
 }
 
