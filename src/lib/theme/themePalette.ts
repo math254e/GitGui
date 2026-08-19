@@ -5,6 +5,7 @@ import {
   THEME_COLOR_ROLES,
   THEME_FILE_VERSION,
   THEME_PREVIEW_ID,
+  type GraphThemeColorRole,
   type ThemeAppearance,
   type ThemeCollection,
   type ThemeColorOverrides,
@@ -32,6 +33,33 @@ type ThemeSeed = Readonly<{
   darkCanvas: string;
   darkAccent: string;
 }>;
+
+const REFERENCE_GRAPH_COLORS: Readonly<
+  Record<ThemeAppearance, Readonly<Record<GraphThemeColorRole, string>>>
+> = {
+  light: {
+    graphLane1: "#1d839b",
+    graphLane2: "#0f54c3",
+    graphLane3: "#72049b",
+    graphLane4: "#a10e91",
+    graphLane5: "#ad005a",
+    graphLane6: "#a6000e",
+    graphLane7: "#c4432d",
+    graphLane8: "#a88d24",
+    graphLane9: "#5ea632",
+  },
+  dark: {
+    graphLane1: "#23a1be",
+    graphLane2: "#136bf4",
+    graphLane3: "#8c05bf",
+    graphLane4: "#c315b4",
+    graphLane5: "#d70071",
+    graphLane6: "#cb0011",
+    graphLane7: "#f05a36",
+    graphLane8: "#f1c942",
+    graphLane9: "#7ed944",
+  },
+};
 
 function clamp(value: number, min = 0, max = 1): number {
   return Math.min(max, Math.max(min, value));
@@ -62,6 +90,12 @@ function mixHex(first: string, second: string, amount: number): string {
     g: a.g + (b.g - a.g) * ratio,
     b: a.b + (b.b - a.b) * ratio,
   });
+}
+
+function createGraphColors(
+  appearance: ThemeAppearance,
+): Readonly<Record<GraphThemeColorRole, string>> {
+  return REFERENCE_GRAPH_COLORS[appearance];
 }
 
 function channelToLinear(channel: number): number {
@@ -102,6 +136,7 @@ function createThemeColors(
   const update = isLight ? accent : mixHex(accent, white, 0.1);
 
   return {
+    ...createGraphColors(appearance),
     canvas,
     chrome: canvas,
     toolbar: canvas,
@@ -184,6 +219,7 @@ export const T3_CODE_THEME: ThemeDefinition = {
   label: "T3 Code",
   appearance: "light",
   colors: {
+    ...createGraphColors("light"),
     canvas: "#fcfcfc",
     chrome: "#fcfcfc",
     toolbar: "#fcfcfc",
@@ -244,6 +280,7 @@ export const T3_CODE_THEME: ThemeDefinition = {
   },
   variants: {
     dark: {
+      ...createGraphColors("dark"),
       canvas: "#0a0a0a",
       chrome: "#0a0a0a",
       toolbar: "#0a0a0a",
@@ -311,6 +348,7 @@ export const T3_CHAT_THEME: ThemeDefinition = {
   label: "T3 Chat",
   appearance: "light",
   colors: {
+    ...createGraphColors("light"),
     canvas: "#fdf7fd",
     chrome: "#fdf7fd",
     toolbar: "#fdf7fd",
@@ -371,6 +409,7 @@ export const T3_CHAT_THEME: ThemeDefinition = {
   },
   variants: {
     dark: {
+      ...createGraphColors("dark"),
       canvas: "#1f1a24",
       chrome: "#1f1a24",
       toolbar: "#1f1a24",
@@ -444,16 +483,128 @@ export const OCEAN_THEME = createManagedTheme(
   "Ocean",
 );
 
-export const EMBER_THEME = createManagedTheme(
-  {
-    lightCanvas: "#fff6ef",
-    lightAccent: "#c4602f",
-    darkCanvas: "#30231e",
-    darkAccent: "#f39a62",
+const GITKRAKEN_LIGHT_BASE = createThemeColors("light", "#f1f3f5", "#008ba6");
+const GITKRAKEN_DARK_BASE = createThemeColors("dark", "#181a1f", "#00a8c6");
+
+/** Cool layered charcoal palette based on GitKraken Desktop's default theme. */
+export const GITKRAKEN_THEME: ThemeDefinition = {
+  id: "gitkraken",
+  label: "GitKraken",
+  appearance: "light",
+  colors: {
+    ...GITKRAKEN_LIGHT_BASE,
+    canvas: "#f1f3f5",
+    chrome: "#e4e7ea",
+    toolbar: "#eaecf0",
+    toolbarForeground: "#292c32",
+    toolbarBorder: "#cdd2d8",
+    toolbarControl: "#f6f7f8",
+    toolbarControlForeground: "#292c32",
+    toolbarControlHover: "#dde2e7",
+    surface: "#ffffff",
+    surfaceRaised: "#f8f9fa",
+    surfaceOverlay: "#ffffff",
+    text: "#292c32",
+    textMuted: "#6e747f",
+    border: "#d0d5db",
+    input: "#e5e9ed",
+    focus: "#009fbe",
+    accent: "#008ba6",
+    accentForeground: "#ffffff",
+    secondary: "#e7eaee",
+    secondaryForeground: "#343840",
+    muted: "#e1e5e9",
+    mutedForeground: "#5f6671",
+    placeholder: "#7e8590",
+    secondaryLabel: "#626974",
+    iconMuted: "#747b86",
+    accentSurface: "#d1edf2",
+    accentSurfaceForeground: "#12424c",
+    messageSurface: "#edf1f4",
+    messageForeground: "#292c32",
+    messageAction: "#008ba6",
+    messageActionForeground: "#ffffff",
+    messageActionHover: "#00758c",
+    codeBackground: "#f7f8f9",
+    codeForeground: "#292c32",
+    sidebar: "#e5e8ec",
+    sidebarForeground: "#292c32",
+    sidebarMutedForeground: "#676e79",
+    sidebarControlSurface: "#f2f4f6",
+    sidebarRowHover: "#dce1e6",
+    sidebarRowActive: "#d4dade",
+    sidebarRowSelected: "#c8e8ee",
+    sidebarBorder: "#cbd0d6",
+    terminalBackground: "#f7f8f9",
+    terminalForeground: "#292c32",
+    terminalCursor: "#008ba6",
+    terminalSelection: "#c8e8ee",
+    terminalScrollbar: "#c9ced4",
+    terminalScrollbarHover: "#aeb5bd",
   },
-  "ember",
-  "Ember",
-);
+  variants: {
+    dark: {
+      ...GITKRAKEN_DARK_BASE,
+      canvas: "#181a1f",
+      chrome: "#2a2d34",
+      toolbar: "#30333a",
+      toolbarForeground: "#d8dbe1",
+      toolbarBorder: "#3b3f47",
+      toolbarControl: "#30333a",
+      toolbarControlForeground: "#f0f1f3",
+      toolbarControlHover: "#3a3e46",
+      surface: "#202329",
+      surfaceRaised: "#282b32",
+      surfaceOverlay: "#15171b",
+      text: "#d8dbe0",
+      textMuted: "#8f949e",
+      border: "#393d45",
+      input: "#272a31",
+      focus: "#00b8d9",
+      accent: "#00a8c6",
+      accentForeground: "#07191e",
+      secondary: "#2c3037",
+      secondaryForeground: "#d8dbe0",
+      muted: "#30343c",
+      mutedForeground: "#a4a9b2",
+      placeholder: "#777d88",
+      secondaryLabel: "#a7acb5",
+      iconMuted: "#9ba0aa",
+      error: "#ef5261",
+      errorForeground: "#ffffff",
+      errorSurface: "#43242c",
+      warning: "#f2a33c",
+      warningForeground: "#201408",
+      warningSurface: "#443621",
+      update: "#37c879",
+      updateForeground: "#071b10",
+      updateSurface: "#203d30",
+      accentSurface: "#17414b",
+      accentSurfaceForeground: "#bdf4ff",
+      messageSurface: "#22252b",
+      messageForeground: "#e0e2e6",
+      messageAction: "#00c4e6",
+      messageActionForeground: "#07191e",
+      messageActionHover: "#22d1ee",
+      codeBackground: "#191b20",
+      codeForeground: "#d8dbe0",
+      sidebar: "#25282e",
+      sidebarForeground: "#d7d9de",
+      sidebarMutedForeground: "#9ba0aa",
+      sidebarControlSurface: "#1d1f24",
+      sidebarRowHover: "#2c3037",
+      sidebarRowActive: "#31353d",
+      sidebarRowSelected: "#2d6673",
+      sidebarBorder: "#3b3f47",
+      terminalBackground: "#181a1f",
+      terminalForeground: "#d8dbe0",
+      terminalCursor: "#00c4e6",
+      terminalSelection: "#244953",
+      terminalScrollbar: "#363a42",
+      terminalScrollbarHover: "#4a4f59",
+    },
+  },
+};
 
 export const GROVE_THEME = createManagedTheme(
   {
@@ -482,7 +633,7 @@ export const BUILT_IN_THEMES: ReadonlyArray<ThemeDefinition> = [
   T3_CHAT_THEME,
   GROVE_THEME,
   OCEAN_THEME,
-  EMBER_THEME,
+  GITKRAKEN_THEME,
   IRIS_THEME,
 ];
 
@@ -856,8 +1007,9 @@ export function parseThemeHalves(raw: string | null): ThemeHalves | null {
     if (!isRecord(value)) return null;
     const halves: Partial<Record<ThemeAppearance, string>> = {};
     for (const appearance of ["light", "dark"] as const) {
-      const themeId = value[appearance];
-      if (typeof themeId !== "string") continue;
+      const storedThemeId = value[appearance];
+      if (typeof storedThemeId !== "string") continue;
+      const themeId = storedThemeId === "ember" ? "gitkraken" : storedThemeId;
       const definition = getThemeDefinition(themeId);
       if (definition && getThemeColorsForMode(definition, appearance)) halves[appearance] = definition.id;
     }

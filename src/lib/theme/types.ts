@@ -4,6 +4,20 @@
  * These role names intentionally follow T3 Code's palette model. Components
  * should consume roles instead of knowing which concrete color a surface uses.
  */
+export const GRAPH_THEME_COLOR_ROLES = [
+  "graphLane1",
+  "graphLane2",
+  "graphLane3",
+  "graphLane4",
+  "graphLane5",
+  "graphLane6",
+  "graphLane7",
+  "graphLane8",
+  "graphLane9",
+] as const;
+
+export type GraphThemeColorRole = (typeof GRAPH_THEME_COLOR_ROLES)[number];
+
 export const THEME_COLOR_ROLES = [
   "canvas",
   "chrome",
@@ -62,6 +76,7 @@ export const THEME_COLOR_ROLES = [
   "terminalSelection",
   "terminalScrollbar",
   "terminalScrollbarHover",
+  ...GRAPH_THEME_COLOR_ROLES,
 ] as const;
 
 export type ThemeColorRole = (typeof THEME_COLOR_ROLES)[number];
@@ -200,4 +215,13 @@ export const APP_THEME_VARIABLES: Readonly<Record<ThemeColorRole, string>> = {
   terminalSelection: "--app-theme-terminal-selection-background",
   terminalScrollbar: "--app-theme-terminal-scrollbar",
   terminalScrollbarHover: "--app-theme-terminal-scrollbar-hover",
+  graphLane1: "--app-theme-graph-lane-1",
+  graphLane2: "--app-theme-graph-lane-2",
+  graphLane3: "--app-theme-graph-lane-3",
+  graphLane4: "--app-theme-graph-lane-4",
+  graphLane5: "--app-theme-graph-lane-5",
+  graphLane6: "--app-theme-graph-lane-6",
+  graphLane7: "--app-theme-graph-lane-7",
+  graphLane8: "--app-theme-graph-lane-8",
+  graphLane9: "--app-theme-graph-lane-9",
 };

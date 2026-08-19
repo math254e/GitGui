@@ -2,6 +2,7 @@
   import { Cloud, Monitor } from "@lucide/svelte";
   import { onDestroy } from "svelte";
   import { drawGitGraphCanvas } from "$lib/git-graph/canvas-renderer";
+  import { APP_THEME_VARIABLES, GRAPH_THEME_COLOR_ROLES } from "$lib/theme/types";
   import type { CommitInfo, CommitRef, GraphCommit, RepositorySnapshot, StashInfo } from "$lib/types/repository";
 
   type ColumnId = "branch" | "graph" | "message";
@@ -37,18 +38,6 @@
   const lineWidth = 2.5;
   const columnStorageKey = "gitgui.historyColumns.v1";
   const minimumColumnWidth = 24;
-  const branchColors = [
-    "oklch(0.773 0.118 281.135)",
-    "oklch(0.772 0.130 240.067)",
-    "oklch(0.811 0.146 217.709)",
-    "oklch(0.822 0.152 177.146)",
-    "oklch(0.798 0.193 140.004)",
-    "oklch(0.802 0.166 98.070)",
-    "oklch(0.774 0.174 65.052)",
-    "oklch(0.749 0.152 17.942)",
-    "oklch(0.761 0.164 353.728)",
-  ];
-
   let { snapshot, selectedCommit, changesSelected, onSelectChanges, onSelectCommit }: Props = $props();
   let columns = $state<HistoryColumn[]>([
     { id: "branch", label: "Branch", width: 118, visible: true },
@@ -63,6 +52,7 @@
   let graphScrollTop = $state(0);
   let graphViewportHeight = $state(0);
   let graphDevicePixelRatio = $state(1);
+  let graphThemeRevision = $state(0);
 
   $effect(() => {
     if (restoredColumns) {
@@ -107,6 +97,19 @@
     const observer = new ResizeObserver(measure);
     observer.observe(viewport);
     measure();
+
+    return () => observer.disconnect();
+  });
+
+  $effect(() => {
+    const root = document.documentElement;
+    const observer = new MutationObserver(() => {
+      graphThemeRevision += 1;
+    });
+    observer.observe(root, {
+      attributes: true,
+      attributeFilter: ["class", "data-theme-appearance", "data-theme-id", "style"],
+    });
 
     return () => observer.disconnect();
   });
@@ -156,12 +159,17 @@
     const selectedHash = selectedCommit?.hash ?? null;
     const hoveredHash = hoveredRowHash;
     const currentStashHashes = stashHashes;
+    graphThemeRevision;
 
     if (!canvas || !currentSnapshot || viewportHeight <= 0 || width <= 0) {
       return;
     }
 
-    const surfaceColor = getComputedStyle(canvas).getPropertyValue("--app-theme-surface").trim() || "#ffffff";
+    const computedStyle = getComputedStyle(canvas);
+    const surfaceColor = computedStyle.getPropertyValue("--app-theme-surface").trim() || "#ffffff";
+    const graphColors = GRAPH_THEME_COLOR_ROLES.map((role) =>
+      computedStyle.getPropertyValue(APP_THEME_VARIABLES[role]).trim(),
+    ).filter(Boolean);
     drawGitGraphCanvas(canvas, {
       graph: currentSnapshot.graph,
       commits: currentSnapshot.commits,
@@ -179,7 +187,7 @@
       graphPadding,
       dotRadius,
       lineWidth,
-      colors: branchColors,
+      colors: graphColors,
       surfaceColor,
     });
   });
@@ -703,14 +711,19 @@
   }
 
   function branchColor(lane: number) {
-    return branchColors[lane % branchColors.length];
+    const role = GRAPH_THEME_COLOR_ROLES[lane % GRAPH_THEME_COLOR_ROLES.length];
+    return `var(${APP_THEME_VARIABLES[role]})`;
   }
 
   function refBadgeStyle(refType: CommitRef["refType"], graphCommit: GraphCommit | undefined) {
     const color = branchColor(graphCommit?.lane ?? 0);
-    const tint = refType === "tag" ? 14 : 9;
+    const tint = refType === "tag" ? 18 : refType === "remoteBranch" ? 22 : 26;
 
-    return `border-color: ${color}66; color: ${color}; background: color-mix(in srgb, ${color} ${tint}%, white);`;
+    return [
+      `border-color: color-mix(in srgb, ${color} 72%, var(--app-theme-border, #d4d4d8))`,
+      `color: var(--app-theme-text, #27272a)`,
+      `background: color-mix(in srgb, ${color} ${tint}%, var(--app-theme-surface, #ffffff))`,
+    ].join("; ");
   }
 
   function refKey(ref: CommitRef) {

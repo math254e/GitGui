@@ -9,7 +9,9 @@
     toCanonicalThemeColor,
   } from "../../theme/themePalette";
   import {
+    GRAPH_THEME_COLOR_ROLES,
     THEME_FILE_VERSION,
+    type GraphThemeColorRole,
     type ThemeAppearance,
     type ThemeColors,
     type ThemeDefinition,
@@ -118,6 +120,24 @@
     updateColor(appearance, role, value);
   }
 
+  function updateGraphColor(
+    appearance: ThemeAppearance,
+    role: GraphThemeColorRole,
+    value: string,
+  ) {
+    const canonical = toCanonicalThemeColor(value);
+    if (!canonical) return;
+
+    if (appearance === "light") {
+      lightColors = { ...lightColors, [role]: canonical } as ThemeColors;
+      onPreview?.(lightColors, "light");
+    } else {
+      darkColors = { ...darkColors, [role]: canonical } as ThemeColors;
+      onPreview?.(darkColors, "dark");
+    }
+    errorMessage = "";
+  }
+
   function setAppearance(appearance: ThemeAppearance) {
     activeAppearance = appearance;
     onPreview?.(appearance === "light" ? lightColors : darkColors, appearance);
@@ -189,7 +209,7 @@
           <p class="text-[11px] font-semibold uppercase tracking-[0.16em]" style="color: var(--app-theme-text-muted, #92939b)">Theme library</p>
           <h2 id="theme-editor-title" class="mt-1 text-lg font-semibold tracking-[-0.02em]">{theme ? "Edit theme" : "Create theme"}</h2>
           <p id="theme-editor-description" class="mt-1 text-sm" style="color: var(--app-theme-text-muted, #92939b)">
-            Set the identity and the two palette anchors used by the theme.
+            Set the identity, palette anchors, and graph colors used by the theme.
           </p>
         </div>
         <button
@@ -315,6 +335,39 @@
                 oninput={(event) => updateTextColor(activeAppearance, "accent", (event.currentTarget as HTMLInputElement).value)}
               />
             </label>
+          </div>
+
+          <div class="mt-5 border-t pt-4" style="border-color: var(--app-theme-border, #27272c)">
+            <div class="flex items-end justify-between gap-3">
+              <div>
+                <h4 class="text-sm font-semibold">Graph lanes</h4>
+                <p class="mt-1 text-xs" style="color: var(--app-theme-text-muted, #92939b)">Colors repeat when a history needs more than nine lanes.</p>
+              </div>
+              <div class="flex items-center gap-1" aria-hidden="true">
+                {#each GRAPH_THEME_COLOR_ROLES.slice(0, 5) as role (role)}
+                  <span class="h-1.5 w-4 rounded-full" style={`background: ${activeColors[role]}`}></span>
+                {/each}
+              </div>
+            </div>
+
+            <div class="mt-3 grid grid-cols-3 gap-2 sm:grid-cols-5 lg:grid-cols-9">
+              {#each GRAPH_THEME_COLOR_ROLES as role, index (role)}
+                <label
+                  class="flex min-w-0 items-center gap-2 rounded-lg border px-2 py-2"
+                  style="background: var(--app-theme-surface, #0b0b0d); border-color: var(--app-theme-border, #27272c)"
+                  title={`Graph lane ${index + 1}: ${activeColors[role]}`}
+                >
+                  <input
+                    class="h-6 w-7 shrink-0 cursor-pointer rounded border-0 bg-transparent p-0"
+                    type="color"
+                    value={colorInputValue(activeColors[role])}
+                    aria-label={`${activeAppearance} graph lane ${index + 1} color`}
+                    oninput={(event) => updateGraphColor(activeAppearance, role, (event.currentTarget as HTMLInputElement).value)}
+                  />
+                  <span class="truncate text-[11px] font-semibold" style="color: var(--app-theme-text-muted, #92939b)">{index + 1}</span>
+                </label>
+              {/each}
+            </div>
           </div>
 
           <div class="mt-3 overflow-hidden rounded-xl border" style={`background: ${activeColors.canvas}; border-color: ${activeColors.border}`} aria-label={`${activeAppearance} theme preview`}>

@@ -51,6 +51,10 @@ function readThemePreference(): string {
   if (typeof window === "undefined") return DEFAULT_THEME_ID;
   try {
     const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
+    if (stored === "ember" && isKnownThemePreference("gitkraken")) {
+      window.localStorage.setItem(THEME_STORAGE_KEY, "gitkraken");
+      return "gitkraken";
+    }
     return stored && isKnownThemePreference(stored) ? stored : DEFAULT_THEME_ID;
   } catch {
     return DEFAULT_THEME_ID;

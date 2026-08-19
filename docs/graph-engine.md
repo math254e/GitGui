@@ -134,7 +134,8 @@ The canvas:
 - skips edges and nodes outside the viewport with a small overscan;
 - renders normal edges primarily in the child lane and merge edges primarily in
   the parent lane;
-- uses lane color as the strongest visual signal;
+- uses the active theme's nine `graphLane` roles as the strongest visual signal,
+  repeating the palette only when a history needs more lanes;
 - renders merge commits with a center mark and stash commits as dashed squares;
 - attaches the dashed working-tree node to the actual HEAD lane;
 - redraws emphasis for selected and hovered commit rows.
@@ -142,6 +143,20 @@ The canvas:
 The graph column grows to fit `graph.width`, while still respecting the user's
 resized column width. Row height, lane spacing, and padding remain UI constants;
 they are not protocol concerns.
+
+Each built-in theme pair shares one perceptual hue set, anchored to its light
+accent. The lanes use a golden-angle order so neighboring lanes are strongly
+separated instead of appearing as adjacent rainbow shades. Light and dark
+variants only adjust luminance, so a lane keeps the same color identity when the
+appearance changes. Custom themes can override every lane in the Appearance
+editor or through the corresponding theme-file color roles. Themes saved before
+graph roles existed inherit the current defaults when read.
+
+All built-in themes share the sampled GitKraken lane palette: `#23a1be`,
+`#136bf4`, `#8c05bf`, `#c315b4`, `#d70071`, `#cb0011`, `#f05a36`, `#f1c942`,
+and `#7ed944` in the dark appearance. The light appearance preserves the same
+identities with darker contrast-safe values. Custom themes can still override
+the roles individually.
 
 ## Required invariants and coverage
 

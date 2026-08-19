@@ -59,6 +59,15 @@
   --app-theme-terminal-selection-background: #d0d6dd;
   --app-theme-terminal-scrollbar: #d6d6d6;
   --app-theme-terminal-scrollbar-hover: #bdbdbd;
+  --app-theme-graph-lane-1: #1d839b;
+  --app-theme-graph-lane-2: #0f54c3;
+  --app-theme-graph-lane-3: #72049b;
+  --app-theme-graph-lane-4: #a10e91;
+  --app-theme-graph-lane-5: #ad005a;
+  --app-theme-graph-lane-6: #a6000e;
+  --app-theme-graph-lane-7: #c4432d;
+  --app-theme-graph-lane-8: #a88d24;
+  --app-theme-graph-lane-9: #5ea632;
   --app-scrollbar-thumb: #d6d6d6;
   --app-scrollbar-thumb-hover: #bdbdbd;
 
@@ -138,6 +147,15 @@
   --app-theme-terminal-selection-background: #343a47;
   --app-theme-terminal-scrollbar: #222222;
   --app-theme-terminal-scrollbar-hover: #363636;
+  --app-theme-graph-lane-1: #23a1be;
+  --app-theme-graph-lane-2: #136bf4;
+  --app-theme-graph-lane-3: #8c05bf;
+  --app-theme-graph-lane-4: #c315b4;
+  --app-theme-graph-lane-5: #d70071;
+  --app-theme-graph-lane-6: #cb0011;
+  --app-theme-graph-lane-7: #f05a36;
+  --app-theme-graph-lane-8: #f1c942;
+  --app-theme-graph-lane-9: #7ed944;
   --app-scrollbar-thumb: #222222;
   --app-scrollbar-thumb-hover: #363636;
 
