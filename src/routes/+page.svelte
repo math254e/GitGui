@@ -836,8 +836,13 @@
       return null;
     }
 
-    const stillChanged = nextSnapshot.status.changedFiles.some((file) => file.path === currentFile.path);
-    return stillChanged ? currentFile : null;
+    const nextChangedFile = nextSnapshot.status.changedFiles.find((file) => file.path === currentFile.path);
+
+    if (!nextChangedFile) {
+      return null;
+    }
+
+    return currentFile;
   }
 
   function formatError(caught: unknown) {

@@ -1,6 +1,7 @@
 <script lang="ts">
-  import { Check, ChevronRight, File, LoaderCircle, Minus, Plus } from "@lucide/svelte";
+  import { Check, ChevronRight, LoaderCircle } from "@lucide/svelte";
   import type { ChangedFile, CommitFile, RepositorySnapshot } from "$lib/types/repository";
+  import WorkingTreeFileList from "$lib/components/WorkingTreeFileList.svelte";
 
   export type CommitMessageDraft = {
     summary: string;
@@ -54,62 +55,8 @@
     return Boolean(status && status !== "." && status !== " ");
   }
 
-  function changedFileToCommitFile(file: ChangedFile): CommitFile {
-    return {
-      path: file.path,
-      originalPath: file.originalPath,
-      status: `${file.indexStatus}${file.worktreeStatus}`,
-    };
-  }
-
-  function fileKey(file: ChangedFile) {
-    return `${file.path}\0${file.originalPath ?? ""}\0${file.indexStatus}${file.worktreeStatus}`;
-  }
-
-  function fileTitle(file: ChangedFile) {
-    const status = `${file.indexStatus}${file.worktreeStatus}`;
-    return file.originalPath ? `${status}: ${file.originalPath} -> ${file.path}` : `${status}: ${file.path}`;
-  }
-
-  function statusLabel(file: ChangedFile) {
-    if (file.indexStatus === "?" || file.worktreeStatus === "?") {
-      return "U";
-    }
-
-    return file.worktreeStatus !== "." ? file.worktreeStatus || "?" : file.indexStatus || "?";
-  }
-
-  function statusClass(file: ChangedFile) {
-    const status = statusLabel(file);
-
-    if (status === "A" || status === "U") {
-      return "text-[var(--app-theme-success)]";
-    }
-
-    if (status === "D") {
-      return "text-[var(--app-theme-error)]";
-    }
-
-    if (status === "R" || status === "C") {
-      return "text-[var(--app-theme-accent)]";
-    }
-
-    return "text-[var(--app-theme-warning)]";
-  }
-
-  function isSelected(file: ChangedFile) {
-    const commitFile = changedFileToCommitFile(file);
-
-    return Boolean(
-      selectedFile &&
-        selectedFile.path === commitFile.path &&
-        selectedFile.originalPath === commitFile.originalPath &&
-        selectedFile.status === commitFile.status,
-    );
-  }
-
-  function selectFile(file: ChangedFile) {
-    onSelectFile(changedFileToCommitFile(file));
+  function selectCommitFile(file: CommitFile) {
+    onSelectFile(file);
   }
 
   function submitCommit(event: SubmitEvent) {
@@ -183,42 +130,17 @@
         </div>
 
         {#if fileSectionsOpen.unstaged}
-          <div id="unstaged-files-list" class="min-h-0 flex-1 overflow-auto">
+          <div id="unstaged-files-list" class="min-h-0 flex-1 overflow-hidden">
             {#if unstagedFiles.length}
-              <ul class="py-1" aria-label="Unstaged files">
-                {#each unstagedFiles as file (fileKey(file))}
-                  <li class="flex min-w-0 items-center gap-1 px-1">
-                  <button
-                    aria-current={isSelected(file) ? "true" : undefined}
-                    class={`flex min-w-0 flex-1 items-center gap-2 rounded px-1.5 py-1.5 text-left text-sm transition-colors hover:bg-[var(--app-theme-sidebar-row-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--app-theme-focus)] ${
-                      isSelected(file)
-                        ? "bg-[var(--app-theme-sidebar-row-selected)] text-[var(--app-theme-accent-surface-foreground)]"
-                        : "text-[var(--app-theme-sidebar-foreground)]"
-                    }`}
-                    title={fileTitle(file)}
-                    type="button"
-                    onclick={() => selectFile(file)}
-                  >
-                    <File aria-hidden="true" class="shrink-0 text-[var(--app-theme-text-muted)]" size={14} />
-                    <code class={`w-3 shrink-0 text-xs font-bold ${statusClass(file)}`}>{statusLabel(file)}</code>
-                    <span class="truncate">{file.path}</span>
-                  </button>
-                  <button
-                    aria-label={`Stage ${file.path}`}
-                    class="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded text-[var(--app-theme-text-muted)] transition-colors hover:bg-[var(--app-theme-sidebar-row-hover)] hover:text-[var(--app-theme-accent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus)] disabled:cursor-not-allowed disabled:opacity-40"
-                    disabled={actionsDisabled}
-                    title={`Stage ${file.path}`}
-                    type="button"
-                    onclick={(event) => {
-                      event.stopPropagation();
-                      onStageFile(file);
-                    }}
-                  >
-                    <Plus aria-hidden="true" size={15} strokeWidth={2.25} />
-                  </button>
-                  </li>
-                {/each}
-              </ul>
+              <WorkingTreeFileList
+                files={unstagedFiles}
+                selectedFile={selectedFile}
+                treeId="gitgui-working-tree-unstaged"
+                actionLabel="Stage"
+                onSelectFile={selectCommitFile}
+                onAction={onStageFile}
+                disabled={actionsDisabled}
+              />
             {:else}
               <p class="px-3 py-4 text-sm text-[var(--app-theme-text-subtle)]">No unstaged changes.</p>
             {/if}
@@ -263,42 +185,17 @@
         </div>
 
         {#if fileSectionsOpen.staged}
-          <div id="staged-files-list" class="min-h-0 flex-1 overflow-auto">
+          <div id="staged-files-list" class="min-h-0 flex-1 overflow-hidden">
             {#if stagedFiles.length}
-              <ul class="py-1" aria-label="Staged files">
-                {#each stagedFiles as file (fileKey(file))}
-                  <li class="flex min-w-0 items-center gap-1 px-1">
-                  <button
-                    aria-current={isSelected(file) ? "true" : undefined}
-                    class={`flex min-w-0 flex-1 items-center gap-2 rounded px-1.5 py-1.5 text-left text-sm transition-colors hover:bg-[var(--app-theme-sidebar-row-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--app-theme-focus)] ${
-                      isSelected(file)
-                        ? "bg-[var(--app-theme-sidebar-row-selected)] text-[var(--app-theme-accent-surface-foreground)]"
-                        : "text-[var(--app-theme-sidebar-foreground)]"
-                    }`}
-                    title={fileTitle(file)}
-                    type="button"
-                    onclick={() => selectFile(file)}
-                  >
-                    <File aria-hidden="true" class="shrink-0 text-[var(--app-theme-text-muted)]" size={14} />
-                    <code class={`w-3 shrink-0 text-xs font-bold ${statusClass(file)}`}>{statusLabel(file)}</code>
-                    <span class="truncate">{file.path}</span>
-                  </button>
-                  <button
-                    aria-label={`Unstage ${file.path}`}
-                    class="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded text-[var(--app-theme-text-muted)] transition-colors hover:bg-[var(--app-theme-sidebar-row-hover)] hover:text-[var(--app-theme-accent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus)] disabled:cursor-not-allowed disabled:opacity-40"
-                    disabled={actionsDisabled}
-                    title={`Unstage ${file.path}`}
-                    type="button"
-                    onclick={(event) => {
-                      event.stopPropagation();
-                      onUnstageFile(file);
-                    }}
-                  >
-                    <Minus aria-hidden="true" size={15} strokeWidth={2.25} />
-                  </button>
-                  </li>
-                {/each}
-              </ul>
+              <WorkingTreeFileList
+                files={stagedFiles}
+                selectedFile={selectedFile}
+                treeId="gitgui-working-tree-staged"
+                actionLabel="Unstage"
+                onSelectFile={selectCommitFile}
+                onAction={onUnstageFile}
+                disabled={actionsDisabled}
+              />
             {:else}
               <p class="px-3 py-4 text-sm text-[var(--app-theme-text-subtle)]">No staged files yet.</p>
             {/if}
