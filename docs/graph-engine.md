@@ -183,6 +183,9 @@ also cover scrolling, selection, a dirty working tree, and at least one merge.
   user-facing stash remains a dashed graph node without a Branch-column badge.
 - The graph is computed for the commits loaded in the snapshot. Edges to history
   outside that set stop at the boundary.
+- Branch visibility requests use the same Rust layout engine with the union of
+  commits reachable from the visible branch targets; unrelated branch history
+  is excluded from the returned graph while shared ancestors remain visible.
 - Canvas hit testing is unnecessary because each commit already has a full-width
   DOM row for pointer and keyboard interaction.
 - The current renderer redraws the visible graph on scroll. If histories become

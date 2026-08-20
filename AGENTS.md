@@ -83,6 +83,12 @@ ownership, or client/server responsibilities.
 
 ## Ways to run GitGui
 
+Before starting Vite, Tauri, `gitgui-server`, or any other development process,
+check whether the user already has a development session running, including an
+attached shared preview. Reuse the existing session and its processes. Do not
+start a second development stack unless the user explicitly asks for one or
+confirms that no reusable session exists.
+
 ### Desktop development
 
 Use the single development command for the full desktop app. It prepares the

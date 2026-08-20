@@ -2,7 +2,7 @@ use super::command::{git_command, GitCommand, GitError};
 use super::graph::{build_commit_graph, sort_commits};
 pub use super::graph::{CommitGraph, GraphCommit, GraphEdge, GraphEdgeType};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 
@@ -22,6 +22,13 @@ pub struct RepositorySnapshot {
     pub graph: CommitGraph,
     pub refs: Vec<CommitRef>,
     pub stashes: Vec<StashInfo>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepositoryGraph {
+    pub commits: Vec<CommitInfo>,
+    pub graph: CommitGraph,
 }
 
 /// Lightweight repository result for server status requests.
@@ -138,6 +145,45 @@ pub fn load_repository(path: &str) -> Result<RepositorySnapshot, GitError> {
         commits,
         info,
     })
+}
+
+/// Loads only the commits reachable from the requested targets and lays out a
+/// graph for that reduced history. Target hashes are treated as untrusted
+/// lookups; unknown targets simply contribute no commits.
+pub fn load_repository_graph(
+    path: &str,
+    target_hashes: &[String],
+) -> Result<RepositoryGraph, GitError> {
+    let snapshot = load_repository(path)?;
+    let commits = reachable_commits(&snapshot.commits, target_hashes);
+    let graph = build_commit_graph(&commits, snapshot.status.head_oid.as_deref());
+
+    Ok(RepositoryGraph { commits, graph })
+}
+
+fn reachable_commits(commits: &[CommitInfo], target_hashes: &[String]) -> Vec<CommitInfo> {
+    let commit_by_hash: HashMap<&str, &CommitInfo> = commits
+        .iter()
+        .map(|commit| (commit.hash.as_str(), commit))
+        .collect();
+    let mut pending = target_hashes.to_vec();
+    let mut reachable = HashSet::new();
+
+    while let Some(hash) = pending.pop() {
+        if !reachable.insert(hash.clone()) {
+            continue;
+        }
+
+        if let Some(commit) = commit_by_hash.get(hash.as_str()) {
+            pending.extend(commit.parents.iter().cloned());
+        }
+    }
+
+    commits
+        .iter()
+        .filter(|commit| reachable.contains(&commit.hash))
+        .cloned()
+        .collect()
 }
 
 /// Resolves a path to its Git repository without loading history or status.
@@ -870,5 +916,32 @@ mod tests {
         assert_eq!(base_hash, "base");
         assert_eq!(index_hash.as_deref(), Some("index"));
         assert_eq!(helper_hashes, vec!["index", "untracked"]);
+    }
+
+    #[test]
+    fn reachable_commits_keep_only_selected_history() {
+        let commit = |hash: &str, parents: &[&str]| CommitInfo {
+            hash: hash.to_string(),
+            parents: parents.iter().map(|parent| (*parent).to_string()).collect(),
+            author: "Test Author".to_string(),
+            timestamp: 0,
+            message: hash.to_string(),
+        };
+        let commits = vec![
+            commit("feature-tip", &["feature-base"]),
+            commit("other-tip", &["root"]),
+            commit("feature-base", &["root"]),
+            commit("root", &[]),
+        ];
+
+        let selected = reachable_commits(&commits, &["feature-tip".to_string()]);
+
+        assert_eq!(
+            selected
+                .into_iter()
+                .map(|commit| commit.hash)
+                .collect::<Vec<_>>(),
+            vec!["feature-tip", "feature-base", "root"]
+        );
     }
 }

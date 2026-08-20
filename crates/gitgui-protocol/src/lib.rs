@@ -24,6 +24,8 @@ pub const METHOD_REPOSITORIES_LIST: &str = "repositories.list";
 pub const METHOD_REPOSITORIES_OPEN: &str = "repositories.open";
 /// Canonical method for loading a complete repository snapshot.
 pub const METHOD_REPOSITORIES_GET_SNAPSHOT: &str = "repositories.get_snapshot";
+/// Canonical method for loading a graph limited to selected commit targets.
+pub const METHOD_REPOSITORIES_GET_GRAPH: &str = "repositories.get_graph";
 /// Canonical method for refreshing multiple repository snapshots.
 pub const METHOD_REPOSITORIES_REFRESH: &str = "repositories.refresh";
 /// Canonical method for repository working-tree status reads.
@@ -65,6 +67,8 @@ pub const METHOD_GIT_STASH_POP: &str = "git.stash.pop";
 pub const MAX_PREFETCH_COMMIT_HASHES: usize = 256;
 /// Maximum number of typed diff targets accepted by one diff prefetch hint.
 pub const MAX_PREFETCH_COMMIT_DIFF_TARGETS: usize = 256;
+/// Maximum number of commit targets accepted by one filtered graph request.
+pub const MAX_GRAPH_TARGETS: usize = 256;
 
 /// Capability advertised when `server.get_info` is available.
 pub const CAPABILITY_SERVER_INFO: &str = "server.info";
@@ -76,6 +80,8 @@ pub const CAPABILITY_REPOSITORIES_LIST: &str = "repositories.list";
 pub const CAPABILITY_REPOSITORIES_OPEN: &str = "repositories.open";
 /// Capability advertised when complete repository snapshots are available.
 pub const CAPABILITY_REPOSITORIES_GET_SNAPSHOT: &str = "repositories.get_snapshot";
+/// Capability advertised when filtered repository graphs are available.
+pub const CAPABILITY_REPOSITORIES_GET_GRAPH: &str = "repositories.get_graph";
 /// Capability advertised when batch repository refresh is available.
 pub const CAPABILITY_REPOSITORIES_REFRESH: &str = "repositories.refresh";
 /// Capability advertised when Git status is available.
@@ -438,6 +444,28 @@ pub struct RepositorySnapshotResult {
     pub repository: RepositorySummary,
     /// Fresh repository snapshot.
     pub snapshot: RepositorySnapshot,
+}
+
+/// Parameters for loading the history reachable from selected commit targets.
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RepositoryGraphParams {
+    /// Stable ID from the host's configured repository catalog.
+    pub repository_id: String,
+    /// Commit IDs whose ancestors should be included in the graph.
+    pub target_commits: Vec<String>,
+}
+
+/// Result returned for a filtered repository graph request.
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RepositoryGraphResult {
+    /// Server-owned repository catalog entry.
+    pub repository: RepositorySummary,
+    /// Commits reachable from the requested targets.
+    pub commits: Vec<CommitInfo>,
+    /// Graph layout for the returned commits.
+    pub graph: CommitGraph,
 }
 
 /// Parameters for refreshing the requested repositories as one batch.

@@ -28,10 +28,12 @@ use gitgui_core::git::{
         load_commit_file_diff as load_core_commit_file_diff,
         load_commit_files_from_root as load_core_commit_files,
         load_repository as load_core_repository,
+        load_repository_graph as load_core_repository_graph,
         load_repository_status as load_core_repository_status,
         load_working_tree_file_diff as load_core_working_tree_file_diff, resolve_repository,
         ChangedFile as CoreChangedFile, CommitFile as CoreCommitFile,
-        CommitFileDiff as CoreCommitFileDiff, RepositorySnapshot as CoreRepositorySnapshot,
+        CommitFileDiff as CoreCommitFileDiff, CommitGraph as CoreCommitGraph,
+        RepositoryGraph as CoreRepositoryGraph, RepositorySnapshot as CoreRepositorySnapshot,
         RepositoryStatus as CoreRepositoryStatus,
     },
 };
@@ -50,7 +52,8 @@ use gitgui_protocol::{
     PrefetchCommitFilesParams, PrefetchCommitFilesResult, ProtocolError, ProtocolErrorMessage,
     RepositoriesListResult, RepositoriesOpenParams, RepositoriesOpenResult,
     RepositoriesRefreshParams, RepositoriesRefreshResult, RepositoryInfo as ProtocolRepositoryInfo,
-    RepositoryRefreshItem, RepositorySnapshot, RepositorySnapshotParams, RepositorySnapshotResult,
+    RepositoryGraphParams, RepositoryGraphResult, RepositoryRefreshItem, RepositorySnapshot,
+    RepositorySnapshotParams, RepositorySnapshotResult,
     RepositoryStatus as ProtocolRepositoryStatus, RepositorySummary, RequestEnvelope,
     ResponseEnvelope, ServerInfo, ServerLifecycle, ServerReadiness, ServerStatus,
     StashInfo as ProtocolStashInfo, WelcomeMessage, CAPABILITY_GIT_BRANCH_CREATE,
@@ -59,16 +62,18 @@ use gitgui_protocol::{
     CAPABILITY_GIT_PREFETCH_COMMIT_DIFFS, CAPABILITY_GIT_PREFETCH_COMMIT_FILES,
     CAPABILITY_GIT_PULL, CAPABILITY_GIT_PUSH, CAPABILITY_GIT_STAGE, CAPABILITY_GIT_STASH_POP,
     CAPABILITY_GIT_STASH_PUSH, CAPABILITY_GIT_STATUS, CAPABILITY_GIT_UNSTAGE,
-    CAPABILITY_GIT_WORKING_TREE_FILE_DIFF, CAPABILITY_REPOSITORIES_GET_SNAPSHOT,
-    CAPABILITY_REPOSITORIES_LIST, CAPABILITY_REPOSITORIES_OPEN, CAPABILITY_REPOSITORIES_REFRESH,
-    CAPABILITY_SERVER_INFO, CAPABILITY_SERVER_STATUS, MAX_PREFETCH_COMMIT_DIFF_TARGETS,
+    CAPABILITY_GIT_WORKING_TREE_FILE_DIFF, CAPABILITY_REPOSITORIES_GET_GRAPH,
+    CAPABILITY_REPOSITORIES_GET_SNAPSHOT, CAPABILITY_REPOSITORIES_LIST,
+    CAPABILITY_REPOSITORIES_OPEN, CAPABILITY_REPOSITORIES_REFRESH, CAPABILITY_SERVER_INFO,
+    CAPABILITY_SERVER_STATUS, MAX_GRAPH_TARGETS, MAX_PREFETCH_COMMIT_DIFF_TARGETS,
     MAX_PREFETCH_COMMIT_HASHES, METHOD_GIT_BRANCH_CREATE, METHOD_GIT_BRANCH_LIST,
     METHOD_GIT_BRANCH_SWITCH, METHOD_GIT_COMMIT, METHOD_GIT_COMMIT_FILES,
     METHOD_GIT_COMMIT_FILE_DIFF, METHOD_GIT_FETCH, METHOD_GIT_PREFETCH_COMMIT_DIFFS,
     METHOD_GIT_PREFETCH_COMMIT_FILES, METHOD_GIT_PULL, METHOD_GIT_PUSH, METHOD_GIT_STAGE,
     METHOD_GIT_STASH_POP, METHOD_GIT_STASH_PUSH, METHOD_GIT_STATUS, METHOD_GIT_UNSTAGE,
-    METHOD_GIT_WORKING_TREE_FILE_DIFF, METHOD_REPOSITORIES_GET_SNAPSHOT, METHOD_REPOSITORIES_LIST,
-    METHOD_REPOSITORIES_OPEN, METHOD_REPOSITORIES_REFRESH, METHOD_SERVER_GET_INFO,
+    METHOD_GIT_WORKING_TREE_FILE_DIFF, METHOD_REPOSITORIES_GET_GRAPH,
+    METHOD_REPOSITORIES_GET_SNAPSHOT, METHOD_REPOSITORIES_LIST, METHOD_REPOSITORIES_OPEN,
+    METHOD_REPOSITORIES_REFRESH, METHOD_SERVER_GET_INFO,
     METHOD_SERVER_GET_STATUS, PROTOCOL_VERSION,
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -681,6 +686,9 @@ async fn dispatch(request: RequestEnvelope, state: &ServerState) -> ResponseEnve
         METHOD_REPOSITORIES_GET_SNAPSHOT => {
             repositories_get_snapshot(request.id, request.params, state).await
         }
+        METHOD_REPOSITORIES_GET_GRAPH => {
+            repositories_get_graph(request.id, request.params, state).await
+        }
         METHOD_REPOSITORIES_REFRESH => {
             repositories_refresh(request.id, request.params, state).await
         }
@@ -818,6 +826,51 @@ async fn repositories_get_snapshot(
         Err(error) => {
             warn!(error = %error, "repository snapshot worker failed");
             git_failure(request_id, "repository snapshot worker failed")
+        }
+    }
+}
+
+async fn repositories_get_graph(
+    request_id: String,
+    params: Value,
+    state: &ServerState,
+) -> ResponseEnvelope {
+    let params = match parse_params::<RepositoryGraphParams>(params, "repositories.get_graph") {
+        Ok(params) => params,
+        Err(error) => return ResponseEnvelope::error(request_id, error),
+    };
+    if let Err(error) = validate_repository_id(&params.repository_id) {
+        return ResponseEnvelope::error(request_id, error);
+    }
+    if params.target_commits.len() > MAX_GRAPH_TARGETS
+        || params.target_commits.iter().any(|target| target.is_empty())
+    {
+        return invalid_params(request_id, "targetCommits contains too many or empty commit IDs");
+    }
+
+    let Some(repository) = state.repository(&params.repository_id).await else {
+        return repository_not_configured(request_id, &params.repository_id);
+    };
+    let repository_summary = repository.summary.clone();
+    let target_commits = params.target_commits;
+
+    match spawn_blocking(move || load_graph(&repository, &target_commits)).await {
+        Ok(Ok(graph)) => response_success(
+            request_id,
+            RepositoryGraphResult {
+                repository: repository_summary,
+                commits: graph.commits.into_iter().map(protocol_commit_info).collect(),
+                graph: protocol_graph(graph.graph),
+            },
+        ),
+        Ok(Err(RepositoryLoadError::NotFound)) => repository_not_found(request_id),
+        Ok(Err(RepositoryLoadError::Git(error))) => {
+            warn!(error = %error.message, "repository graph operation failed");
+            git_failure(request_id, "repository graph could not be loaded")
+        }
+        Err(error) => {
+            warn!(error = %error, "repository graph worker failed");
+            git_failure(request_id, "repository graph worker failed")
         }
     }
 }
@@ -2385,6 +2438,7 @@ fn implemented_capabilities() -> Vec<String> {
         CAPABILITY_REPOSITORIES_LIST,
         CAPABILITY_REPOSITORIES_OPEN,
         CAPABILITY_REPOSITORIES_GET_SNAPSHOT,
+        CAPABILITY_REPOSITORIES_GET_GRAPH,
         CAPABILITY_REPOSITORIES_REFRESH,
         CAPABILITY_GIT_STATUS,
         CAPABILITY_GIT_COMMIT_FILES,
@@ -2438,6 +2492,15 @@ fn load_snapshot(
     ))
 }
 
+fn load_graph(
+    repository: &ConfiguredRepository,
+    target_commits: &[String],
+) -> Result<CoreRepositoryGraph, RepositoryLoadError> {
+    resolve_repository(&repository.operation_path).map_err(|_| RepositoryLoadError::NotFound)?;
+    load_core_repository_graph(&repository.operation_path, target_commits)
+        .map_err(RepositoryLoadError::Git)
+}
+
 fn load_status(repository: &ConfiguredRepository) -> Result<CoreRepositoryStatus, StatusLoadError> {
     resolve_repository(&repository.operation_path).map_err(|_| StatusLoadError::NotFound)?;
     load_core_repository_status(&repository.operation_path)
@@ -2460,22 +2523,7 @@ fn protocol_snapshot(
             .into_iter()
             .map(protocol_commit_info)
             .collect(),
-        graph: ProtocolCommitGraph {
-            commits: snapshot
-                .graph
-                .commits
-                .into_iter()
-                .map(protocol_graph_commit)
-                .collect(),
-            edges: snapshot
-                .graph
-                .edges
-                .into_iter()
-                .map(protocol_graph_edge)
-                .collect(),
-            width: snapshot.graph.width,
-            head_lane: snapshot.graph.head_lane,
-        },
+        graph: protocol_graph(snapshot.graph),
         refs: snapshot.refs.into_iter().map(protocol_commit_ref).collect(),
         stashes: snapshot
             .stashes
@@ -2536,6 +2584,23 @@ fn protocol_stash_info(stash: gitgui_core::git::repository::StashInfo) -> Protoc
         branch: stash.branch,
         message: stash.message,
         timestamp: stash.timestamp,
+    }
+}
+
+fn protocol_graph(graph: CoreCommitGraph) -> ProtocolCommitGraph {
+    ProtocolCommitGraph {
+        commits: graph
+            .commits
+            .into_iter()
+            .map(protocol_graph_commit)
+            .collect(),
+        edges: graph
+            .edges
+            .into_iter()
+            .map(protocol_graph_edge)
+            .collect(),
+        width: graph.width,
+        head_lane: graph.head_lane,
     }
 }
 

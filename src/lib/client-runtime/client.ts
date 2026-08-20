@@ -31,6 +31,8 @@ import type {
   RepositoriesOpenResult,
   RepositoriesRefreshParams,
   RepositoriesRefreshResult,
+  RepositoryGraphParams,
+  RepositoryGraphResult,
   RepositorySnapshotParams,
   RepositorySnapshotResult,
   RepositorySummary,
@@ -222,6 +224,14 @@ export class GitGuiClient {
   getRepositorySnapshot(repositoryId: string): Promise<RepositorySnapshotResult> {
     const params: RepositorySnapshotParams = { repositoryId: assertRepositoryId(repositoryId) };
     return this.request<RepositorySnapshotResult>("repositories.get_snapshot", params);
+  }
+
+  getRepositoryGraph(params: RepositoryGraphParams): Promise<RepositoryGraphResult> {
+    return this.request<RepositoryGraphResult>("repositories.get_graph", {
+      ...params,
+      repositoryId: assertRepositoryId(params.repositoryId),
+      targetCommits: uniqueCommitHashes(params.targetCommits),
+    } satisfies RepositoryGraphParams);
   }
 
   refreshRepositories(repositoryIds: string[]): Promise<RepositoriesRefreshResult> {
@@ -550,4 +560,8 @@ export function assertRepositoryId(repositoryId: string): string {
 
 function uniqueRepositoryIds(repositoryIds: string[]): string[] {
   return [...new Set(repositoryIds.map(assertRepositoryId))];
+}
+
+function uniqueCommitHashes(commitHashes: string[]): string[] {
+  return [...new Set(commitHashes.filter((hash) => typeof hash === "string" && hash.length > 0))];
 }

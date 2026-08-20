@@ -237,6 +237,30 @@ repository: RepositorySummary,
  */
 snapshot: RepositorySnapshot, };
 
+export type RepositoryGraphParams = {
+/**
+ * Stable ID from the host's configured repository catalog.
+ */
+repositoryId: string,
+/**
+ * Commit IDs whose ancestors should be included in the graph.
+ */
+targetCommits: Array<string>, };
+
+export type RepositoryGraphResult = {
+/**
+ * Server-owned repository catalog entry.
+ */
+repository: RepositorySummary,
+/**
+ * Commits reachable from the requested targets.
+ */
+commits: Array<CommitInfo>,
+/**
+ * Graph layout for the returned commits.
+ */
+graph: CommitGraph, };
+
 export type RepositoriesRefreshParams = {
 /**
  * Stable IDs from the host's configured repository catalog.
@@ -507,7 +531,7 @@ graph: CommitGraph,
  */
 refs: Array<CommitRef>,
 /**
- * Local stash entries. Stashes are displayed separately from ordinary commits.
+ * Local stash metadata for commits included in the history graph.
  */
 stashes: Array<StashInfo>, };
 

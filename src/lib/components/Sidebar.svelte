@@ -1,12 +1,15 @@
 <script lang="ts">
   import { ChevronRight } from "@lucide/svelte";
   import BranchTree from "$lib/components/BranchTree.svelte";
-  import type { CommitRef, RepositorySnapshot, StashInfo } from "$lib/types/repository";
+  import type { CommitInfo, CommitRef, RepositorySnapshot, StashInfo } from "$lib/types/repository";
 
   type Props = {
     snapshot: RepositorySnapshot | null;
+    selectedCommit: CommitInfo | null;
     stateKey: string | null;
+    visibleRefKeys?: ReadonlySet<string>;
     onSelectRef?: (ref: CommitRef) => void;
+    onToggleRefs?: (refs: CommitRef[], visible: boolean) => void;
   };
 
   type SidebarSections = {
@@ -22,12 +25,17 @@
     Stashes: false,
   };
 
-  let { snapshot, stateKey, onSelectRef }: Props = $props();
+  let {
+    snapshot,
+    selectedCommit,
+    stateKey,
+    visibleRefKeys = new Set<string>(),
+    onSelectRef,
+    onToggleRefs,
+  }: Props = $props();
 
   let open = $state<SidebarSections>({ ...defaultOpen });
   let loadedStateKey = $state<string | null | undefined>(undefined);
-  let selectedRefKey = $state<string | null>(null);
-  let selectionRevision = $state(0);
 
   const localBranches = $derived(snapshot?.refs.filter((ref) => ref.refType === "localBranch") ?? []);
   const remoteBranches = $derived(snapshot?.refs.filter((ref) => ref.refType === "remoteBranch") ?? []);
@@ -53,21 +61,10 @@
 
     loadedStateKey = stateKey;
     open = stateKey ? readOpenState(stateKey) : { ...defaultOpen };
-    selectedRefKey = null;
-    selectionRevision += 1;
   });
 
   function handleSelectRef(ref: CommitRef) {
-    const nextSelectionKey = refSelectionKey(ref);
-    if (nextSelectionKey !== selectedRefKey) {
-      selectedRefKey = nextSelectionKey;
-      selectionRevision += 1;
-    }
     onSelectRef?.(ref);
-  }
-
-  function refSelectionKey(ref: CommitRef) {
-    return `${ref.refType}:${ref.shortName}`;
   }
 
   function storageKey(key: string) {
@@ -136,9 +133,10 @@
               refType="localBranch"
               treeId="gitgui-local-branches"
               currentBranch={snapshot?.status.currentBranch}
-              selectedRefKey={selectedRefKey}
-              selectionRevision={selectionRevision}
+              selectedCommitHash={selectedCommit?.hash ?? null}
+              {visibleRefKeys}
               onSelectRef={handleSelectRef}
+              {onToggleRefs}
             />
           {:else}
             <p class="px-2 py-1 text-sm text-[var(--app-theme-text-subtle)]">No local branches.</p>
@@ -168,9 +166,10 @@
               refs={remoteBranches}
               refType="remoteBranch"
               treeId="gitgui-remote-branches"
-              selectedRefKey={selectedRefKey}
-              selectionRevision={selectionRevision}
+              selectedCommitHash={selectedCommit?.hash ?? null}
+              {visibleRefKeys}
               onSelectRef={handleSelectRef}
+              {onToggleRefs}
             />
           {:else}
             <p class="px-2 py-1 text-sm text-[var(--app-theme-text-subtle)]">No remote branches.</p>

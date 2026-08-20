@@ -24,9 +24,13 @@
   };
   type Props = {
     snapshot: RepositorySnapshot | null;
+    repositoryId: string | null;
+    getRestoredScrollTop: (repositoryId: string) => number;
     selectedCommit: CommitInfo | null;
     changesSelected: boolean;
-    scrollToCommit: { hash: string; revision: number } | null;
+    scrollToCommit: { id: number; repositoryId: string; hash: string } | null;
+    onScrollTopChange: (repositoryId: string, scrollTop: number) => void;
+    onScrollCommandHandled: (commandId: number) => void;
     onSelectChanges: () => void;
     onSelectCommit: (commit: CommitInfo) => void;
   };
@@ -41,9 +45,13 @@
   const minimumColumnWidth = 24;
   let {
     snapshot,
+    repositoryId,
+    getRestoredScrollTop,
     selectedCommit,
     changesSelected,
     scrollToCommit,
+    onScrollTopChange,
+    onScrollCommandHandled,
     onSelectChanges,
     onSelectCommit,
   }: Props = $props();
@@ -61,6 +69,9 @@
   let graphViewportHeight = $state(0);
   let graphDevicePixelRatio = $state(1);
   let graphThemeRevision = $state(0);
+  let lastGraphSignature = "";
+  let lastGraphRepository = "";
+  let lastHandledScrollCommandId: number | null = null;
 
   $effect(() => {
     if (restoredColumns) {
@@ -90,6 +101,67 @@
     window.removeEventListener("pointermove", resizeColumn);
     resizeState = null;
   });
+
+  function captureGraphScroll(viewport: HTMLDivElement, initialRepositoryId: string | null) {
+    let observedScrollTop = viewport.scrollTop;
+    let currentRepositoryId = initialRepositoryId;
+    let restoring = false;
+    let restoreGeneration = 0;
+
+    const restoreScrollTop = (nextRepositoryId: string | null) => {
+      currentRepositoryId = nextRepositoryId;
+      const generation = ++restoreGeneration;
+
+      if (!nextRepositoryId) {
+        restoring = false;
+        return;
+      }
+
+      restoring = true;
+      const restoredScrollTop = getRestoredScrollTop(nextRepositoryId);
+      setViewportScrollTop(viewport, restoredScrollTop);
+      observedScrollTop = viewport.scrollTop;
+
+      void tick().then(() => {
+        if (generation !== restoreGeneration || currentRepositoryId !== nextRepositoryId) {
+          return;
+        }
+
+        setViewportScrollTop(viewport, restoredScrollTop);
+        observedScrollTop = viewport.scrollTop;
+        restoring = false;
+      });
+    };
+
+    const captureScrollTop = () => {
+      if (restoring || viewport.scrollTop === observedScrollTop) {
+        return;
+      }
+
+      observedScrollTop = viewport.scrollTop;
+      graphScrollTop = viewport.scrollTop;
+      if (currentRepositoryId) {
+        onScrollTopChange(currentRepositoryId, viewport.scrollTop);
+      }
+    };
+
+    viewport.addEventListener("scroll", captureScrollTop, { passive: true });
+    const scrollObserver = window.setInterval(captureScrollTop, 50);
+    restoreScrollTop(initialRepositoryId);
+
+    return {
+      update: (nextRepositoryId: string | null) => {
+        if (nextRepositoryId !== currentRepositoryId) {
+          restoreScrollTop(nextRepositoryId);
+        }
+      },
+      destroy: () => {
+        restoreGeneration += 1;
+        window.clearInterval(scrollObserver);
+        viewport.removeEventListener("scroll", captureScrollTop);
+      },
+    };
+  }
 
   $effect(() => {
     const viewport = graphViewport;
@@ -159,16 +231,91 @@
 
   $effect(() => {
     const viewport = graphViewport;
-    const targetHash = scrollToCommit?.hash;
-    const targetRevision = scrollToCommit?.revision;
-    const rowCount = graphRows.length;
+    const currentSnapshot = snapshot;
 
-    if (!viewport || !targetHash || targetRevision === undefined || !rowCount) {
+    if (!viewport || !currentSnapshot) {
+      lastGraphSignature = "";
+      lastGraphRepository = "";
+      return;
+    }
+
+    const repositoryRoot = currentSnapshot.info.root;
+    const graphSignature = [
+      repositoryRoot,
+      ...currentSnapshot.graph.commits.map((commit) => commit.hash),
+    ].join("\0");
+    const repositoryChanged = Boolean(lastGraphRepository && lastGraphRepository !== repositoryRoot);
+    lastGraphRepository = repositoryRoot;
+
+    if (!lastGraphSignature || repositoryChanged) {
+      lastGraphSignature = graphSignature;
+      return;
+    }
+
+    if (graphSignature === lastGraphSignature) {
+      return;
+    }
+
+    const viewportRect = viewport.getBoundingClientRect();
+    const graphRowsInDom = [...viewport.querySelectorAll<HTMLElement>("[data-commit-hash]")];
+    const anchorRow =
+      graphRowsInDom.find((row) => row.getBoundingClientRect().bottom > viewportRect.top) ??
+      graphRowsInDom.at(-1);
+    const anchorHash = anchorRow?.dataset.commitHash;
+    const anchorTop = anchorRow?.getBoundingClientRect().top;
+    lastGraphSignature = graphSignature;
+
+    if (!anchorHash || anchorTop === undefined) {
       return;
     }
 
     void tick().then(() => {
-      if (graphViewport !== viewport || scrollToCommit?.revision !== targetRevision) {
+      if (graphViewport !== viewport) {
+        return;
+      }
+
+      const nextAnchorRow = [...viewport.querySelectorAll<HTMLElement>("[data-commit-hash]")].find(
+        (row) => row.dataset.commitHash === anchorHash,
+      );
+
+      if (!nextAnchorRow) {
+        return;
+      }
+
+      setViewportScrollTop(
+        viewport,
+        viewport.scrollTop + nextAnchorRow.getBoundingClientRect().top - anchorTop,
+      );
+    });
+  });
+
+  $effect(() => {
+    const viewport = graphViewport;
+    const currentRepositoryId = repositoryId;
+    const command = scrollToCommit;
+    const rowCount = graphRows.length;
+
+    if (
+      !viewport ||
+      !currentRepositoryId ||
+      !command ||
+      command.repositoryId !== currentRepositoryId ||
+      !rowCount ||
+      command.id === lastHandledScrollCommandId
+    ) {
+      return;
+    }
+
+    const commandId = command.id;
+    const targetHash = command.hash;
+
+    void tick().then(() => {
+      if (
+        graphViewport !== viewport ||
+        repositoryId !== currentRepositoryId ||
+        scrollToCommit?.repositoryId !== currentRepositoryId ||
+        scrollToCommit?.id !== commandId
+      ) {
         return;
       }
 
@@ -180,20 +327,15 @@
         return;
       }
 
+      lastHandledScrollCommandId = commandId;
+
       const viewportRect = viewport.getBoundingClientRect();
       const targetRect = targetRow.getBoundingClientRect();
-      const targetIsInView = targetRect.bottom > viewportRect.top && targetRect.top < viewportRect.bottom;
-
-      if (targetIsInView) {
-        return;
-      }
-
       const targetTop = targetRect.top - viewportRect.top + viewport.scrollTop;
       const centeredTop = targetTop - (viewport.clientHeight - targetRow.offsetHeight) / 2;
-      const maximumScrollTop = Math.max(0, viewport.scrollHeight - viewport.clientHeight);
 
-      // Set scrollTop directly so branch navigation is an immediate jump.
-      viewport.scrollTop = Math.max(0, Math.min(centeredTop, maximumScrollTop));
+      setViewportScrollTop(viewport, centeredTop);
+      onScrollCommandHandled(commandId);
     });
   });
 
@@ -810,6 +952,12 @@
     window.removeEventListener("pointermove", resizeColumn);
   }
 
+  function setViewportScrollTop(viewport: HTMLDivElement, scrollTop: number) {
+    const maximumScrollTop = Math.max(0, viewport.scrollHeight - viewport.clientHeight);
+    viewport.scrollTop = Math.max(0, Math.min(scrollTop, maximumScrollTop));
+    graphScrollTop = viewport.scrollTop;
+  }
+
 </script>
 
 <section class="h-full min-h-0 bg-[var(--app-theme-surface)]">
@@ -836,8 +984,8 @@
 
       <div
         bind:this={graphViewport}
-        class="relative min-h-0 flex-1 overflow-auto"
-        onscroll={(event) => (graphScrollTop = event.currentTarget.scrollTop)}
+        use:captureGraphScroll={repositoryId}
+        class="relative min-h-0 flex-1 overflow-auto [overflow-anchor:none]"
       >
         <canvas
           bind:this={graphCanvas}

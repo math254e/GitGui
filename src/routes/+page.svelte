@@ -21,6 +21,7 @@
   import WorkingTreePanel, { type CommitMessageDraft } from "$lib/components/WorkingTreePanel.svelte";
   import type { ChangedFile, RepositorySummary } from "$lib/generated/protocol";
   import type { CommitFile, CommitInfo, CommitRef, RepositorySnapshot } from "$lib/types/repository";
+  import { graphRefKey, isCurrentBranchRef } from "$lib/types/branch-visibility";
 
   type ActiveView = "start" | "repo" | "settings";
   type SelectedGraphItem = { type: "changes" } | { type: "commit"; commit: CommitInfo };
@@ -39,6 +40,13 @@
   type WorkspaceRepo = BackendWorkspaceRepo & {
     selectedGraphItem: SelectedGraphItem | null;
     selectedFile: CommitFile | null;
+  };
+  type FilteredGraphView = {
+    repositoryId: string;
+    key: string;
+    refs: CommitRef[];
+    commits: RepositorySnapshot["commits"];
+    graph: RepositorySnapshot["graph"];
   };
   type RepositoryListItem = {
     repositoryId: string;
@@ -68,6 +76,7 @@
   };
 
   const layoutStorageKey = "gitgui.workspaceLayout.v1";
+  const branchGraphVisibilityStoragePrefix = "gitgui.branchGraphVisibility.v1";
   const autoRefreshMs = 30_000;
   const initialPrefetchCommitCount = 20;
   const localEnvironmentId = "desktop-local";
@@ -86,7 +95,7 @@
   let operationPending = $state(false);
   let gitActionPending = $state(false);
   let gitActionError = $state("");
-  let scrollToCommit = $state<{ hash: string; revision: number } | null>(null);
+  let scrollToCommit = $state<{ id: number; repositoryId: string; hash: string } | null>(null);
   let largeScreen = $state(false);
   let sidebarWidth = $state(sidebarLimits.default);
   let detailsWidth = $state(detailsLimits.default);
@@ -101,6 +110,13 @@
   let repositoryPathDialogOpen = $state(false);
   let repositoryPathValue = $state("");
   let repositoryPathError = $state("");
+  let loadedBranchVisibilityKey = $state<string | null | undefined>(undefined);
+  let hiddenGraphRefKeys = $state<Set<string>>(new Set());
+  let filteredGraphViews = $state<Map<string, FilteredGraphView>>(new Map());
+  let lastGraphRequestKey: string | null = null;
+  let graphRequestGeneration = 0;
+  const graphScrollPositions = new Map<string, number>();
+  let nextScrollCommandId = 0;
   const prefetchedInitialCommits = new Map<string, string>();
   const prefetchedCommitDiffs = new Set<string>();
 
@@ -108,6 +124,58 @@
   const snapshot = $derived(activeRepo?.snapshot ?? null);
   const sidebarStateKey = $derived(
     workspaceState?.environmentId && activeRepoId ? `${workspaceState.environmentId}:${activeRepoId}` : null,
+  );
+  const graphVisibilityReady = $derived(
+    !activeRepoId || (sidebarStateKey !== null && loadedBranchVisibilityKey === sidebarStateKey),
+  );
+  const visibleGraphRefs = $derived(
+    (snapshot?.refs ?? []).filter(
+      (ref) =>
+        ref.refType === "tag" ||
+        isCurrentBranchRef(ref, snapshot?.status.currentBranch) ||
+        !hiddenGraphRefKeys.has(graphRefKey(ref)),
+    ),
+  );
+  const visibleGraphRefKeys = $derived(new Set(visibleGraphRefs.map((ref) => graphRefKey(ref))));
+  const graphTargetCommitHashes = $derived([
+    ...new Set([
+      ...(snapshot?.status.headOid ? [snapshot.status.headOid] : []),
+      ...visibleGraphRefs.map((ref) => ref.target),
+    ]),
+  ]);
+  const graphTargetKey = $derived(
+    activeRepoId && snapshot
+      ? `${activeRepoId}\0${visibleGraphRefs
+          .map((ref) => `${graphRefKey(ref)}\0${ref.target}`)
+          .join("\0")}\0${graphTargetCommitHashes.join("\0")}`
+      : null,
+  );
+  const filteredGraphView = $derived(
+    activeRepoId ? filteredGraphViews.get(activeRepoId) ?? null : null,
+  );
+  const graphHasHiddenRefs = $derived(
+    Boolean(
+      snapshot?.refs.some(
+        (ref) =>
+          ref.refType !== "tag" &&
+          !isCurrentBranchRef(ref, snapshot?.status.currentBranch) &&
+          hiddenGraphRefKeys.has(graphRefKey(ref)),
+      ),
+    ),
+  );
+  const graphSnapshot = $derived(
+    !snapshot || !graphVisibilityReady
+      ? null
+      : filteredGraphView?.key === graphTargetKey || (filteredGraphView && graphHasHiddenRefs)
+        ? {
+            ...snapshot,
+            commits: filteredGraphView.commits,
+            graph: filteredGraphView.graph,
+            refs: filteredGraphView.refs,
+          }
+        : graphHasHiddenRefs
+          ? null
+          : snapshot,
   );
   const selectedGraphItem = $derived(activeRepo?.selectedGraphItem ?? null);
   const selectedFile = $derived(activeRepo?.selectedFile ?? null);
@@ -159,6 +227,71 @@
     },
     detailsPane,
   ]);
+
+  $effect(() => {
+    const key = sidebarStateKey;
+    if (key === loadedBranchVisibilityKey) {
+      return;
+    }
+
+    hiddenGraphRefKeys = key ? readHiddenGraphRefKeys(key) : new Set();
+    loadedBranchVisibilityKey = key;
+  });
+
+  $effect(() => {
+    if (scrollToCommit?.repositoryId && scrollToCommit.repositoryId !== activeRepoId) {
+      scrollToCommit = null;
+    }
+  });
+
+  $effect(() => {
+    const client = gitClient;
+    const repositoryId = activeRepoId;
+    const key = graphTargetKey;
+    const targetCommits = graphTargetCommitHashes;
+
+    if (!graphVisibilityReady || !client || !repositoryId || !snapshot || !key) {
+      lastGraphRequestKey = null;
+      return;
+    }
+
+    if (filteredGraphView?.key === key) {
+      lastGraphRequestKey = key;
+      return;
+    }
+
+    if (!graphHasHiddenRefs) {
+      lastGraphRequestKey = key;
+      return;
+    }
+
+    if (key === lastGraphRequestKey) {
+      return;
+    }
+
+    lastGraphRequestKey = key;
+    const generation = ++graphRequestGeneration;
+    const targetRefs = [...visibleGraphRefs];
+
+    void client
+      .getRepositoryGraph({ repositoryId, targetCommits })
+      .then((result) => {
+        if (generation !== graphRequestGeneration || key !== lastGraphRequestKey) {
+          return;
+        }
+
+        const nextViews = new Map(filteredGraphViews);
+        nextViews.set(repositoryId, {
+          repositoryId,
+          key,
+          refs: targetRefs,
+          commits: result.commits,
+          graph: result.graph,
+        });
+        filteredGraphViews = nextViews;
+      })
+      .catch(() => undefined);
+  });
 
   onMount(() => {
     desktopRuntime = isTauriRuntime();
@@ -741,13 +874,83 @@
 
   function selectRef(ref: CommitRef) {
     const commit = snapshot?.commits.find((candidate) => candidate.hash === ref.target);
-    if (commit) {
+    if (commit && activeRepoId) {
       scrollToCommit = {
+        id: ++nextScrollCommandId,
+        repositoryId: activeRepoId,
         hash: commit.hash,
-        revision: (scrollToCommit?.revision ?? 0) + 1,
       };
       selectCommit(commit);
     }
+  }
+
+  function finishScrollToCommit(commandId: number) {
+    if (scrollToCommit?.id === commandId) {
+      scrollToCommit = null;
+    }
+  }
+
+  function toggleGraphRefs(refs: CommitRef[], visible: boolean) {
+    const nextHidden = new Set(hiddenGraphRefKeys);
+    const currentBranch = snapshot?.status.currentBranch;
+
+    for (const ref of refs) {
+      if (isCurrentBranchRef(ref, currentBranch)) {
+        nextHidden.delete(graphRefKey(ref));
+        continue;
+      }
+
+      if (visible) {
+        nextHidden.delete(graphRefKey(ref));
+      } else {
+        nextHidden.add(graphRefKey(ref));
+      }
+    }
+
+    hiddenGraphRefKeys = nextHidden;
+    persistHiddenGraphRefKeys(sidebarStateKey, nextHidden);
+  }
+
+  function branchVisibilityStorageKey(key: string) {
+    return `${branchGraphVisibilityStoragePrefix}:${encodeURIComponent(key)}`;
+  }
+
+  function readHiddenGraphRefKeys(key: string) {
+    try {
+      const stored = localStorage.getItem(branchVisibilityStorageKey(key));
+      if (!stored) {
+        return new Set<string>();
+      }
+
+      const parsed: unknown = JSON.parse(stored);
+      if (!Array.isArray(parsed)) {
+        return new Set<string>();
+      }
+
+      return new Set(parsed.filter((value): value is string => typeof value === "string"));
+    } catch {
+      return new Set<string>();
+    }
+  }
+
+  function persistHiddenGraphRefKeys(key: string | null, hiddenKeys: ReadonlySet<string>) {
+    if (!key) {
+      return;
+    }
+
+    try {
+      localStorage.setItem(branchVisibilityStorageKey(key), JSON.stringify([...hiddenKeys]));
+    } catch {
+      // Graph visibility is a best-effort client preference.
+    }
+  }
+
+  function rememberGraphScrollTop(repositoryId: string, scrollTop: number) {
+    graphScrollPositions.set(repositoryId, scrollTop);
+  }
+
+  function graphScrollTopFor(repositoryId: string) {
+    return graphScrollPositions.get(repositoryId) ?? 0;
   }
 
   async function prefetchCommitDiffs(repositoryId: string, commit: CommitInfo) {
@@ -986,7 +1189,14 @@
       {#if !largeScreen}
       <div class="grid h-full min-h-0 grid-cols-1 overflow-hidden">
         {#if snapshot && selectedFile && (selectedCommit || changesSelected)}
-          <Sidebar {snapshot} stateKey={sidebarStateKey} onSelectRef={selectRef} />
+          <Sidebar
+            {snapshot}
+            {selectedCommit}
+            stateKey={sidebarStateKey}
+            visibleRefKeys={visibleGraphRefKeys}
+            onSelectRef={selectRef}
+            onToggleRefs={toggleGraphRefs}
+          />
           <div class="h-full min-h-0">
             <CommitFileDiffViewer
               client={gitClient!}
@@ -999,7 +1209,14 @@
             />
           </div>
         {:else}
-          <Sidebar {snapshot} stateKey={sidebarStateKey} onSelectRef={selectRef} />
+          <Sidebar
+            {snapshot}
+            {selectedCommit}
+            stateKey={sidebarStateKey}
+            visibleRefKeys={visibleGraphRefKeys}
+            onSelectRef={selectRef}
+            onToggleRefs={toggleGraphRefs}
+          />
           <div class="flex min-h-0 flex-col overflow-hidden">
             <HistoryToolbar
               onFetch={fetchRepository}
@@ -1016,14 +1233,20 @@
               </div>
             {/if}
             <div class="min-h-0 flex-1">
-              <GitGraph
-                {snapshot}
-                {selectedCommit}
-                {changesSelected}
-                {scrollToCommit}
-                onSelectChanges={selectChanges}
-                onSelectCommit={selectCommit}
-              />
+              {#key activeRepoId}
+                <GitGraph
+                  snapshot={graphSnapshot}
+                  repositoryId={activeRepoId}
+                  getRestoredScrollTop={graphScrollTopFor}
+                  {selectedCommit}
+                  {changesSelected}
+                  {scrollToCommit}
+                  onScrollTopChange={rememberGraphScrollTop}
+                  onScrollCommandHandled={finishScrollToCommit}
+                  onSelectChanges={selectChanges}
+                  onSelectCommit={selectCommit}
+                />
+              {/key}
             </div>
           </div>
         {/if}
@@ -1098,7 +1321,14 @@
         {:else}
           <ResizablePaneGroup panes={graphPanes} onResize={resizePane}>
             {#snippet pane0()}
-              <Sidebar {snapshot} stateKey={sidebarStateKey} onSelectRef={selectRef} />
+              <Sidebar
+                {snapshot}
+                {selectedCommit}
+                stateKey={sidebarStateKey}
+                visibleRefKeys={visibleGraphRefKeys}
+                onSelectRef={selectRef}
+                onToggleRefs={toggleGraphRefs}
+              />
             {/snippet}
 
             {#snippet pane1()}
@@ -1118,14 +1348,20 @@
                   </div>
                 {/if}
                 <div class="min-h-0 flex-1">
-                  <GitGraph
-                    {snapshot}
-                    {selectedCommit}
-                    {changesSelected}
-                    {scrollToCommit}
-                    onSelectChanges={selectChanges}
-                    onSelectCommit={selectCommit}
-                  />
+                  {#key activeRepoId}
+                    <GitGraph
+                      snapshot={graphSnapshot}
+                      repositoryId={activeRepoId}
+                      getRestoredScrollTop={graphScrollTopFor}
+                      {selectedCommit}
+                      {changesSelected}
+                      {scrollToCommit}
+                      onScrollTopChange={rememberGraphScrollTop}
+                      onScrollCommandHandled={finishScrollToCommit}
+                      onSelectChanges={selectChanges}
+                      onSelectCommit={selectCommit}
+                    />
+                  {/key}
                 </div>
               </div>
             {/snippet}
