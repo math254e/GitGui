@@ -104,6 +104,46 @@
 
         [data-type="item"] {
           padding-left: 22px;
+          white-space: nowrap;
+        }
+
+        /* Branch names should keep their beginning visible when the sidebar is narrow. */
+        [data-item-section="content"] {
+          flex: 1 1 auto;
+          min-width: 0;
+          white-space: nowrap;
+        }
+
+        [data-item-section="content"] > [data-truncate-group-container="middle"] {
+          display: block;
+          min-width: 0;
+          max-width: 100%;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap !important;
+        }
+
+        [data-item-section="content"] > [data-truncate-group-container="middle"] > div,
+        [data-item-section="content"] > [data-truncate-group-container="middle"] [data-truncate-container],
+        [data-item-section="content"] > [data-truncate-group-container="middle"] [data-truncate-grid],
+        [data-item-section="content"] > [data-truncate-group-container="middle"] [data-truncate-grid] > div:not([data-truncate-marker-cell]):not([data-truncate-fill]) {
+          display: contents;
+        }
+
+        [data-item-section="content"] > [data-truncate-group-container="middle"] [data-truncate-content="visible"] {
+          display: inline;
+          direction: ltr;
+          white-space: nowrap !important;
+        }
+
+        [data-item-section="content"] > [data-truncate-group-container="middle"] [data-truncate-content="visible"] > span {
+          unicode-bidi: normal;
+        }
+
+        [data-item-section="content"] > [data-truncate-group-container="middle"] [data-truncate-content="overflow"],
+        [data-item-section="content"] > [data-truncate-group-container="middle"] [data-truncate-marker-cell],
+        [data-item-section="content"] > [data-truncate-group-container="middle"] [data-truncate-fill] {
+          display: none;
         }
 
         [data-item-section="decoration"] > span {
