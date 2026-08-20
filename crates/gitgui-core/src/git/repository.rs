@@ -204,8 +204,18 @@ pub fn load_commit_files_from_root(
     commit_hash: &str,
 ) -> Result<Vec<CommitFile>, GitError> {
     let root = Path::new(repo_root);
+    // Merge commits have more than one possible comparison base. Keep the
+    // file list aligned with the commit diff viewer by comparing to the first
+    // parent, which presents the merge as one ordinary two-way change.
     let output = GitCommand::run(
-        &["show", "--name-status", "--format=", commit_hash],
+        &[
+            "show",
+            "--name-status",
+            "--format=",
+            "--find-renames",
+            "--diff-merges=first-parent",
+            commit_hash,
+        ],
         Some(root),
     )?;
 
@@ -764,6 +774,32 @@ fn load_file_from_working_tree(root: &Path, file_path: &str) -> FileContent {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    struct TestRepository(std::path::PathBuf);
+
+    impl Drop for TestRepository {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn run_test_git(root: &Path, args: &[&str]) -> String {
+        GitCommand::run(args, Some(root)).unwrap()
+    }
+
+    fn new_test_repository() -> TestRepository {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "gitgui-core-merge-test-{}-{suffix}",
+            std::process::id()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        TestRepository(root)
+    }
 
     #[test]
     fn parses_ordinary_modified_file() {
@@ -774,6 +810,42 @@ mod tests {
         assert_eq!(file.original_path, None);
         assert_eq!(file.index_status, ".");
         assert_eq!(file.worktree_status, "M");
+    }
+
+    #[test]
+    fn lists_merge_files_against_first_parent() {
+        let repository = new_test_repository();
+        let root = repository.0.as_path();
+
+        run_test_git(root, &["init", "-q", "-b", "main"]);
+        run_test_git(root, &["config", "user.email", "test@example.com"]);
+        run_test_git(root, &["config", "user.name", "GitGui Test"]);
+
+        std::fs::write(root.join("base.txt"), "base\n").unwrap();
+        run_test_git(root, &["add", "base.txt"]);
+        run_test_git(root, &["commit", "-q", "-m", "base"]);
+
+        run_test_git(root, &["switch", "-q", "-c", "feature"]);
+        std::fs::write(root.join("feature.txt"), "feature\n").unwrap();
+        run_test_git(root, &["add", "feature.txt"]);
+        run_test_git(root, &["commit", "-q", "-m", "feature"]);
+
+        run_test_git(root, &["switch", "-q", "main"]);
+        std::fs::write(root.join("main.txt"), "main\n").unwrap();
+        run_test_git(root, &["add", "main.txt"]);
+        run_test_git(root, &["commit", "-q", "-m", "main"]);
+        run_test_git(root, &["merge", "--no-ff", "-q", "feature", "-m", "merge"]);
+
+        let merge_hash = run_test_git(root, &["rev-parse", "HEAD"]);
+        let files = load_commit_files_from_root(root.to_str().unwrap(), merge_hash.trim()).unwrap();
+
+        assert_eq!(
+            files
+                .into_iter()
+                .map(|file| (file.path, file.original_path, file.status))
+                .collect::<Vec<_>>(),
+            vec![("feature.txt".to_string(), None, "A".to_string())]
+        );
     }
 
     #[test]
