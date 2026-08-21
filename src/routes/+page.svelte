@@ -242,8 +242,7 @@ import { onDestroy, onMount } from "svelte";
       id: repo.id,
       title: repo.title,
       root: repo.root,
-      branch: repo.snapshot?.status.currentBranch ?? "Detached HEAD",
-      loading: repo.loading,
+      branch: repo.snapshot ? repo.snapshot.status.currentBranch ?? "Detached HEAD" : "",
       error: repo.error ?? "",
     })),
   );

@@ -4,7 +4,6 @@
     title: string;
     root: string;
     branch: string;
-    loading: boolean;
     error: string;
   };
 </script>
@@ -40,7 +39,7 @@
     <Home aria-hidden="true" size={18} />
   </button>
 
-  <nav class="flex h-full min-w-0 flex-1 items-stretch overflow-x-auto" aria-label="Open repositories">
+  <div class="flex h-full min-w-0 flex-1 items-stretch overflow-x-auto" aria-label="Open repositories" role="tablist">
     {#if tabs.length}
       {#each tabs as tab (tab.id)}
         <div
@@ -49,29 +48,35 @@
               ? "bg-[var(--app-theme-toolbar-control-hover)] text-[var(--app-theme-text)]"
               : "bg-[var(--app-theme-toolbar)] text-[var(--app-theme-toolbar-foreground)] hover:bg-[var(--app-theme-toolbar-control-hover)]"
           }`}
+          role="tab"
+          aria-selected={activeView === "repo" && activeRepoId === tab.id}
+          tabindex={activeView === "repo" && activeRepoId === tab.id ? 0 : -1}
           title={`${tab.root} (${tab.branch})`}
+          onclick={() => onSelectRepo(tab.id)}
+          onkeydown={(event) => {
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
+              onSelectRepo(tab.id);
+            }
+          }}
         >
-          <button
-            class="flex h-full min-w-0 flex-1 items-center gap-2 px-3 text-left"
-            type="button"
-            onclick={() => onSelectRepo(tab.id)}
-          >
+          <div class="flex h-full min-w-0 flex-1 items-center gap-2 px-3 text-left">
             <span class="min-w-0 flex-1">
               <span class="block truncate text-sm font-semibold">{tab.title}</span>
               <span class={`block truncate text-xs ${tab.error ? "text-[var(--app-theme-error)]" : "text-[var(--app-theme-text-subtle)]"}`}>
                 {tab.error || tab.branch}
               </span>
             </span>
-            {#if tab.loading}
-              <span class="h-2 w-2 shrink-0 rounded-full bg-[var(--app-theme-success)]" aria-label="Loading"></span>
-            {/if}
-          </button>
+          </div>
           <button
             class="mr-2 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-[var(--app-theme-text-muted)] transition hover:bg-[var(--app-theme-control-hover)] hover:text-[var(--app-theme-text)]"
             type="button"
             aria-label={`Close ${tab.title}`}
             title={`Close ${tab.title}`}
-            onclick={() => onCloseRepo(tab.id)}
+            onclick={(event) => {
+              event.stopPropagation();
+              onCloseRepo(tab.id);
+            }}
           >
             <X aria-hidden="true" size={14} />
           </button>
@@ -80,7 +85,7 @@
     {:else}
       <div class="flex h-full items-center px-4 text-sm text-[var(--app-theme-text-subtle)]">No repositories open</div>
     {/if}
-  </nav>
+  </div>
 
   <button
     class={`flex h-full w-12 shrink-0 items-center justify-center border-l border-[var(--app-theme-toolbar-border)] transition ${
