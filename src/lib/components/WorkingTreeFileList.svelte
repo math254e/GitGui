@@ -39,6 +39,10 @@
   let syncingSelection = false;
   let fileByTreePath = new Map<string, ChangedFile>();
   let scrollElement: HTMLElement | null = null;
+  let scrollMetricsObserver: ResizeObserver | null = null;
+  let scrollMutationObserver: MutationObserver | null = null;
+  let scrollbarGutter = $state(15);
+  let treeHasOverflow = $state(false);
 
   const fileIconTokens = [
     "astro",
@@ -127,8 +131,19 @@
       },
       onSelectionChange: handleSelectionChange,
       unsafeCSS: `
+        /* Keep the staging list's scrollbar discoverable when the tree is idle. */
+        [data-file-tree-virtualized-scroll="true"] {
+          --trees-scrollbar-thumb-current: var(--trees-scrollbar-thumb);
+          scrollbar-color: var(--trees-scrollbar-thumb) transparent;
+        }
+
+        [data-file-tree-virtualized-scroll="true"]::-webkit-scrollbar-thumb {
+          background-color: var(--trees-scrollbar-thumb);
+        }
+
         [data-type="item"] {
-          margin-right: 13px;
+          /* Reserve the action button lane and reclaim the gutter when it is unused. */
+          margin-right: var(--gitgui-tree-row-margin-right, 13px);
           padding-right: 0;
         }
 
@@ -191,9 +206,32 @@
     scrollElement = host.shadowRoot?.querySelector<HTMLElement>("[data-file-tree-virtualized-scroll]") ?? null;
     scrollElement?.addEventListener("scroll", handleScroll, { passive: true });
     scrollTop = scrollElement?.scrollTop ?? 0;
+    scrollMetricsObserver = new ResizeObserver(syncScrollMetrics);
+    scrollMetricsObserver.observe(host);
+
+    if (scrollElement) {
+      scrollMetricsObserver.observe(scrollElement);
+      const list = host.shadowRoot?.querySelector<HTMLElement>("[data-file-tree-virtualized-list]");
+      if (list) {
+        scrollMetricsObserver.observe(list);
+      }
+
+      scrollMutationObserver = new MutationObserver(syncScrollMetrics);
+      scrollMutationObserver.observe(scrollElement, {
+        attributes: true,
+        childList: true,
+        subtree: true,
+      });
+    }
+
+    syncScrollMetrics();
 
     return () => {
       scrollElement?.removeEventListener("scroll", handleScroll);
+      scrollMetricsObserver?.disconnect();
+      scrollMetricsObserver = null;
+      scrollMutationObserver?.disconnect();
+      scrollMutationObserver = null;
       scrollElement = null;
       tree?.cleanUp();
       tree = null;
@@ -232,6 +270,17 @@
 
   function handleScroll(event: Event) {
     scrollTop = (event.currentTarget as HTMLElement).scrollTop;
+    syncScrollMetrics();
+  }
+
+  function syncScrollMetrics() {
+    if (!scrollElement) {
+      treeHasOverflow = false;
+      return;
+    }
+
+    scrollbarGutter = Math.max(0, scrollElement.offsetWidth - scrollElement.clientWidth);
+    treeHasOverflow = scrollElement.scrollHeight > scrollElement.clientHeight + 1;
   }
 
   function handleSelectionChange(selectedPaths: readonly string[]) {
@@ -334,15 +383,15 @@
 </script>
 
 <div class="relative h-full min-h-0 w-full overflow-hidden" role="group" aria-label={`${actionLabel} files`}>
-  <div bind:this={host} class="h-full min-h-0 w-full overflow-hidden" style="--trees-bg-override: var(--app-theme-sidebar); --trees-fg-override: var(--app-theme-sidebar-foreground); --trees-fg-muted-override: var(--app-theme-sidebar-muted-foreground); --trees-border-color-override: var(--app-theme-sidebar-border); --trees-selected-bg-override: var(--app-theme-sidebar-row-selected); --trees-selected-fg-override: var(--app-theme-accent-surface-foreground); --trees-accent-override: var(--app-theme-accent); --trees-focus-ring-color-override: var(--app-theme-focus); --trees-status-added-override: #2f9e6f; --trees-status-deleted-override: #e5484d; --trees-status-modified-override: #d09a2e; --trees-status-renamed-override: #8b5cf6; --trees-status-untracked-override: #2f9e6f; --trees-status-ignored-override: var(--app-theme-text-subtle); --trees-border-radius-override: 4px; --trees-font-family-override: inherit; --trees-font-size-override: 13px; --trees-padding-inline-override: 3px; --trees-item-padding-x-override: 3px; --trees-item-row-gap-override: 6px; --trees-level-gap-override: 0px; --trees-icon-width-override: 18px; --trees-item-height: 28px;"></div>
+  <div bind:this={host} class="h-full min-h-0 w-full overflow-hidden" style={`--gitgui-tree-row-margin-right: ${13 + (treeHasOverflow ? scrollbarGutter : 0)}px; --trees-bg-override: var(--app-theme-sidebar); --trees-fg-override: var(--app-theme-sidebar-foreground); --trees-fg-muted-override: var(--app-theme-sidebar-muted-foreground); --trees-border-color-override: var(--app-theme-sidebar-border); --trees-selected-bg-override: var(--app-theme-sidebar-row-selected); --trees-selected-fg-override: var(--app-theme-accent-surface-foreground); --trees-accent-override: var(--app-theme-accent); --trees-focus-ring-color-override: var(--app-theme-focus); --trees-status-added-override: #2f9e6f; --trees-status-deleted-override: #e5484d; --trees-status-modified-override: #d09a2e; --trees-status-renamed-override: #8b5cf6; --trees-status-untracked-override: #2f9e6f; --trees-status-ignored-override: var(--app-theme-text-subtle); --trees-border-radius-override: 4px; --trees-font-family-override: inherit; --trees-font-size-override: 13px; --trees-padding-inline-override: 3px; --trees-item-padding-x-override: 3px; --trees-item-row-gap-override: 6px; --trees-level-gap-override: 0px; --trees-icon-width-override: 18px; --trees-item-height: 28px;`}></div>
 
   <div class="pointer-events-none absolute inset-0 overflow-hidden">
     {#each treeFiles as entry, index (entry.path)}
       <button
         aria-label={`${actionLabel} ${entry.file.path}`}
-        class="pointer-events-auto absolute right-0 inline-flex h-7 w-7 items-center justify-center rounded bg-[var(--app-theme-sidebar)] text-[var(--app-theme-text-muted)] transition-colors hover:bg-[var(--app-theme-sidebar-row-hover)] hover:text-[var(--app-theme-accent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus)] disabled:cursor-not-allowed disabled:opacity-40"
+        class="pointer-events-auto absolute inline-flex h-7 w-7 items-center justify-center rounded bg-[var(--app-theme-sidebar)] text-[var(--app-theme-text-muted)] transition-colors hover:bg-[var(--app-theme-sidebar-row-hover)] hover:text-[var(--app-theme-accent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus)] disabled:cursor-not-allowed disabled:opacity-40"
         disabled={disabled}
-        style={`top: ${index * 28 - scrollTop}px`}
+        style={`top: ${index * 28 - scrollTop}px; right: ${treeHasOverflow ? scrollbarGutter : 0}px`}
         title={`${actionLabel} ${entry.file.path}`}
         type="button"
         onclick={() => onAction(entry.file)}
