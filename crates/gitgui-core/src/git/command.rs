@@ -80,9 +80,18 @@ impl GitCommand {
         })?;
 
         if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            let diagnostic = match (stderr.is_empty(), stdout.is_empty()) {
+                (true, true) => String::new(),
+                (false, true) => stderr,
+                (true, false) => stdout,
+                (false, false) => format!("{stderr}\n{stdout}"),
+            };
+
             return Err(GitError {
                 message: format!("git {} failed", args.join(" ")),
-                stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+                stderr: diagnostic,
                 status: output.status.code(),
             });
         }

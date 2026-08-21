@@ -1242,8 +1242,9 @@ async fn git_branch_switch(
 
     let repository_id = params.repository_id.clone();
     let name = params.name;
+    let merge = params.merge;
     match run_git_action(state, &repository_id, move |root| {
-        run_switch_branch(root, &name)
+        run_switch_branch(root, &name, merge)
     })
     .await
     {
@@ -1341,7 +1342,7 @@ where
         })?
         .map_err(|error| {
             warn!(error = %error.message, "Git mutation failed");
-            git_failure_error("Git operation failed")
+            git_operation_error(error)
         })?;
     let snapshot_repository = repository.clone();
     let snapshot = spawn_blocking(move || load_snapshot(&snapshot_repository))
@@ -1820,6 +1821,26 @@ fn git_failure(request_id: String, message: &str) -> ResponseEnvelope {
 
 fn git_failure_error(message: &str) -> ProtocolError {
     ProtocolError::new(error_codes::GIT_OPERATION_FAILED, message)
+}
+
+fn git_operation_error(error: GitError) -> ProtocolError {
+    let mut details = serde_json::Map::new();
+    if !error.stderr.trim().is_empty() {
+        details.insert("stderr".to_string(), Value::String(error.stderr));
+    }
+    if let Some(status) = error.status {
+        details.insert("status".to_string(), Value::from(status));
+    }
+
+    if details.is_empty() {
+        ProtocolError::new(error_codes::GIT_OPERATION_FAILED, error.message)
+    } else {
+        ProtocolError::with_details(
+            error_codes::GIT_OPERATION_FAILED,
+            error.message,
+            Value::Object(details),
+        )
+    }
 }
 
 fn repository_not_found(request_id: String) -> ResponseEnvelope {

@@ -371,7 +371,11 @@ checkout: boolean, };
 
 export type GitBranchCreateResult = { repository: RepositorySummary, snapshot: RepositorySnapshot, };
 
-export type GitBranchSwitchParams = { repositoryId: string, name: string, };
+export type GitBranchSwitchParams = { repositoryId: string, name: string,
+/**
+ * Attempt to carry local changes across the branch switch.
+ */
+merge: boolean, };
 
 export type GitBranchSwitchResult = { repository: RepositorySummary, snapshot: RepositorySnapshot, };
 

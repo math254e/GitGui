@@ -682,6 +682,9 @@ pub struct GitBranchCreateResult {
 pub struct GitBranchSwitchParams {
     pub repository_id: String,
     pub name: String,
+    /// Attempt to carry local changes across the branch switch.
+    #[serde(default)]
+    pub merge: bool,
 }
 
 /// Result of switching branches.

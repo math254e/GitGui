@@ -9,6 +9,7 @@
     stateKey: string | null;
     visibleRefKeys?: ReadonlySet<string>;
     onSelectRef?: (ref: CommitRef) => void;
+    onSwitchBranch?: (branchName: string) => void;
     onToggleRefs?: (refs: CommitRef[], visible: boolean) => void;
   };
 
@@ -31,6 +32,7 @@
     stateKey,
     visibleRefKeys = new Set<string>(),
     onSelectRef,
+    onSwitchBranch,
     onToggleRefs,
   }: Props = $props();
 
@@ -136,6 +138,7 @@
               selectedCommitHash={selectedCommit?.hash ?? null}
               {visibleRefKeys}
               onSelectRef={handleSelectRef}
+              {onSwitchBranch}
               {onToggleRefs}
             />
           {:else}

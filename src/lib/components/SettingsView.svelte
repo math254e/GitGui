@@ -1,13 +1,9 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
   import {
-    Bell,
-    Check,
-    ChevronDown,
     ExternalLink,
     GitBranch,
     Info,
-    Keyboard,
     Link2,
     Palette,
     Settings,
@@ -40,17 +36,18 @@
     ThemeDefinition as PreviewThemeDefinition,
     ThemePalette,
   } from "$lib/components/settings/theme-types";
+  import {
+    readBranchSwitchMergePreference,
+    writeBranchSwitchMergePreference,
+  } from "$lib/preferences";
 
   type SettingsSection = "general" | "appearance" | "connections";
+  type BranchSwitchMode = "normal" | "merge";
 
   let activeSection = $state<SettingsSection>("general");
-  let launchView = $state("Repositories");
-  let confirmBeforeDiscard = $state(true);
-  let notifications = $state(true);
-  let compactMode = $state(false);
+  let branchSwitchMode = $state<BranchSwitchMode>(readBranchSwitchMergePreference() ? "merge" : "normal");
   let gitExecutable = $state("git");
   let autoFetch = $state(true);
-  let saveNotice = $state(false);
   let themeNotice = $state("");
   let showThemeEditor = $state(false);
   let showThemeImport = $state(false);
@@ -124,12 +121,17 @@
 
   function selectSection(section: SettingsSection) {
     activeSection = section;
-    saveNotice = false;
     themeNotice = "";
   }
 
-  function saveSettings() {
-    saveNotice = true;
+  function setBranchSwitchMode(mode: BranchSwitchMode) {
+    branchSwitchMode = mode;
+    writeBranchSwitchMergePreference(mode === "merge");
+  }
+
+  function handleBranchSwitchModeChange(event: Event) {
+    const value = (event.currentTarget as HTMLSelectElement).value;
+    setBranchSwitchMode(value === "merge" ? "merge" : "normal");
   }
 
   function setAppearanceMode(mode: ThemePreferenceMode) {
@@ -315,110 +317,33 @@
                 <h2 class="text-[28px] font-semibold tracking-[-0.03em] text-[var(--app-theme-text)]">{sectionTitle}</h2>
                 <p class="mt-2 max-w-[620px] text-sm leading-6 text-[var(--app-theme-text-muted)]">
                   {#if activeSection === "general"}
-                    Set the defaults GitGui uses when you open a workspace.
+                    Choose how GitGui handles local changes when switching branches.
                   {:else}
                     Configure how GitGui finds Git and connects to repositories.
                   {/if}
                 </p>
               </div>
-              <button
-                type="button"
-                class="inline-flex h-9 items-center gap-2 rounded-md bg-[var(--app-theme-accent)] px-3.5 text-sm font-semibold text-[var(--app-theme-accent-foreground)] transition hover:bg-[var(--app-theme-accent-hover)]"
-                onclick={saveSettings}
-              >
-                {#if saveNotice}
-                  <Check aria-hidden="true" size={15} />
-                  Saved
-                {:else}
-                  Save changes
-                {/if}
-              </button>
             </div>
           </header>
 
           {#if activeSection === "general"}
             <div class="divide-y divide-[var(--app-theme-border-subtle)]">
-              <section class="py-7" aria-labelledby="general-workspace">
-                <div class="mb-5">
-                  <h3 id="general-workspace" class="text-sm font-semibold text-[var(--app-theme-text)]">Workspace</h3>
-                  <p class="mt-1 text-sm text-[var(--app-theme-text-subtle)]">Choose how a new GitGui window should feel.</p>
-                </div>
-
-                <div class="space-y-1">
-                  <label class="flex flex-wrap items-center justify-between gap-4 py-3" for="launch-view">
-                    <span>
-                      <span class="block text-sm font-medium text-[var(--app-theme-text-secondary)]">Start view</span>
-                      <span class="mt-1 block text-xs text-[var(--app-theme-text-subtle)]">The first screen shown when GitGui opens.</span>
-                    </span>
-                    <span class="relative inline-flex w-full max-w-[190px]">
-                      <select
-                        id="launch-view"
-                        bind:value={launchView}
-                        class="h-9 w-full appearance-none rounded-md border border-[var(--app-theme-border)] bg-[var(--app-theme-input)] px-3 pr-9 text-sm text-[var(--app-theme-text-secondary)] outline-none transition focus:border-[var(--app-theme-focus)] focus:ring-2 focus:ring-[var(--app-theme-focus-ring)]"
-                      >
-                        <option>Repositories</option>
-                        <option>Last workspace</option>
-                      </select>
-                      <ChevronDown aria-hidden="true" class="pointer-events-none absolute top-1/2 right-3 -translate-y-1/2 text-[var(--app-theme-text-subtle)]" size={15} />
-                    </span>
-                  </label>
-
-                  <div class="flex flex-wrap items-center justify-between gap-4 py-3">
-                    <div>
-                      <p class="text-sm font-medium text-[var(--app-theme-text-secondary)]">Confirm before discarding</p>
-                      <p class="mt-1 text-xs text-[var(--app-theme-text-subtle)]">Ask before removing changes from the working tree.</p>
-                    </div>
-                    <button
-                      type="button"
-                      class={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${confirmBeforeDiscard ? "bg-[var(--app-theme-accent)]" : "bg-[var(--app-theme-muted)]"}`}
-                      role="switch"
-                      aria-checked={confirmBeforeDiscard}
-                      aria-label="Confirm before discarding"
-                      onclick={() => (confirmBeforeDiscard = !confirmBeforeDiscard)}
-                    >
-                      <span class={`absolute top-1 h-4 w-4 rounded-full bg-[var(--app-theme-surface-raised)] shadow-sm transition-transform ${confirmBeforeDiscard ? "translate-x-6" : "translate-x-1"}`}></span>
-                    </button>
-                  </div>
-                </div>
-              </section>
-
-              <section class="py-7" aria-labelledby="general-notifications">
-                <div class="mb-5">
-                  <h3 id="general-notifications" class="text-sm font-semibold text-[var(--app-theme-text)]">Notifications</h3>
-                  <p class="mt-1 text-sm text-[var(--app-theme-text-subtle)]">Keep important repository activity visible.</p>
-                </div>
-                <div class="flex flex-wrap items-center justify-between gap-4 py-3">
-                  <div class="flex items-start gap-3">
-                    <Bell aria-hidden="true" class="mt-0.5 text-[var(--app-theme-text-muted)]" size={17} />
-                    <div>
-                      <p class="text-sm font-medium text-[var(--app-theme-text-secondary)]">Background refresh notifications</p>
-                      <p class="mt-1 text-xs text-[var(--app-theme-text-subtle)]">Show a notice when a repository finishes refreshing.</p>
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    class={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${notifications ? "bg-[var(--app-theme-accent)]" : "bg-[var(--app-theme-muted)]"}`}
-                    role="switch"
-                    aria-checked={notifications}
-                    aria-label="Background refresh notifications"
-                    onclick={() => (notifications = !notifications)}
+              <section class="py-7">
+                <label class="flex flex-wrap items-center justify-between gap-4 py-3" for="branch-switch-mode">
+                  <span>
+                    <span class="block text-sm font-medium text-[var(--app-theme-text-secondary)]">Branch switch mode</span>
+                    <span class="mt-1 block max-w-[620px] text-xs leading-5 text-[var(--app-theme-text-subtle)]">Normal keeps local changes in place. Merge uses <code class="rounded bg-[var(--app-theme-muted)] px-1 py-0.5 font-mono text-[11px]">git switch --merge</code> and may leave conflicts to resolve.</span>
+                  </span>
+                  <select
+                    id="branch-switch-mode"
+                    value={branchSwitchMode}
+                    onchange={handleBranchSwitchModeChange}
+                    class="h-9 w-full max-w-[190px] rounded-md border border-[var(--app-theme-border)] bg-[var(--app-theme-input)] px-3 text-sm text-[var(--app-theme-text-secondary)] outline-none transition focus:border-[var(--app-theme-focus)] focus:ring-2 focus:ring-[var(--app-theme-focus-ring)]"
                   >
-                    <span class={`absolute top-1 h-4 w-4 rounded-full bg-[var(--app-theme-surface-raised)] shadow-sm transition-transform ${notifications ? "translate-x-6" : "translate-x-1"}`}></span>
-                  </button>
-                </div>
-              </section>
-
-              <section class="py-7" aria-labelledby="general-shortcuts">
-                <div class="flex flex-wrap items-center justify-between gap-4">
-                  <div class="flex items-start gap-3">
-                    <Keyboard aria-hidden="true" class="mt-0.5 text-[var(--app-theme-text-muted)]" size={17} />
-                    <div>
-                      <h3 id="general-shortcuts" class="text-sm font-semibold text-[var(--app-theme-text)]">Keyboard shortcuts</h3>
-                      <p class="mt-1 text-xs text-[var(--app-theme-text-subtle)]">Shortcuts are currently using the default keymap.</p>
-                    </div>
-                  </div>
-                  <button type="button" class="inline-flex h-8 items-center rounded-md border border-[var(--app-theme-border)] bg-[var(--app-theme-surface-raised)] px-3 text-xs font-semibold text-[var(--app-theme-text-muted)] transition hover:bg-[var(--app-theme-control-hover)]">View shortcuts</button>
-                </div>
+                    <option value="normal">Normal</option>
+                    <option value="merge">Merge</option>
+                  </select>
+                </label>
               </section>
             </div>
           {:else}

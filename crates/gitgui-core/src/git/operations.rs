@@ -78,13 +78,14 @@ pub fn create_branch(
     GitCommand::run_owned(&args, Some(Path::new(root))).map(|_| ())
 }
 
-pub fn switch_branch(root: &str, name: &str) -> Result<(), GitError> {
+pub fn switch_branch(root: &str, name: &str, merge: bool) -> Result<(), GitError> {
     validate_branch_name(root, name)?;
-    GitCommand::run_owned(
-        &["switch".to_string(), name.to_string()],
-        Some(Path::new(root)),
-    )
-    .map(|_| ())
+    let mut args = vec!["switch".to_string()];
+    if merge {
+        args.push("--merge".to_string());
+    }
+    args.push(name.to_string());
+    GitCommand::run_owned(&args, Some(Path::new(root))).map(|_| ())
 }
 
 pub fn stash_push(

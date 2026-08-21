@@ -12,6 +12,7 @@
     selectedCommitHash?: string | null;
     visibleRefKeys?: ReadonlySet<string>;
     onSelectRef?: (ref: CommitRef) => void;
+    onSwitchBranch?: (branchName: string) => void;
     onToggleRefs?: (refs: CommitRef[], visible: boolean) => void;
   };
 
@@ -23,6 +24,7 @@
     selectedCommitHash = null,
     visibleRefKeys = new Set<string>(),
     onSelectRef,
+    onSwitchBranch,
     onToggleRefs,
   }: Props = $props();
 
@@ -354,6 +356,34 @@
     onSelectRef?.(ref);
   }
 
+  function handleTreeDoubleClick(event: MouseEvent) {
+    const eventPath = event.composedPath();
+    if (refType !== "localBranch" || isDecorationEvent(eventPath)) {
+      return;
+    }
+
+    const item = eventPath.find(
+      (value) => value instanceof Element && value.getAttribute("data-type") === "item",
+    );
+    if (
+      event.button !== 0 ||
+      !(item instanceof Element) ||
+      item.getAttribute("data-item-type") !== "file"
+    ) {
+      return;
+    }
+
+    const itemPath = normalizePath(item.getAttribute("data-item-path") ?? "");
+    const ref = branchByPath.get(itemPath);
+    if (!ref) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    onSwitchBranch?.(ref.shortName);
+  }
+
   function isDecorationEvent(path: EventTarget[]) {
     return path.some(
       (value) => value instanceof Element && value.getAttribute("data-item-section") === "decoration",
@@ -408,5 +438,6 @@
   aria-label={`${refType === "localBranch" ? "Local" : "Remote"} branches`}
   onpointerdowncapture={handleDecorationPointerDown}
   onclickcapture={handleTreeClick}
+  ondblclickcapture={handleTreeDoubleClick}
   style={`height: ${treeHeight}px; --trees-bg-override: var(--app-theme-sidebar); --trees-fg-override: var(--app-theme-sidebar-foreground); --trees-fg-muted-override: var(--app-theme-sidebar-muted-foreground); --trees-border-color-override: var(--app-theme-sidebar-border); --trees-selected-bg-override: var(--app-theme-sidebar-row-active); --trees-selected-fg-override: var(--app-theme-accent-surface-foreground); --trees-accent-override: var(--app-theme-accent); --trees-focus-ring-color-override: var(--app-theme-focus); --trees-font-family-override: inherit; --trees-font-size-override: 13px; --trees-padding-inline-override: 0px; --trees-item-padding-x-override: 3px; --trees-item-row-gap-override: 3px; --trees-level-gap-override: 6px; --trees-item-height: 26px;`}
 ></div>

@@ -28,6 +28,7 @@ import { onDestroy, onMount } from "svelte";
   import type { ChangedFile, RepositorySummary } from "$lib/generated/protocol";
   import type { CommitFile, CommitInfo, CommitRef, RepositorySnapshot } from "$lib/types/repository";
   import { graphRefKey, isCurrentBranchRef } from "$lib/types/branch-visibility";
+  import { readBranchSwitchMergePreference } from "$lib/preferences";
 
   type ActiveView = "start" | "repo" | "settings";
   type SelectedGraphItem = { type: "changes" } | { type: "commit"; commit: CommitInfo };
@@ -920,14 +921,67 @@ import { onDestroy, onMount } from "svelte";
 
   function formatError(caught: unknown) {
     if (typeof caught === "object" && caught && "message" in caught) {
-      const details =
-        "stderr" in caught && typeof caught.stderr === "string" && caught.stderr
-          ? ` ${caught.stderr}`
-          : "";
-      return `${caught.message}${details}`;
+      const reason = errorReason(caught);
+      return reason ? `${caught.message} ${reason}` : `${caught.message}`;
     }
 
     return String(caught);
+  }
+
+  function errorReason(caught: object) {
+    const directStderr =
+      "stderr" in caught && typeof caught.stderr === "string" ? caught.stderr : "";
+    if (directStderr.trim()) {
+      return directStderr.trim();
+    }
+
+    if (
+      !("details" in caught) ||
+      typeof caught.details !== "object" ||
+      caught.details === null ||
+      Array.isArray(caught.details)
+    ) {
+      return "";
+    }
+
+    const details = caught.details;
+    if ("stderr" in details && typeof details.stderr === "string" && details.stderr.trim()) {
+      return details.stderr.trim();
+    }
+
+    if ("status" in details && typeof details.status === "number") {
+      return `Git exited with status ${details.status}.`;
+    }
+
+    return "";
+  }
+
+  function summarizeGitError(caught: unknown) {
+    const reason =
+      typeof caught === "object" && caught !== null ? errorReason(caught).toLowerCase() : String(caught).toLowerCase();
+    if (reason.includes("local changes") && reason.includes("overwritten")) {
+      return "Local changes would be overwritten.";
+    }
+    if (reason.includes("conflict")) {
+      return "Conflicts need to be resolved.";
+    }
+    if (reason.includes("did not match any") || reason.includes("pathspec")) {
+      return "That branch was not found.";
+    }
+    if (reason.includes("already exists")) {
+      return "That branch already exists.";
+    }
+    if (reason.includes("not a git repository")) {
+      return "This is not a Git repository.";
+    }
+    return "Git could not complete the operation.";
+  }
+
+  function hasUnmergedFiles(repositoryId: string, state: ClientWorkspaceState) {
+    const snapshot = state.repositories[repositoryId]?.snapshot;
+    return snapshot?.status.changedFiles.some((file) =>
+      file.indexStatus.includes("U") || file.worktreeStatus.includes("U"),
+    ) ?? false;
   }
 
   function showStartView() {
@@ -963,6 +1017,24 @@ import { onDestroy, onMount } from "svelte";
       };
       selectCommit(commit);
     }
+  }
+
+  function switchBranch(branchName: string) {
+    if (!activeRepoId || !gitClient || gitActionPending) {
+      return;
+    }
+
+    requestGitAction({
+      kind: "switchBranch",
+      label: `Switching to ${branchName}`,
+      successMessage: `Switched to ${branchName}`,
+      action: (repositoryId) =>
+        gitClient!.switchBranch({
+          repositoryId,
+          name: branchName,
+          merge: readBranchSwitchMergePreference(),
+        }),
+    });
   }
 
   function finishScrollToCommit(commandId: number) {
@@ -1117,8 +1189,10 @@ import { onDestroy, onMount } from "svelte";
 
     try {
       await request.action(request.repositoryId);
-      await workspace.refreshRepository(request.repositoryId);
-      if (request.notifySuccess !== false && request.successMessage) {
+      const refreshedState = await workspace.refreshRepository(request.repositoryId);
+      if (request.kind === "switchBranch" && hasUnmergedFiles(request.repositoryId, refreshedState)) {
+        toast.warning("Switched with conflicts", { description: "Resolve the highlighted conflicts." });
+      } else if (request.notifySuccess !== false && request.successMessage) {
         toast.success(request.successMessage);
       }
     } catch (caught) {
@@ -1126,7 +1200,7 @@ import { onDestroy, onMount } from "svelte";
       // when Git exits non-zero, so make the visible working tree authoritative
       // before surfacing the error.
       await workspace.refreshRepository(request.repositoryId).catch(() => undefined);
-      toast.error(formatError(caught), { description: `${request.label} failed` });
+      toast.error(`${request.label} failed`, { description: summarizeGitError(caught) });
     } finally {
       gitAction = null;
       const nextAction = queuedGitActions[0];
@@ -1430,6 +1504,7 @@ import { onDestroy, onMount } from "svelte";
             stateKey={sidebarStateKey}
             visibleRefKeys={visibleGraphRefKeys}
             onSelectRef={selectRef}
+            onSwitchBranch={switchBranch}
             onToggleRefs={toggleGraphRefs}
           />
           <div class="h-full min-h-0">
@@ -1537,6 +1612,7 @@ import { onDestroy, onMount } from "svelte";
                 stateKey={sidebarStateKey}
                 visibleRefKeys={visibleGraphRefKeys}
                 onSelectRef={selectRef}
+                onSwitchBranch={switchBranch}
                 onToggleRefs={toggleGraphRefs}
               />
             {/if}
