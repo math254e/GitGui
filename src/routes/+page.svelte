@@ -1448,6 +1448,7 @@ import { onDestroy, onMount } from "svelte";
               onStash={stashChanges}
               onPop={popStash}
               pending={gitActionPending}
+              pendingKind={gitAction?.kind ?? null}
             />
             <div class="min-h-0 flex-1">
               {#key activeRepoId}
@@ -1541,6 +1542,7 @@ import { onDestroy, onMount } from "svelte";
                   onStash={stashChanges}
                   onPop={popStash}
                   pending={gitActionPending}
+                  pendingKind={gitAction?.kind ?? null}
                 />
                 <div class="min-h-0 flex-1">
                   {#key activeRepoId}

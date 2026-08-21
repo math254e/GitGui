@@ -7,6 +7,7 @@
     onStash: () => void;
     onPop: () => void;
     pending?: boolean;
+    pendingKind?: string | null;
     disabled?: boolean;
   };
 </script>
@@ -18,6 +19,7 @@
     ArrowDownToLine,
     Download,
     GitBranch,
+    LoaderCircle,
     Upload,
   } from "@lucide/svelte";
 
@@ -29,6 +31,7 @@
     onStash,
     onPop,
     pending = false,
+    pendingKind = null,
     disabled = false,
   }: HistoryToolbarProps = $props();
 
@@ -38,81 +41,111 @@
 <div
   aria-busy={pending}
   aria-label="Git actions"
-  class="flex min-h-12 items-center gap-1 overflow-x-auto border-b border-[var(--app-theme-toolbar-border)] bg-[var(--app-theme-toolbar)] px-2"
+  class="flex min-h-12 justify-center overflow-x-auto border-b border-[var(--app-theme-toolbar-border)] bg-[var(--app-theme-toolbar)]"
   role="toolbar"
 >
-  <button
-    aria-label="Fetch from remote"
-    class="group inline-flex h-9 shrink-0 items-center gap-2 rounded-md px-3 text-sm font-semibold text-[var(--app-theme-toolbar-foreground)] transition-colors hover:bg-[var(--app-theme-toolbar-control-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus)] disabled:cursor-not-allowed disabled:opacity-45"
-    disabled={actionsDisabled}
-    title="Fetch from remote"
-    type="button"
-    onclick={onFetch}
-  >
-    <Download aria-hidden="true" size={16} strokeWidth={2} />
-    <span>Fetch</span>
-  </button>
+  <div class="flex w-max min-w-full items-center justify-center gap-1 px-2">
+    <button
+      aria-label="Fetch from remote"
+      aria-busy={pendingKind === "fetch"}
+      class="group inline-flex h-11 min-w-14 shrink-0 flex-col items-center justify-center gap-0.5 px-2 py-1 text-[11px] font-semibold leading-4 text-[var(--app-theme-toolbar-foreground)] transition-colors hover:bg-[var(--app-theme-toolbar-control-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus)] disabled:cursor-not-allowed disabled:opacity-45"
+      disabled={actionsDisabled}
+      title="Fetch from remote"
+      type="button"
+      onclick={onFetch}
+    >
+      <span>Fetch</span>
+      {#if pendingKind === "fetch"}
+        <LoaderCircle aria-hidden="true" class="animate-spin" size={16} strokeWidth={2} />
+      {:else}
+        <Download aria-hidden="true" size={16} strokeWidth={2} />
+      {/if}
+    </button>
 
-  <button
-    aria-label="Pull from remote"
-    class="group inline-flex h-9 shrink-0 items-center gap-2 rounded-md px-3 text-sm font-semibold text-[var(--app-theme-toolbar-foreground)] transition-colors hover:bg-[var(--app-theme-toolbar-control-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus)] disabled:cursor-not-allowed disabled:opacity-45"
-    disabled={actionsDisabled}
-    title="Pull from remote"
-    type="button"
-    onclick={onPull}
-  >
-    <ArrowDownToLine aria-hidden="true" size={16} strokeWidth={2} />
-    <span>Pull</span>
-  </button>
+    <button
+      aria-label="Pull from remote"
+      aria-busy={pendingKind === "pull"}
+      class="group inline-flex h-11 min-w-14 shrink-0 flex-col items-center justify-center gap-0.5 px-2 py-1 text-[11px] font-semibold leading-4 text-[var(--app-theme-toolbar-foreground)] transition-colors hover:bg-[var(--app-theme-toolbar-control-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus)] disabled:cursor-not-allowed disabled:opacity-45"
+      disabled={actionsDisabled}
+      title="Pull from remote"
+      type="button"
+      onclick={onPull}
+    >
+      <span>Pull</span>
+      {#if pendingKind === "pull"}
+        <LoaderCircle aria-hidden="true" class="animate-spin" size={16} strokeWidth={2} />
+      {:else}
+        <ArrowDownToLine aria-hidden="true" size={16} strokeWidth={2} />
+      {/if}
+    </button>
 
-  <span class="mx-1 h-5 w-px shrink-0 bg-[var(--app-theme-toolbar-border)]" aria-hidden="true"></span>
+    <button
+      aria-label="Push to remote"
+      aria-busy={pendingKind === "push"}
+      class="group inline-flex h-11 min-w-14 shrink-0 flex-col items-center justify-center gap-0.5 px-2 py-1 text-[11px] font-semibold leading-4 text-[var(--app-theme-toolbar-foreground)] transition-colors hover:bg-[var(--app-theme-toolbar-control-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus)] disabled:cursor-not-allowed disabled:opacity-45"
+      disabled={actionsDisabled}
+      title="Push to remote"
+      type="button"
+      onclick={onPush}
+    >
+      <span>Push</span>
+      {#if pendingKind === "push"}
+        <LoaderCircle aria-hidden="true" class="animate-spin" size={16} strokeWidth={2} />
+      {:else}
+        <Upload aria-hidden="true" size={16} strokeWidth={2} />
+      {/if}
+    </button>
 
-  <button
-    aria-label="Push to remote"
-    class="group inline-flex h-9 shrink-0 items-center gap-2 rounded-md px-3 text-sm font-semibold text-[var(--app-theme-toolbar-foreground)] transition-colors hover:bg-[var(--app-theme-toolbar-control-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus)] disabled:cursor-not-allowed disabled:opacity-45"
-    disabled={actionsDisabled}
-    title="Push to remote"
-    type="button"
-    onclick={onPush}
-  >
-    <Upload aria-hidden="true" size={16} strokeWidth={2} />
-    <span>Push</span>
-  </button>
+    <button
+      aria-label="Manage branches"
+      aria-busy={pendingKind === "switchBranch" || pendingKind === "createBranch"}
+      class="group inline-flex h-11 min-w-14 shrink-0 flex-col items-center justify-center gap-0.5 px-2 py-1 text-[11px] font-semibold leading-4 text-[var(--app-theme-toolbar-foreground)] transition-colors hover:bg-[var(--app-theme-toolbar-control-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus)] disabled:cursor-not-allowed disabled:opacity-45"
+      disabled={actionsDisabled}
+      title="Manage branches"
+      type="button"
+      onclick={onBranch}
+    >
+      <span>Branch</span>
+      {#if pendingKind === "switchBranch" || pendingKind === "createBranch"}
+        <LoaderCircle aria-hidden="true" class="animate-spin" size={16} strokeWidth={2} />
+      {:else}
+        <GitBranch aria-hidden="true" size={16} strokeWidth={2} />
+      {/if}
+    </button>
 
-  <button
-    aria-label="Manage branches"
-    class="group inline-flex h-9 shrink-0 items-center gap-2 rounded-md px-3 text-sm font-semibold text-[var(--app-theme-toolbar-foreground)] transition-colors hover:bg-[var(--app-theme-toolbar-control-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus)] disabled:cursor-not-allowed disabled:opacity-45"
-    disabled={actionsDisabled}
-    title="Manage branches"
-    type="button"
-    onclick={onBranch}
-  >
-    <GitBranch aria-hidden="true" size={16} strokeWidth={2} />
-    <span>Branch</span>
-  </button>
+    <button
+      aria-label="Stash changes"
+      aria-busy={pendingKind === "stash"}
+      class="group inline-flex h-11 min-w-14 shrink-0 flex-col items-center justify-center gap-0.5 px-2 py-1 text-[11px] font-semibold leading-4 text-[var(--app-theme-toolbar-foreground)] transition-colors hover:bg-[var(--app-theme-toolbar-control-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus)] disabled:cursor-not-allowed disabled:opacity-45"
+      disabled={actionsDisabled}
+      title="Stash changes"
+      type="button"
+      onclick={onStash}
+    >
+      <span>Stash</span>
+      {#if pendingKind === "stash"}
+        <LoaderCircle aria-hidden="true" class="animate-spin" size={16} strokeWidth={2} />
+      {:else}
+        <Archive aria-hidden="true" size={16} strokeWidth={2} />
+      {/if}
+    </button>
 
-  <button
-    aria-label="Stash changes"
-    class="group inline-flex h-9 shrink-0 items-center gap-2 rounded-md px-3 text-sm font-semibold text-[var(--app-theme-toolbar-foreground)] transition-colors hover:bg-[var(--app-theme-toolbar-control-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus)] disabled:cursor-not-allowed disabled:opacity-45"
-    disabled={actionsDisabled}
-    title="Stash changes"
-    type="button"
-    onclick={onStash}
-  >
-    <Archive aria-hidden="true" size={16} strokeWidth={2} />
-    <span>Stash</span>
-  </button>
-
-  <button
-    aria-label="Pop latest stash"
-    class="group inline-flex h-9 shrink-0 items-center gap-2 rounded-md px-3 text-sm font-semibold text-[var(--app-theme-toolbar-foreground)] transition-colors hover:bg-[var(--app-theme-toolbar-control-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus)] disabled:cursor-not-allowed disabled:opacity-45"
-    disabled={actionsDisabled}
-    title="Pop latest stash"
-    type="button"
-    onclick={onPop}
-  >
-    <ArchiveRestore aria-hidden="true" size={16} strokeWidth={2} />
-    <span>Pop</span>
-  </button>
+    <button
+      aria-label="Pop latest stash"
+      aria-busy={pendingKind === "stashPop"}
+      class="group inline-flex h-11 min-w-14 shrink-0 flex-col items-center justify-center gap-0.5 px-2 py-1 text-[11px] font-semibold leading-4 text-[var(--app-theme-toolbar-foreground)] transition-colors hover:bg-[var(--app-theme-toolbar-control-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus)] disabled:cursor-not-allowed disabled:opacity-45"
+      disabled={actionsDisabled}
+      title="Pop latest stash"
+      type="button"
+      onclick={onPop}
+    >
+      <span>Pop</span>
+      {#if pendingKind === "stashPop"}
+        <LoaderCircle aria-hidden="true" class="animate-spin" size={16} strokeWidth={2} />
+      {:else}
+        <ArchiveRestore aria-hidden="true" size={16} strokeWidth={2} />
+      {/if}
+    </button>
+  </div>
 
 </div>
