@@ -201,7 +201,6 @@
   const graphRequiredWidth = $derived(
     Math.max(90, graphPadding * 2 + Math.max(0, (snapshot?.graph.width ?? 1) - 1) * laneGap + dotRadius * 2),
   );
-  const graphColumnWidth = $derived(renderedColumnWidth(columns.find((column) => column.id === "graph")));
   const graphColumnOffset = $derived(
     visibleColumns
       .slice(0, Math.max(0, visibleColumns.findIndex((column) => column.id === "graph")))
@@ -344,7 +343,7 @@
     const currentSnapshot = snapshot;
     const viewportHeight = graphViewportHeight;
     const scrollTop = graphScrollTop;
-    const width = graphColumnWidth;
+    const width = graphRequiredWidth;
     const dpr = graphDevicePixelRatio;
     const selectedHash = selectedCommit?.hash ?? null;
     const hoveredHash = hoveredRowHash;
@@ -387,7 +386,7 @@
       return 0;
     }
 
-    return column.id === "graph" ? Math.max(column.width, graphRequiredWidth) : column.width;
+    return column.width;
   }
 
   function clampColumnWidth(width: number) {
@@ -990,7 +989,7 @@
         <canvas
           bind:this={graphCanvas}
           class="pointer-events-none absolute z-20"
-          style={`left: ${graphColumnOffset}px; top: ${graphScrollTop}px; width: ${graphColumnWidth}px; height: ${graphViewportHeight}px;`}
+          style={`left: ${graphColumnOffset}px; top: ${graphScrollTop}px; width: ${graphRequiredWidth}px; height: ${graphViewportHeight}px;`}
           aria-hidden="true"
         ></canvas>
         <ol class="relative" style={`min-width: ${totalGridWidth}px;`}>
@@ -1012,7 +1011,7 @@
                   {/if}
                 </span>
                 <span class="relative h-full" aria-hidden="true"></span>
-                <span class="relative z-20 min-w-0 px-1">
+                <span class="relative z-30 flex h-full min-w-0 items-center pl-2 pr-1" style="background-color: inherit;">
                   <span class="block truncate text-xs font-semibold text-[var(--app-theme-text)]">
                     Changed files
                     <span class="ml-0.5 text-[10px] font-medium text-[var(--app-theme-text-muted)]">{snapshot.status.changedFiles.length} files</span>
@@ -1077,7 +1076,7 @@
                     {/if}
                 </span>
                 <span class="relative h-full" aria-hidden="true"></span>
-                <span class="relative z-30 min-w-0 px-1">
+                <span class="relative z-30 flex h-full min-w-0 items-center pl-2 pr-1" style="background-color: inherit;">
                   <span class="block truncate text-xs font-medium text-[var(--app-theme-text)]">
                     {#if stash}
                       {stash.message}
