@@ -18,10 +18,10 @@
     ArchiveRestore,
     ArrowDownToLine,
     Download,
-    GitBranch,
     LoaderCircle,
     Upload,
   } from "@lucide/svelte";
+  import { BRANCH_ICON_PATH } from "$lib/icons/branch";
 
   let {
     onFetch,
@@ -109,7 +109,9 @@
       {#if pendingKind === "switchBranch" || pendingKind === "createBranch"}
         <LoaderCircle aria-hidden="true" class="animate-spin" size={16} strokeWidth={2} />
       {:else}
-        <GitBranch aria-hidden="true" size={16} strokeWidth={2} />
+        <svg aria-hidden="true" height="16" viewBox="0 0 16 16" width="16">
+          <path d={BRANCH_ICON_PATH} fill="currentColor" fill-rule="evenodd" />
+        </svg>
       {/if}
     </button>
 
