@@ -775,6 +775,9 @@ pub struct WorkingTreeFileDiffParams {
     pub head_hash: Option<String>,
     /// Repository-relative path to inspect.
     pub file_path: String,
+    /// When true, compare HEAD with the index; otherwise compare the index with the working tree.
+    #[serde(default)]
+    pub staged: bool,
 }
 
 /// Result shared by committed and working-tree file-diff methods.

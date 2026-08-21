@@ -18,7 +18,10 @@
   import Sidebar from "$lib/components/Sidebar.svelte";
   import StartView from "$lib/components/StartView.svelte";
   import TopMenu, { type RepoTab } from "$lib/components/TopMenu.svelte";
-  import WorkingTreePanel, { type CommitMessageDraft } from "$lib/components/WorkingTreePanel.svelte";
+  import WorkingTreePanel, {
+    type CommitMessageDraft,
+    type WorkingTreeDiffSource,
+  } from "$lib/components/WorkingTreePanel.svelte";
   import type { ChangedFile, RepositorySummary } from "$lib/generated/protocol";
   import type { CommitFile, CommitInfo, CommitRef, RepositorySnapshot } from "$lib/types/repository";
   import { graphRefKey, isCurrentBranchRef } from "$lib/types/branch-visibility";
@@ -40,6 +43,9 @@
   type WorkspaceRepo = BackendWorkspaceRepo & {
     selectedGraphItem: SelectedGraphItem | null;
     selectedFile: CommitFile | null;
+    selectedFileSource: WorkingTreeDiffSource | null;
+    selectedChangePaths: string[];
+    selectedChangeSource: WorkingTreeDiffSource | null;
   };
   type FilteredGraphView = {
     repositoryId: string;
@@ -179,6 +185,9 @@
   );
   const selectedGraphItem = $derived(activeRepo?.selectedGraphItem ?? null);
   const selectedFile = $derived(activeRepo?.selectedFile ?? null);
+  const selectedFileSource = $derived(activeRepo?.selectedFileSource ?? "workingTree");
+  const selectedChangePaths = $derived(activeRepo?.selectedChangePaths ?? []);
+  const selectedChangeSource = $derived(activeRepo?.selectedChangeSource ?? "workingTree");
   const selectedCommit = $derived(
     selectedGraphItem?.type === "commit" ? selectedGraphItem.commit : null,
   );
@@ -219,14 +228,24 @@
     },
     detailsPane,
   ]);
-  const diffPanes = $derived<ResizablePane[]>([
-    {
-      id: "diff",
-      minWidth: 420,
-      flexible: true,
-    },
-    detailsPane,
-  ]);
+  const largeScreenPanes = $derived<ResizablePane[]>(
+    selectedFile && (selectedCommit || changesSelected)
+      ? [
+          {
+            id: "diff",
+            minWidth: 420,
+            flexible: true,
+          },
+          {
+            id: "graph",
+            minWidth: 0,
+            maxWidth: 0,
+            width: 0,
+          },
+          detailsPane,
+        ]
+      : graphPanes,
+  );
 
   $effect(() => {
     const key = sidebarStateKey;
@@ -672,6 +691,9 @@
       const selectedGraphItem = snapshot
         ? reconcileSelection(previousRepo?.selectedGraphItem ?? null, snapshot)
         : previousRepo?.selectedGraphItem ?? null;
+      const selectedFile = snapshot
+        ? reconcileSelectedFile(previousRepo?.selectedFile ?? null, snapshot)
+        : previousRepo?.selectedFile ?? null;
 
       return [{
         id: repositoryState.repository.id,
@@ -681,9 +703,16 @@
         error: repositoryState.error?.message ?? null,
         loading: repositoryState.loading || repositoryState.refreshing,
         selectedGraphItem,
-        selectedFile: snapshot
-          ? reconcileSelectedFile(previousRepo?.selectedFile ?? null, snapshot)
-          : previousRepo?.selectedFile ?? null,
+        selectedFile,
+        selectedFileSource:
+          selectedGraphItem?.type === "changes" && selectedFile
+            ? previousRepo?.selectedFileSource ?? "workingTree"
+            : null,
+        selectedChangePaths: previousRepo?.selectedChangePaths ?? [],
+        selectedChangeSource:
+          selectedGraphItem?.type === "changes"
+            ? previousRepo?.selectedChangeSource ?? "workingTree"
+            : null,
       }];
     });
     prunePrefetchState(openRepos);
@@ -874,6 +903,9 @@
       ...repo,
       selectedGraphItem: { type: "commit", commit },
       selectedFile: null,
+      selectedFileSource: null,
+      selectedChangePaths: [],
+      selectedChangeSource: null,
     }));
   }
 
@@ -987,13 +1019,27 @@
       ...repo,
       selectedGraphItem: { type: "changes" },
       selectedFile: null,
+      selectedFileSource: null,
+      selectedChangePaths: [],
+      selectedChangeSource: null,
     }));
   }
 
-  function selectFile(file: CommitFile) {
+  function selectFile(file: CommitFile, source: WorkingTreeDiffSource = "workingTree") {
     updateActiveRepo((repo) => ({
       ...repo,
       selectedFile: file,
+      selectedFileSource: source,
+      selectedChangeSource:
+        repo.selectedGraphItem?.type === "changes" ? source : repo.selectedChangeSource,
+    }));
+  }
+
+  function selectChangePaths(paths: string[], source: WorkingTreeDiffSource) {
+    updateActiveRepo((repo) => ({
+      ...repo,
+      selectedChangePaths: paths,
+      selectedChangeSource: source,
     }));
   }
 
@@ -1023,8 +1069,24 @@
     void runGitAction(() => gitClient!.stage(activeRepoId!, [file.path]));
   }
 
+  function stagePaths(paths: string[]) {
+    if (!paths.length) {
+      return;
+    }
+
+    void runGitAction(() => gitClient!.stage(activeRepoId!, paths));
+  }
+
   function unstageFile(file: ChangedFile) {
     void runGitAction(() => gitClient!.unstage(activeRepoId!, [file.path]));
+  }
+
+  function unstagePaths(paths: string[]) {
+    if (!paths.length) {
+      return;
+    }
+
+    void runGitAction(() => gitClient!.unstage(activeRepoId!, paths));
   }
 
   function stageAll() {
@@ -1106,6 +1168,9 @@
     updateActiveRepo((repo) => ({
       ...repo,
       selectedFile: null,
+      selectedFileSource: null,
+      selectedChangePaths: [],
+      selectedChangeSource: null,
     }));
   }
 
@@ -1207,7 +1272,7 @@
               client={gitClient!}
               repositoryId={activeRepoId!}
               {snapshot}
-              diffSource={changesSelected ? "workingTree" : "commit"}
+              diffSource={changesSelected ? selectedFileSource : "commit"}
               selectedCommit={selectedCommit}
               {selectedFile}
               onClose={closeDiff}
@@ -1258,10 +1323,14 @@
         {#if snapshot && changesSelected}
           <WorkingTreePanel
             {snapshot}
-            {selectedFile}
+            selectedPaths={selectedChangePaths}
+            selectedPathsSource={selectedChangeSource}
+            onSelectionPathsChange={selectChangePaths}
             onSelectFile={selectFile}
             onStageFile={stageFile}
+            onStagePaths={stagePaths}
             onUnstageFile={unstageFile}
+            onUnstagePaths={unstagePaths}
             onStageAll={stageAll}
             onUnstageAll={unstageAll}
             onCommit={commitChanges}
@@ -1284,48 +1353,19 @@
       </div>
       {:else}
       <div class="h-full min-h-0">
-        {#if snapshot && selectedFile && (selectedCommit || changesSelected)}
-          <ResizablePaneGroup panes={diffPanes} onResize={resizePane}>
-            {#snippet pane0()}
+        <ResizablePaneGroup panes={largeScreenPanes} onResize={resizePane}>
+          {#snippet pane0()}
+            {#if snapshot && selectedFile && (selectedCommit || changesSelected)}
               <CommitFileDiffViewer
                 client={gitClient!}
                 repositoryId={activeRepoId!}
                 snapshot={snapshot!}
-                diffSource={changesSelected ? "workingTree" : "commit"}
+                diffSource={changesSelected ? selectedFileSource : "commit"}
                 selectedCommit={selectedCommit}
                 selectedFile={selectedFile!}
                 onClose={closeDiff}
               />
-            {/snippet}
-
-            {#snippet pane1()}
-              {#if changesSelected}
-                <WorkingTreePanel
-                  snapshot={snapshot!}
-                  {selectedFile}
-                  onSelectFile={selectFile}
-                  onStageFile={stageFile}
-                  onUnstageFile={unstageFile}
-                  onStageAll={stageAll}
-                  onUnstageAll={unstageAll}
-                  onCommit={commitChanges}
-                  pending={gitActionPending}
-                />
-              {:else if selectedCommit}
-                <CommitDetailsPanel
-                  client={gitClient!}
-                  repositoryId={activeRepoId!}
-                  snapshot={snapshot!}
-                  {selectedCommit}
-                  {selectedFile}
-                  onSelectFile={selectFile}
-                />
-              {/if}
-            {/snippet}
-          </ResizablePaneGroup>
-        {:else}
-          <ResizablePaneGroup panes={graphPanes} onResize={resizePane}>
-            {#snippet pane0()}
+            {:else}
               <Sidebar
                 {snapshot}
                 {selectedCommit}
@@ -1334,9 +1374,13 @@
                 onSelectRef={selectRef}
                 onToggleRefs={toggleGraphRefs}
               />
-            {/snippet}
+            {/if}
+          {/snippet}
 
-            {#snippet pane1()}
+          {#snippet pane1()}
+            {#if snapshot && selectedFile && (selectedCommit || changesSelected)}
+              <div class="h-full" aria-hidden="true"></div>
+            {:else}
               <div class="flex h-full min-h-0 flex-col overflow-hidden">
                 <HistoryToolbar
                   onFetch={fetchRepository}
@@ -1369,38 +1413,42 @@
                   {/key}
                 </div>
               </div>
-            {/snippet}
+            {/if}
+          {/snippet}
 
-            {#snippet pane2()}
-              {#if snapshot && changesSelected}
-                <WorkingTreePanel
-                  {snapshot}
-                  {selectedFile}
-                  onSelectFile={selectFile}
-                  onStageFile={stageFile}
-                  onUnstageFile={unstageFile}
-                  onStageAll={stageAll}
-                  onUnstageAll={unstageAll}
-                  onCommit={commitChanges}
-                  pending={gitActionPending}
-                />
-              {:else if snapshot && selectedCommit}
-                <CommitDetailsPanel
-                  client={gitClient!}
-                  repositoryId={activeRepoId!}
-                  {snapshot}
-                  {selectedCommit}
-                  {selectedFile}
-                  onSelectFile={selectFile}
-                />
-              {:else if snapshot}
-                <RepositoryDetailsPanel {snapshot} />
-              {:else}
-                <EmptyDetailsPanel />
-              {/if}
-            {/snippet}
-          </ResizablePaneGroup>
-        {/if}
+          {#snippet pane2()}
+            {#if snapshot && changesSelected}
+              <WorkingTreePanel
+                {snapshot}
+                selectedPaths={selectedChangePaths}
+                selectedPathsSource={selectedChangeSource}
+                onSelectionPathsChange={selectChangePaths}
+                onSelectFile={selectFile}
+                onStageFile={stageFile}
+                onStagePaths={stagePaths}
+                onUnstageFile={unstageFile}
+                onUnstagePaths={unstagePaths}
+                onStageAll={stageAll}
+                onUnstageAll={unstageAll}
+                onCommit={commitChanges}
+                pending={gitActionPending}
+              />
+            {:else if snapshot && selectedCommit}
+              <CommitDetailsPanel
+                client={gitClient!}
+                repositoryId={activeRepoId!}
+                {snapshot}
+                {selectedCommit}
+                {selectedFile}
+                onSelectFile={selectFile}
+              />
+            {:else if snapshot}
+              <RepositoryDetailsPanel {snapshot} />
+            {:else}
+              <EmptyDetailsPanel />
+            {/if}
+          {/snippet}
+        </ResizablePaneGroup>
       </div>
       {/if}
     {/if}

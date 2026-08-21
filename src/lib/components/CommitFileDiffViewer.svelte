@@ -10,7 +10,7 @@
   type TextModel = import("monaco-editor").editor.ITextModel;
   type DiffViewMode = "hunks" | "inline" | "split";
   type ContentViewMode = "diff" | "file";
-  type DiffSource = "commit" | "workingTree";
+  type DiffSource = "commit" | "workingTree" | "staged";
 
   type Props = {
     client: GitGuiClient;
@@ -120,6 +120,7 @@
               repositoryId,
               ...(headHash ? { headHash } : {}),
               filePath: file.path,
+              staged: source === "staged",
             });
       const nextDiff: CommitFileDiff = result.diff;
 
@@ -531,7 +532,7 @@
       <button
         class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-[#d8dde4] text-[#36414d] transition hover:bg-[#eef2f5]"
         type="button"
-        aria-label={diffSource === "workingTree" ? "Close changed file" : "Close diff"}
+        aria-label={diffSource === "workingTree" || diffSource === "staged" ? "Close changed file" : "Close diff"}
         onclick={onClose}
       >
         <X aria-hidden="true" size={16} />

@@ -107,6 +107,11 @@
           white-space: nowrap;
         }
 
+        [data-type="item"][data-item-focused="true"]::before,
+        [data-type="item"]:focus-visible::before {
+          outline: none;
+        }
+
         /* Branch names should keep their beginning visible when the sidebar is narrow. */
         [data-item-section="content"] {
           flex: 1 1 auto;

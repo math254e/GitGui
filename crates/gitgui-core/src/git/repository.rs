@@ -272,19 +272,32 @@ pub fn load_working_tree_file_diff(
     repo_root: &str,
     head_hash: Option<&str>,
     file: &CommitFile,
+    staged: bool,
 ) -> Result<CommitFileDiff, GitError> {
     let root = Path::new(repo_root);
-    let status = primary_status(&file.status);
+    let index_status = file.status.chars().next().unwrap_or('.');
+    let worktree_status = file.status.chars().nth(1).unwrap_or('.');
+    let status = if staged { index_status } else { worktree_status };
     let original_path = file.original_path.as_deref().unwrap_or(&file.path);
 
-    let original_content = if status == '?' || status == 'A' || head_hash.is_none() {
+    let original_content = if staged {
+        if index_status == '?' || index_status == 'A' || head_hash.is_none() {
+            FileContent::Text(String::new())
+        } else {
+            load_file_at_revision(root, head_hash.unwrap_or("HEAD"), original_path)
+        }
+    } else if worktree_status == '?' || head_hash.is_none() {
         FileContent::Text(String::new())
+    } else if status_is_present(index_status) && index_status != '?' {
+        load_file_from_index(root, &file.path)
     } else {
         load_file_at_revision(root, head_hash.unwrap_or("HEAD"), original_path)
     };
 
     let modified_content = if status == 'D' {
         FileContent::Text(String::new())
+    } else if staged {
+        load_file_from_index(root, &file.path)
     } else {
         load_file_from_working_tree(root, &file.path)
     };
@@ -302,6 +315,8 @@ pub fn load_working_tree_file_diff(
     Ok(CommitFileDiff {
         original_path: if status == '?' || status == 'A' {
             None
+        } else if !staged && status_is_present(index_status) && index_status != '?' {
+            Some(file.path.clone())
         } else {
             Some(original_path.to_string())
         },
@@ -705,22 +720,23 @@ impl FileContent {
     }
 }
 
-fn primary_status(status: &str) -> char {
-    let mut chars = status.chars();
-    let index_status = chars.next().unwrap_or('M');
-    let worktree_status = chars.next().unwrap_or('.');
-
-    if worktree_status != '.' {
-        worktree_status
-    } else {
-        index_status
-    }
+fn status_is_present(status: char) -> bool {
+    status != '.' && status != ' '
 }
 
 fn load_file_at_revision(root: &Path, revision: &str, file_path: &str) -> FileContent {
     let spec = format!("{revision}:{file_path}");
+    load_file_from_git_spec(root, &spec)
+}
+
+fn load_file_from_index(root: &Path, file_path: &str) -> FileContent {
+    let spec = format!(":{file_path}");
+    load_file_from_git_spec(root, &spec)
+}
+
+fn load_file_from_git_spec(root: &Path, spec: &str) -> FileContent {
     let output = match git_command()
-        .args(["show", &spec])
+        .args(["show", spec])
         .current_dir(root)
         .output()
     {
@@ -857,6 +873,51 @@ mod tests {
         assert_eq!(file.path, "docs/new file.md");
         assert_eq!(file.index_status, "A");
         assert_eq!(file.worktree_status, ".");
+    }
+
+    #[test]
+    fn loads_staged_and_unstaged_file_sides_separately() {
+        let repository = new_test_repository();
+        let root = repository.0.as_path();
+
+        run_test_git(root, &["init", "-q", "-b", "main"]);
+        run_test_git(root, &["config", "user.email", "test@example.com"]);
+        run_test_git(root, &["config", "user.name", "GitGui Test"]);
+
+        std::fs::write(root.join("split.txt"), "base\n").unwrap();
+        run_test_git(root, &["add", "split.txt"]);
+        run_test_git(root, &["commit", "-q", "-m", "base"]);
+
+        std::fs::write(root.join("split.txt"), "staged\n").unwrap();
+        run_test_git(root, &["add", "split.txt"]);
+        std::fs::write(root.join("split.txt"), "staged\nunstaged\n").unwrap();
+
+        let head_hash = run_test_git(root, &["rev-parse", "HEAD"]);
+        let file = CommitFile {
+            path: "split.txt".to_string(),
+            original_path: None,
+            status: "MM".to_string(),
+        };
+
+        let staged = load_working_tree_file_diff(
+            root.to_str().unwrap(),
+            Some(head_hash.trim()),
+            &file,
+            true,
+        )
+        .unwrap();
+        assert_eq!(staged.original_content, "base\n");
+        assert_eq!(staged.modified_content, "staged\n");
+
+        let unstaged = load_working_tree_file_diff(
+            root.to_str().unwrap(),
+            Some(head_hash.trim()),
+            &file,
+            false,
+        )
+        .unwrap();
+        assert_eq!(unstaged.original_content, "staged\n");
+        assert_eq!(unstaged.modified_content, "staged\nunstaged\n");
     }
 
     #[test]

@@ -8,12 +8,18 @@
     description: string;
   };
 
+  export type WorkingTreeDiffSource = "workingTree" | "staged";
+
   export type WorkingTreePanelProps = {
     snapshot: RepositorySnapshot;
-    selectedFile: CommitFile | null;
-    onSelectFile: (file: CommitFile) => void;
+    selectedPaths: string[];
+    selectedPathsSource: WorkingTreeDiffSource | null;
+    onSelectionPathsChange: (paths: string[], source: WorkingTreeDiffSource) => void;
+    onSelectFile: (file: CommitFile, source: WorkingTreeDiffSource) => void;
     onStageFile?: (file: ChangedFile) => void;
+    onStagePaths?: (paths: string[]) => void;
     onUnstageFile?: (file: ChangedFile) => void;
+    onUnstagePaths?: (paths: string[]) => void;
     onStageAll?: () => void;
     onUnstageAll?: () => void;
     onCommit?: (draft: CommitMessageDraft) => void;
@@ -23,10 +29,14 @@
 
   let {
     snapshot,
-    selectedFile,
+    selectedPaths,
+    selectedPathsSource,
+    onSelectionPathsChange,
     onSelectFile,
     onStageFile = () => {},
+    onStagePaths = () => {},
     onUnstageFile = () => {},
+    onUnstagePaths = () => {},
     onStageAll = () => {},
     onUnstageAll = () => {},
     onCommit = () => {},
@@ -37,9 +47,29 @@
   let summary = $state("");
   let description = $state("");
   let fileSectionsOpen = $state({ unstaged: true, staged: true });
+  const initialSelectedPathsSource = readInitialSelectedPathsSource();
+  const initialSelectedPaths = readInitialSelectedPaths();
+  const initialUnstagedPaths =
+    initialSelectedPathsSource === "staged"
+      ? []
+      : initialSelectedPaths;
+  let unstagedSelectedPaths = $state<string[]>(initialUnstagedPaths);
+  let stagedSelectedPaths = $state<string[]>(
+    initialSelectedPathsSource === "staged"
+      ? initialSelectedPaths
+      : [],
+  );
 
   const unstagedFiles = $derived(snapshot.status.changedFiles.filter(hasUnstagedChanges));
   const stagedFiles = $derived(snapshot.status.changedFiles.filter(hasStagedChanges));
+  const selectedUnstagedFiles = $derived(
+    unstagedFiles.filter((file) => unstagedSelectedPaths.includes(file.path)),
+  );
+  const selectedStagedFiles = $derived(
+    stagedFiles.filter((file) => stagedSelectedPaths.includes(file.path)),
+  );
+  const unstagedActionLabel = $derived(selectedUnstagedFiles.length > 1 ? "Stage selected" : "Stage all");
+  const stagedActionLabel = $derived(selectedStagedFiles.length > 1 ? "Unstage selected" : "Unstage all");
   const actionsDisabled = $derived(disabled || pending);
   const commitDisabled = $derived(actionsDisabled || !stagedFiles.length || !summary.trim());
 
@@ -55,8 +85,84 @@
     return Boolean(status && status !== "." && status !== " ");
   }
 
-  function selectCommitFile(file: CommitFile) {
-    onSelectFile(file);
+  function selectUnstagedFile(file: CommitFile) {
+    onSelectFile(file, "workingTree");
+  }
+
+  function selectStagedFile(file: CommitFile) {
+    onSelectFile(file, "staged");
+  }
+
+  function handleUnstagedSelection(files: ChangedFile[]) {
+    const paths = files.map((file) => file.path);
+    unstagedSelectedPaths = paths;
+    stagedSelectedPaths = [];
+    onSelectionPathsChange(paths, "workingTree");
+  }
+
+  function handleStagedSelection(files: ChangedFile[]) {
+    const paths = files.map((file) => file.path);
+    stagedSelectedPaths = paths;
+    unstagedSelectedPaths = [];
+    onSelectionPathsChange(paths, "staged");
+  }
+
+  function stageSingleFile(file: ChangedFile) {
+    const wasSelected = unstagedSelectedPaths.includes(file.path);
+
+    onStageFile(file);
+
+    if (wasSelected) {
+      clearSelection();
+    }
+  }
+
+  function unstageSingleFile(file: ChangedFile) {
+    const wasSelected = stagedSelectedPaths.includes(file.path);
+
+    onUnstageFile(file);
+
+    if (wasSelected) {
+      clearSelection();
+    }
+  }
+
+  function stageUnstaged() {
+    if (selectedUnstagedFiles.length > 1) {
+      const paths = selectedUnstagedFiles.map((file) => file.path);
+      clearSelection();
+      onStagePaths(paths);
+      return;
+    }
+
+    clearSelection();
+    onStageAll();
+  }
+
+  function unstageStaged() {
+    if (selectedStagedFiles.length > 1) {
+      const paths = selectedStagedFiles.map((file) => file.path);
+      clearSelection();
+      onUnstagePaths(paths);
+      return;
+    }
+
+    clearSelection();
+    onUnstageAll();
+  }
+
+  function clearSelection() {
+    unstagedSelectedPaths = [];
+    stagedSelectedPaths = [];
+    onSelectionPathsChange([], selectedPathsSource ?? "workingTree");
+  }
+
+  function readInitialSelectedPaths() {
+    return selectedPaths;
+  }
+
+  function readInitialSelectedPathsSource() {
+    return selectedPathsSource;
   }
 
   function submitCommit(event: SubmitEvent) {
@@ -118,14 +224,14 @@
             </span>
           </div>
           <button
-            aria-label="Stage all changes"
-            class="shrink-0 rounded px-2 py-1 text-xs font-semibold text-[var(--app-theme-accent)] transition-colors hover:bg-[var(--app-theme-sidebar-row-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus)] disabled:cursor-not-allowed disabled:opacity-40"
+            aria-label={unstagedActionLabel === "Stage selected" ? "Stage selected changes" : "Stage all changes"}
+            class="inline-flex h-[22px] shrink-0 items-center justify-center rounded-[2px] border border-[var(--app-theme-accent)]/35 bg-[var(--app-theme-accent)]/10 px-1.5 text-[10px] font-semibold text-[var(--app-theme-accent)] transition-colors hover:border-[var(--app-theme-accent)]/55 hover:bg-[var(--app-theme-accent)]/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus)] disabled:cursor-not-allowed disabled:opacity-40"
             disabled={actionsDisabled || !unstagedFiles.length}
-            title="Stage all changes"
+            title={unstagedActionLabel === "Stage selected" ? "Stage selected changes" : "Stage all changes"}
             type="button"
-            onclick={onStageAll}
+            onclick={stageUnstaged}
           >
-            Stage all
+            {unstagedActionLabel}
           </button>
         </div>
 
@@ -134,11 +240,12 @@
             {#if unstagedFiles.length}
               <WorkingTreeFileList
                 files={unstagedFiles}
-                selectedFile={selectedFile}
+                selectedPaths={selectedPathsSource === "workingTree" ? selectedPaths : []}
                 treeId="gitgui-working-tree-unstaged"
                 actionLabel="Stage"
-                onSelectFile={selectCommitFile}
-                onAction={onStageFile}
+                onSelectFile={selectUnstagedFile}
+                onSelectionChange={handleUnstagedSelection}
+                onAction={stageSingleFile}
                 disabled={actionsDisabled}
               />
             {:else}
@@ -173,14 +280,14 @@
             </span>
           </div>
           <button
-            aria-label="Unstage all files"
-            class="shrink-0 rounded px-2 py-1 text-xs font-semibold text-[var(--app-theme-text-muted)] transition-colors hover:bg-[var(--app-theme-sidebar-row-hover)] hover:text-[var(--app-theme-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus)] disabled:cursor-not-allowed disabled:opacity-40"
+            aria-label={stagedActionLabel === "Unstage selected" ? "Unstage selected files" : "Unstage all files"}
+            class="inline-flex h-[22px] shrink-0 items-center justify-center rounded-[2px] border border-[var(--app-theme-error)]/35 bg-[var(--app-theme-error)]/10 px-1.5 text-[10px] font-semibold text-[var(--app-theme-error)] transition-colors hover:border-[var(--app-theme-error)]/55 hover:bg-[var(--app-theme-error)]/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus)] disabled:cursor-not-allowed disabled:opacity-40"
             disabled={actionsDisabled || !stagedFiles.length}
-            title="Unstage all files"
+            title={stagedActionLabel === "Unstage selected" ? "Unstage selected files" : "Unstage all files"}
             type="button"
-            onclick={onUnstageAll}
+            onclick={unstageStaged}
           >
-            Unstage all
+            {stagedActionLabel}
           </button>
         </div>
 
@@ -189,11 +296,12 @@
             {#if stagedFiles.length}
               <WorkingTreeFileList
                 files={stagedFiles}
-                selectedFile={selectedFile}
+                selectedPaths={selectedPathsSource === "staged" ? selectedPaths : []}
                 treeId="gitgui-working-tree-staged"
                 actionLabel="Unstage"
-                onSelectFile={selectCommitFile}
-                onAction={onUnstageFile}
+                onSelectFile={selectStagedFile}
+                onSelectionChange={handleStagedSelection}
+                onAction={unstageSingleFile}
                 disabled={actionsDisabled}
               />
             {:else}

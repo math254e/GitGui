@@ -7,10 +7,11 @@
 
   type Props = {
     files: ChangedFile[];
-    selectedFile: CommitFile | null;
+    selectedPaths: string[];
     treeId: string;
     actionLabel: "Stage" | "Unstage";
-    onSelectFile: (file: CommitFile) => void;
+    onSelectFile: (file: CommitFile, selectedFiles: ChangedFile[]) => void;
+    onSelectionChange: (files: ChangedFile[]) => void;
     onAction: (file: ChangedFile) => void;
     disabled?: boolean;
   };
@@ -22,10 +23,11 @@
 
   let {
     files,
-    selectedFile,
+    selectedPaths,
     treeId,
     actionLabel,
     onSelectFile,
+    onSelectionChange,
     onAction,
     disabled = false,
   }: Props = $props();
@@ -98,8 +100,8 @@
   const treeFiles = $derived(files.map((file, index) => ({ file, path: treePathFor(file, index) })));
   const treePaths = $derived(treeFiles.map((entry) => entry.path));
   const treeStatus = $derived(treeFiles.map(toGitStatusEntry));
-  const selectedTreePath = $derived(
-    treeFiles.find((entry) => sameFile(toCommitFile(entry.file), selectedFile))?.path ?? null,
+  const selectedTreePaths = $derived(
+    treeFiles.filter((entry) => selectedPaths.includes(entry.file.path)).map((entry) => entry.path),
   );
 
   onMount(() => {
@@ -111,7 +113,7 @@
       id: treeId,
       paths: treePaths,
       initialExpansion: "open",
-      initialSelectedPaths: selectedTreePath ? [selectedTreePath] : [],
+      initialSelectedPaths: selectedTreePaths,
       density: "compact",
       itemHeight: 28,
       icons: {
@@ -128,6 +130,11 @@
         [data-type="item"] {
           margin-right: 13px;
           padding-right: 0;
+        }
+
+        [data-type="item"][data-item-focused="true"]::before,
+        [data-type="item"]:focus-visible::before {
+          outline: none;
         }
 
         [data-item-section="icon"] {
@@ -209,7 +216,7 @@
 
     currentTree.resetPaths(treePaths);
     currentTree.setGitStatus(treeStatus);
-    syncSelection(currentTree, selectedTreePath);
+    syncSelection(currentTree, selectedTreePaths);
     lastTreeSignature = signature;
   });
 
@@ -220,7 +227,7 @@
       return;
     }
 
-    syncSelection(currentTree, selectedTreePath);
+    syncSelection(currentTree, selectedTreePaths);
   });
 
   function handleScroll(event: Event) {
@@ -232,16 +239,20 @@
       return;
     }
 
+    const selectedFiles = selectedPaths
+      .map((path) => fileByTreePath.get(path))
+      .filter((file): file is ChangedFile => Boolean(file));
     const selectedPath = selectedPaths[selectedPaths.length - 1];
     const file = selectedPath ? fileByTreePath.get(selectedPath) : undefined;
 
+    onSelectionChange(selectedFiles);
+
     if (file) {
-      onSelectFile(toCommitFile(file));
+      onSelectFile(toCommitFile(file), selectedFiles);
     }
   }
 
-  function syncSelection(currentTree: FileTree, selectedPath: string | null) {
-    const selectedPaths = selectedPath ? [selectedPath] : [];
+  function syncSelection(currentTree: FileTree, selectedPaths: readonly string[]) {
     const currentSelectedPaths = currentTree.getSelectedPaths();
 
     if (
@@ -281,15 +292,6 @@
       originalPath: file.originalPath,
       status: `${file.indexStatus}${file.worktreeStatus}`,
     };
-  }
-
-  function sameFile(first: CommitFile | null, second: CommitFile | null) {
-    return Boolean(
-      first &&
-        second &&
-        first.path === second.path &&
-        first.originalPath === second.originalPath,
-    );
   }
 
   function fileTitle(file: ChangedFile) {

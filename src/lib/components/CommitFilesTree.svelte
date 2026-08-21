@@ -36,6 +36,12 @@
         colored: true,
       },
       gitStatus: treeStatus,
+      unsafeCSS: `
+        [data-type="item"][data-item-focused="true"]::before,
+        [data-type="item"]:focus-visible::before {
+          outline: none;
+        }
+      `,
       onSelectionChange: handleSelectionChange,
     });
     tree.render({ fileTreeContainer: host });

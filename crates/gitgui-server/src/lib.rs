@@ -1500,6 +1500,7 @@ async fn git_working_tree_file_diff(
     };
     let file_path = params.file_path;
     let head_hash = params.head_hash;
+    let staged = params.staged;
     match spawn_blocking(move || {
         resolve_repository(&repository.operation_path).map_err(|_| StatusLoadError::NotFound)?;
         let status = load_core_repository_status(&repository.operation_path)
@@ -1517,7 +1518,12 @@ async fn git_working_tree_file_diff(
                 original_path: None,
                 status: "M".to_string(),
             });
-        load_core_working_tree_file_diff(&repository.operation_path, head_hash.as_deref(), &file)
+        load_core_working_tree_file_diff(
+            &repository.operation_path,
+            head_hash.as_deref(),
+            &file,
+            staged,
+        )
             .map_err(StatusLoadError::Git)
     })
     .await

@@ -437,7 +437,11 @@ headHash?: string,
 /**
  * Repository-relative path to inspect.
  */
-filePath: string, };
+filePath: string,
+/**
+ * When true, compare HEAD with the index; otherwise compare the index with the working tree.
+ */
+staged: boolean, };
 
 export type FileDiffResult = {
 /**
