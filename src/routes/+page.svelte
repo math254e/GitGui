@@ -12,6 +12,7 @@ import { onDestroy, onMount } from "svelte";
   import EmptyDetailsPanel from "$lib/components/EmptyDetailsPanel.svelte";
   import GitActionStatusBar from "$lib/components/GitActionStatusBar.svelte";
   import GitGraph from "$lib/components/GitGraph.svelte";
+  import GitNameDialog from "$lib/components/GitNameDialog.svelte";
   import HistoryToolbar from "$lib/components/HistoryToolbar.svelte";
   import ResizablePaneGroup, { type ResizablePane } from "$lib/components/ResizablePaneGroup.svelte";
   import RepositoryDetailsPanel from "$lib/components/RepositoryDetailsPanel.svelte";
@@ -139,6 +140,9 @@ import { onDestroy, onMount } from "svelte";
   let repositoryPathDialogOpen = $state(false);
   let repositoryPathValue = $state("");
   let repositoryPathError = $state("");
+  let gitNameDialogKind = $state<"branch" | "stash" | null>(null);
+  let gitNameDialogValue = $state("");
+  let gitNameDialogError = $state("");
   let loadedBranchVisibilityKey = $state<string | null | undefined>(undefined);
   let hiddenGraphRefKeys = $state<Set<string>>(new Set());
   let filteredGraphViews = $state<Map<string, FilteredGraphView>>(new Map());
@@ -1253,55 +1257,64 @@ import { onDestroy, onMount } from "svelte";
     });
   }
 
-  async function manageBranches() {
+  function openBranchDialog() {
     if (!activeRepoId || !gitClient || gitActionPending) {
       return;
     }
 
-    try {
-      const result = await gitClient.listBranches(activeRepoId);
-      const branchList = result.branches.map((branch) => `${branch.current ? "* " : "  "}${branch.name}`).join("\n");
-      const requested = window.prompt(`Branches:\n${branchList}\n\nEnter a branch name to switch to or create:`, snapshot?.status.currentBranch ?? "");
-      if (!requested?.trim()) {
-        return;
-      }
+    gitNameDialogValue = "";
+    gitNameDialogError = "";
+    gitNameDialogKind = "branch";
+  }
 
-      const name = requested.trim();
-      if (result.branches.some((branch) => branch.name === name)) {
-        requestGitAction({
-          kind: "switchBranch",
-          label: "Switching branch",
-          successMessage: `Switched to ${name}`,
-          action: (repositoryId) => gitClient!.switchBranch({ repositoryId, name }),
-        });
-        return;
-      }
+  function openStashDialog() {
+    if (!activeRepoId || !gitClient || gitActionPending) {
+      return;
+    }
 
-      if (window.confirm(`Create and switch to '${name}'?`)) {
-        requestGitAction({
-          kind: "createBranch",
-          label: "Creating branch",
-          successMessage: `Created and switched to ${name}`,
-          action: (repositoryId) => gitClient!.createBranch({ repositoryId, name, checkout: true }),
-        });
-      }
-    } catch (caught) {
-      toast.error(formatError(caught), { description: "Branch action failed" });
+    gitNameDialogValue = "";
+    gitNameDialogError = "";
+    gitNameDialogKind = "stash";
+  }
+
+  function closeGitNameDialog() {
+    if (!gitActionPending) {
+      gitNameDialogKind = null;
+      gitNameDialogValue = "";
+      gitNameDialogError = "";
     }
   }
 
-  function stashChanges() {
-    const message = window.prompt("Stash message (optional):", "");
-    if (message === null) {
+  function submitGitNameDialog() {
+    const name = gitNameDialogValue.trim();
+    if (!gitNameDialogKind) {
       return;
     }
+
+    if (gitNameDialogKind === "branch") {
+      if (!name) {
+        gitNameDialogError = "Enter a branch name to continue.";
+        return;
+      }
+
+      closeGitNameDialog();
+      requestGitAction({
+        kind: "createBranch",
+        label: "Creating branch",
+        successMessage: `Created and switched to ${name}`,
+        action: (repositoryId) => gitClient!.createBranch({ repositoryId, name, checkout: true }),
+      });
+      return;
+    }
+
+    closeGitNameDialog();
     requestGitAction({
       kind: "stash",
       label: "Stashing",
       successMessage: "Changes stashed",
       action: (repositoryId) => gitClient!.stashPush({
         repositoryId,
-        message: message.trim() || undefined,
+        message: name || undefined,
         includeUntracked: true,
       }),
     });
@@ -1444,8 +1457,8 @@ import { onDestroy, onMount } from "svelte";
               onFetch={fetchRepository}
               onPull={pullRepository}
               onPush={pushRepository}
-              onBranch={manageBranches}
-              onStash={stashChanges}
+              onBranch={openBranchDialog}
+              onStash={openStashDialog}
               onPop={popStash}
               pending={gitActionPending}
               pendingKind={gitAction?.kind ?? null}
@@ -1538,8 +1551,8 @@ import { onDestroy, onMount } from "svelte";
                   onFetch={fetchRepository}
                   onPull={pullRepository}
                   onPush={pushRepository}
-                  onBranch={manageBranches}
-                  onStash={stashChanges}
+                  onBranch={openBranchDialog}
+                  onStash={openStashDialog}
                   onPop={popStash}
                   pending={gitActionPending}
                   pendingKind={gitAction?.kind ?? null}
@@ -1621,4 +1634,19 @@ import { onDestroy, onMount } from "svelte";
   }}
   onSubmit={submitRepositoryPath}
   onCancel={closeRepositoryPathDialog}
+/>
+
+<GitNameDialog
+  open={gitNameDialogKind !== null}
+  kind={gitNameDialogKind ?? "branch"}
+  value={gitNameDialogValue}
+  currentBranch={snapshot?.status.currentBranch}
+  loading={gitActionPending}
+  error={gitNameDialogError}
+  onValueChange={(value) => {
+    gitNameDialogValue = value;
+    gitNameDialogError = "";
+  }}
+  onSubmit={submitGitNameDialog}
+  onCancel={closeGitNameDialog}
 />
