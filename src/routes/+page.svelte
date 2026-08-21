@@ -1640,7 +1640,6 @@ import { onDestroy, onMount } from "svelte";
   open={gitNameDialogKind !== null}
   kind={gitNameDialogKind ?? "branch"}
   value={gitNameDialogValue}
-  currentBranch={snapshot?.status.currentBranch}
   loading={gitActionPending}
   error={gitNameDialogError}
   onValueChange={(value) => {
