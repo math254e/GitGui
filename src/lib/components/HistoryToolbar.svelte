@@ -18,7 +18,6 @@
     ArrowDownToLine,
     Download,
     GitBranch,
-    LoaderCircle,
     Upload,
   } from "@lucide/svelte";
 
@@ -116,10 +115,4 @@
     <span>Pop</span>
   </button>
 
-  {#if pending}
-    <span class="ml-auto inline-flex shrink-0 items-center gap-2 px-2 text-xs font-medium text-[var(--app-theme-text-subtle)]" role="status">
-      <LoaderCircle aria-hidden="true" class="animate-spin" size={14} strokeWidth={2} />
-      Working...
-    </span>
-  {/if}
 </div>

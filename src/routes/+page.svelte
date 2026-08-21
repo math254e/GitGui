@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { onDestroy, onMount } from "svelte";
+import { onDestroy, onMount } from "svelte";
+  import { toast } from "svelte-sonner";
   import {
     ClientWorkspace,
     GitGuiClient,
@@ -9,6 +10,7 @@
   import CommitDetailsPanel from "$lib/components/CommitDetailsPanel.svelte";
   import CommitFileDiffViewer from "$lib/components/CommitFileDiffViewer.svelte";
   import EmptyDetailsPanel from "$lib/components/EmptyDetailsPanel.svelte";
+  import GitActionStatusBar from "$lib/components/GitActionStatusBar.svelte";
   import GitGraph from "$lib/components/GitGraph.svelte";
   import HistoryToolbar from "$lib/components/HistoryToolbar.svelte";
   import ResizablePaneGroup, { type ResizablePane } from "$lib/components/ResizablePaneGroup.svelte";
@@ -80,6 +82,27 @@
     httpUrl: string;
     sessionToken?: string;
   };
+  type GitActionKind =
+    | "stage"
+    | "unstage"
+    | "commit"
+    | "fetch"
+    | "pull"
+    | "push"
+    | "switchBranch"
+    | "createBranch"
+    | "stash"
+    | "stashPop";
+  type GitActionRequest = {
+    kind: GitActionKind;
+    label: string;
+    action: (repositoryId: string) => Promise<unknown>;
+    successMessage?: string;
+    notifySuccess?: boolean;
+  };
+  type PendingGitAction = GitActionRequest & {
+    repositoryId: string;
+  };
 
   const layoutStorageKey = "gitgui.workspaceLayout.v1";
   const branchGraphVisibilityStoragePrefix = "gitgui.branchGraphVisibility.v1";
@@ -99,8 +122,8 @@
   let startError = $state("");
   let bootstrapping = $state(false);
   let operationPending = $state(false);
-  let gitActionPending = $state(false);
-  let gitActionError = $state("");
+  let gitAction = $state<{ repositoryId: string; kind: GitActionKind; label: string } | null>(null);
+  let queuedGitActions = $state<PendingGitAction[]>([]);
   let scrollToCommit = $state<{ id: number; repositoryId: string; hash: string } | null>(null);
   let largeScreen = $state(false);
   let sidebarWidth = $state(sidebarLimits.default);
@@ -128,6 +151,23 @@
 
   const activeRepo = $derived(openRepos.find((repo) => repo.id === activeRepoId) ?? null);
   const snapshot = $derived(activeRepo?.snapshot ?? null);
+  const gitActionPending = $derived(gitAction !== null);
+  const activeWorkingTreeAction = $derived(
+    gitAction?.repositoryId === activeRepoId ? gitAction : null,
+  );
+  const commitPending = $derived(activeWorkingTreeAction?.kind === "commit");
+  const stageActionRunning = $derived(
+    activeWorkingTreeAction?.kind === "stage" || activeWorkingTreeAction?.kind === "unstage",
+  );
+  const queuedStageAction = $derived(
+    queuedGitActions.find(
+      (action) =>
+        action.repositoryId === activeRepoId &&
+        (action.kind === "stage" || action.kind === "unstage"),
+    ) ?? null,
+  );
+  const stageQueueWaiting = $derived(gitAction !== null && queuedStageAction !== null && !stageActionRunning);
+  const stageQueueLabel = $derived(queuedStageAction?.label ?? null);
   const sidebarStateKey = $derived(
     workspaceState?.environmentId && activeRepoId ? `${workspaceState.environmentId}:${activeRepoId}` : null,
   );
@@ -1043,30 +1083,66 @@
     }));
   }
 
-  async function runGitAction(action: () => Promise<unknown>) {
+  function requestGitAction(request: GitActionRequest, queueWhenBusy = false) {
     const repositoryId = activeRepoId;
-    if (!repositoryId || !gitClient || !clientWorkspace || gitActionPending) {
+    if (!repositoryId || !gitClient || !clientWorkspace) {
       return;
     }
 
-    gitActionPending = true;
-    gitActionError = "";
+    if (gitAction !== null) {
+      if (queueWhenBusy) {
+        queuedGitActions = [...queuedGitActions, { ...request, repositoryId }];
+      }
+      return;
+    }
+
+    void runGitAction({ ...request, repositoryId });
+  }
+
+  async function runGitAction(request: PendingGitAction) {
+    const workspace = clientWorkspace;
+    if (!workspace) {
+      return;
+    }
+
+    gitAction = {
+      repositoryId: request.repositoryId,
+      kind: request.kind,
+      label: request.label,
+    };
+
     try {
-      await action();
-      await clientWorkspace.refreshRepository(repositoryId);
+      await request.action(request.repositoryId);
+      await workspace.refreshRepository(request.repositoryId);
+      if (request.notifySuccess !== false && request.successMessage) {
+        toast.success(request.successMessage);
+      }
     } catch (caught) {
-      gitActionError = formatError(caught);
       // Pull and stash-pop can leave conflict markers or partial changes even
       // when Git exits non-zero, so make the visible working tree authoritative
       // before surfacing the error.
-      await clientWorkspace.refreshRepository(repositoryId).catch(() => undefined);
+      await workspace.refreshRepository(request.repositoryId).catch(() => undefined);
+      toast.error(formatError(caught), { description: `${request.label} failed` });
     } finally {
-      gitActionPending = false;
+      gitAction = null;
+      const nextAction = queuedGitActions[0];
+      queuedGitActions = queuedGitActions.slice(1);
+      if (nextAction) {
+        void runGitAction(nextAction);
+      }
     }
   }
 
   function stageFile(file: ChangedFile) {
-    void runGitAction(() => gitClient!.stage(activeRepoId!, [file.path]));
+    requestGitAction(
+      {
+        kind: "stage",
+        label: "Staging",
+        notifySuccess: false,
+        action: (repositoryId) => gitClient!.stage(repositoryId, [file.path]),
+      },
+      true,
+    );
   }
 
   function stagePaths(paths: string[]) {
@@ -1074,11 +1150,27 @@
       return;
     }
 
-    void runGitAction(() => gitClient!.stage(activeRepoId!, paths));
+    requestGitAction(
+      {
+        kind: "stage",
+        label: "Staging",
+        notifySuccess: false,
+        action: (repositoryId) => gitClient!.stage(repositoryId, paths),
+      },
+      true,
+    );
   }
 
   function unstageFile(file: ChangedFile) {
-    void runGitAction(() => gitClient!.unstage(activeRepoId!, [file.path]));
+    requestGitAction(
+      {
+        kind: "unstage",
+        label: "Unstaging",
+        notifySuccess: false,
+        action: (repositoryId) => gitClient!.unstage(repositoryId, [file.path]),
+      },
+      true,
+    );
   }
 
   function unstagePaths(paths: string[]) {
@@ -1086,35 +1178,79 @@
       return;
     }
 
-    void runGitAction(() => gitClient!.unstage(activeRepoId!, paths));
+    requestGitAction(
+      {
+        kind: "unstage",
+        label: "Unstaging",
+        notifySuccess: false,
+        action: (repositoryId) => gitClient!.unstage(repositoryId, paths),
+      },
+      true,
+    );
   }
 
   function stageAll() {
-    void runGitAction(() => gitClient!.stage(activeRepoId!));
+    requestGitAction(
+      {
+        kind: "stage",
+        label: "Staging",
+        notifySuccess: false,
+        action: (repositoryId) => gitClient!.stage(repositoryId),
+      },
+      true,
+    );
   }
 
   function unstageAll() {
-    void runGitAction(() => gitClient!.unstage(activeRepoId!));
+    requestGitAction(
+      {
+        kind: "unstage",
+        label: "Unstaging",
+        notifySuccess: false,
+        action: (repositoryId) => gitClient!.unstage(repositoryId),
+      },
+      true,
+    );
   }
 
   function commitChanges(draft: CommitMessageDraft) {
-    void runGitAction(() => gitClient!.commit({
-      repositoryId: activeRepoId!,
-      summary: draft.summary,
-      ...(draft.description ? { description: draft.description } : {}),
-    }));
+    requestGitAction({
+      kind: "commit",
+      label: "Committing",
+      successMessage: "Changes committed",
+      action: (repositoryId) => gitClient!.commit({
+        repositoryId,
+        summary: draft.summary,
+        ...(draft.description ? { description: draft.description } : {}),
+      }),
+    });
   }
 
   function fetchRepository() {
-    void runGitAction(() => gitClient!.fetch(activeRepoId!));
+    requestGitAction({
+      kind: "fetch",
+      label: "Fetching",
+      successMessage: "Fetched from remote",
+      action: (repositoryId) => gitClient!.fetch(repositoryId),
+    });
   }
 
   function pullRepository() {
-    void runGitAction(() => gitClient!.pull(activeRepoId!));
+    requestGitAction({
+      kind: "pull",
+      label: "Pulling",
+      successMessage: "Pulled from remote",
+      action: (repositoryId) => gitClient!.pull(repositoryId),
+    });
   }
 
   function pushRepository() {
-    void runGitAction(() => gitClient!.push(activeRepoId!));
+    requestGitAction({
+      kind: "push",
+      label: "Pushing",
+      successMessage: "Pushed to remote",
+      action: (repositoryId) => gitClient!.push(repositoryId),
+    });
   }
 
   async function manageBranches() {
@@ -1132,19 +1268,25 @@
 
       const name = requested.trim();
       if (result.branches.some((branch) => branch.name === name)) {
-        void runGitAction(() => gitClient!.switchBranch({ repositoryId: activeRepoId!, name }));
+        requestGitAction({
+          kind: "switchBranch",
+          label: "Switching branch",
+          successMessage: `Switched to ${name}`,
+          action: (repositoryId) => gitClient!.switchBranch({ repositoryId, name }),
+        });
         return;
       }
 
       if (window.confirm(`Create and switch to '${name}'?`)) {
-        void runGitAction(() => gitClient!.createBranch({
-          repositoryId: activeRepoId!,
-          name,
-          checkout: true,
-        }));
+        requestGitAction({
+          kind: "createBranch",
+          label: "Creating branch",
+          successMessage: `Created and switched to ${name}`,
+          action: (repositoryId) => gitClient!.createBranch({ repositoryId, name, checkout: true }),
+        });
       }
     } catch (caught) {
-      gitActionError = formatError(caught);
+      toast.error(formatError(caught), { description: "Branch action failed" });
     }
   }
 
@@ -1153,15 +1295,25 @@
     if (message === null) {
       return;
     }
-    void runGitAction(() => gitClient!.stashPush({
-      repositoryId: activeRepoId!,
-      message: message.trim() || undefined,
-      includeUntracked: true,
-    }));
+    requestGitAction({
+      kind: "stash",
+      label: "Stashing",
+      successMessage: "Changes stashed",
+      action: (repositoryId) => gitClient!.stashPush({
+        repositoryId,
+        message: message.trim() || undefined,
+        includeUntracked: true,
+      }),
+    });
   }
 
   function popStash() {
-    void runGitAction(() => gitClient!.stashPop(activeRepoId!));
+    requestGitAction({
+      kind: "stashPop",
+      label: "Popping stash",
+      successMessage: "Stash applied",
+      action: (repositoryId) => gitClient!.stashPop(repositoryId),
+    });
   }
 
   function closeDiff() {
@@ -1231,7 +1383,7 @@
   }
 </script>
 
-<main class="grid h-screen min-h-0 grid-rows-[auto_1fr] bg-[var(--app-theme-canvas)] text-[var(--app-theme-text)]">
+<main class="grid h-screen min-h-0 grid-rows-[auto_minmax(0,1fr)_auto] bg-[var(--app-theme-canvas)] text-[var(--app-theme-text)]">
   <TopMenu
     activeView={activeView}
     {activeRepoId}
@@ -1297,11 +1449,6 @@
               onPop={popStash}
               pending={gitActionPending}
             />
-            {#if gitActionError}
-              <div class="shrink-0 border-b border-[var(--app-theme-error)]/30 bg-[var(--app-theme-error)]/10 px-3 py-2 text-xs text-[var(--app-theme-error)]" role="alert">
-                {gitActionError}
-              </div>
-            {/if}
             <div class="min-h-0 flex-1">
               {#key activeRepoId}
                 <GitGraph
@@ -1335,6 +1482,10 @@
             onUnstageAll={unstageAll}
             onCommit={commitChanges}
             pending={gitActionPending}
+            commitPending={commitPending}
+            stageActionRunning={stageActionRunning}
+            stageQueueWaiting={stageQueueWaiting}
+            stageQueueLabel={stageQueueLabel}
           />
         {:else if snapshot && selectedCommit}
           <CommitDetailsPanel
@@ -1391,11 +1542,6 @@
                   onPop={popStash}
                   pending={gitActionPending}
                 />
-                {#if gitActionError}
-                  <div class="shrink-0 border-b border-[var(--app-theme-error)]/30 bg-[var(--app-theme-error)]/10 px-3 py-2 text-xs text-[var(--app-theme-error)]" role="alert">
-                    {gitActionError}
-                  </div>
-                {/if}
                 <div class="min-h-0 flex-1">
                   {#key activeRepoId}
                     <GitGraph
@@ -1432,6 +1578,10 @@
                 onUnstageAll={unstageAll}
                 onCommit={commitChanges}
                 pending={gitActionPending}
+                commitPending={commitPending}
+                stageActionRunning={stageActionRunning}
+                stageQueueWaiting={stageQueueWaiting}
+                stageQueueLabel={stageQueueLabel}
               />
             {:else if snapshot && selectedCommit}
               <CommitDetailsPanel
@@ -1453,6 +1603,9 @@
       {/if}
     {/if}
   </section>
+  {#if activeView === "repo" && activeRepo}
+    <GitActionStatusBar label={activeWorkingTreeAction?.label ?? null} />
+  {/if}
 </main>
 
 <RepositoryPathDialog

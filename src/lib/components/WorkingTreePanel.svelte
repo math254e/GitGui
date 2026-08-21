@@ -24,6 +24,10 @@
     onUnstageAll?: () => void;
     onCommit?: (draft: CommitMessageDraft) => void;
     pending?: boolean;
+    commitPending?: boolean;
+    stageActionRunning?: boolean;
+    stageQueueWaiting?: boolean;
+    stageQueueLabel?: string | null;
     disabled?: boolean;
   };
 
@@ -41,6 +45,10 @@
     onUnstageAll = () => {},
     onCommit = () => {},
     pending = false,
+    commitPending = false,
+    stageActionRunning = false,
+    stageQueueWaiting = false,
+    stageQueueLabel = null,
     disabled = false,
   }: WorkingTreePanelProps = $props();
 
@@ -70,8 +78,9 @@
   );
   const unstagedActionLabel = $derived(selectedUnstagedFiles.length > 1 ? "Stage selected" : "Stage all");
   const stagedActionLabel = $derived(selectedStagedFiles.length > 1 ? "Unstage selected" : "Unstage all");
-  const actionsDisabled = $derived(disabled || pending);
-  const commitDisabled = $derived(actionsDisabled || !stagedFiles.length || !summary.trim());
+  const commitInputsDisabled = $derived(disabled || commitPending);
+  const commitDisabled = $derived(disabled || pending || !stagedFiles.length || !summary.trim());
+  const stageControlsDisabled = $derived(disabled || stageActionRunning || stageQueueWaiting);
 
   function hasStagedChanges(file: ChangedFile) {
     return hasStatus(file.indexStatus) && file.indexStatus !== "?";
@@ -198,7 +207,7 @@
       {/if}
     </header>
 
-    <div class="min-h-0 flex flex-1 flex-col overflow-hidden">
+    <div class="relative min-h-0 flex flex-1 flex-col overflow-hidden" aria-busy={stageQueueWaiting}>
       <section
         class={fileSectionsOpen.unstaged ? "flex min-h-0 flex-1 flex-col" : "shrink-0"}
         aria-labelledby="unstaged-files-heading"
@@ -226,7 +235,7 @@
           <button
             aria-label={unstagedActionLabel === "Stage selected" ? "Stage selected changes" : "Stage all changes"}
             class="inline-flex h-[22px] shrink-0 items-center justify-center rounded-[2px] border border-[var(--app-theme-accent)]/35 bg-[var(--app-theme-accent)]/10 px-1.5 text-[10px] font-semibold text-[var(--app-theme-accent)] transition-colors hover:border-[var(--app-theme-accent)]/55 hover:bg-[var(--app-theme-accent)]/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus)] disabled:cursor-not-allowed disabled:opacity-40"
-            disabled={actionsDisabled || !unstagedFiles.length}
+            disabled={stageControlsDisabled || !unstagedFiles.length}
             title={unstagedActionLabel === "Stage selected" ? "Stage selected changes" : "Stage all changes"}
             type="button"
             onclick={stageUnstaged}
@@ -246,7 +255,7 @@
                 onSelectFile={selectUnstagedFile}
                 onSelectionChange={handleUnstagedSelection}
                 onAction={stageSingleFile}
-                disabled={actionsDisabled}
+                disabled={stageControlsDisabled}
               />
             {:else}
               <p class="px-3 py-4 text-sm text-[var(--app-theme-text-subtle)]">No unstaged changes.</p>
@@ -282,7 +291,7 @@
           <button
             aria-label={stagedActionLabel === "Unstage selected" ? "Unstage selected files" : "Unstage all files"}
             class="inline-flex h-[22px] shrink-0 items-center justify-center rounded-[2px] border border-[var(--app-theme-error)]/35 bg-[var(--app-theme-error)]/10 px-1.5 text-[10px] font-semibold text-[var(--app-theme-error)] transition-colors hover:border-[var(--app-theme-error)]/55 hover:bg-[var(--app-theme-error)]/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus)] disabled:cursor-not-allowed disabled:opacity-40"
-            disabled={actionsDisabled || !stagedFiles.length}
+            disabled={stageControlsDisabled || !stagedFiles.length}
             title={stagedActionLabel === "Unstage selected" ? "Unstage selected files" : "Unstage all files"}
             type="button"
             onclick={unstageStaged}
@@ -302,7 +311,7 @@
                 onSelectFile={selectStagedFile}
                 onSelectionChange={handleStagedSelection}
                 onAction={unstageSingleFile}
-                disabled={actionsDisabled}
+                disabled={stageControlsDisabled}
               />
             {:else}
               <p class="px-3 py-4 text-sm text-[var(--app-theme-text-subtle)]">No staged files yet.</p>
@@ -310,6 +319,14 @@
           </div>
         {/if}
       </section>
+      {#if stageQueueWaiting}
+        <div class="absolute inset-0 z-20 flex items-center justify-center bg-[var(--app-theme-sidebar)]/75 backdrop-blur-[1px]" role="status" aria-live="polite">
+          <span class="inline-flex items-center gap-2.5 text-sm font-medium text-[var(--app-theme-text-subtle)]">
+            <LoaderCircle aria-hidden="true" class="animate-spin" size={18} strokeWidth={2} />
+            {stageQueueLabel ?? "Waiting to stage"}…
+          </span>
+        </div>
+      {/if}
     </div>
 
     <form class="mt-2 shrink-0 border-t border-[var(--app-theme-sidebar-border)] pt-2" onsubmit={submitCommit}>
@@ -317,7 +334,7 @@
         <label class="text-xs font-bold uppercase tracking-wide text-[var(--app-theme-text-subtle)]" for="commit-summary">
           Commit message
         </label>
-        {#if pending}
+        {#if commitPending}
           <span class="inline-flex items-center gap-1.5 text-xs text-[var(--app-theme-text-subtle)]" role="status">
             <LoaderCircle aria-hidden="true" class="animate-spin" size={13} />
             Committing
@@ -328,7 +345,7 @@
       <input
         id="commit-summary"
         class="mb-2 h-9 w-full rounded-md border border-[var(--app-theme-input)] bg-[var(--app-theme-canvas)] px-3 text-sm text-[var(--app-theme-text)] outline-none placeholder:text-[var(--app-theme-placeholder)] focus:border-[var(--app-theme-focus)] focus:ring-2 focus:ring-[var(--app-theme-focus-ring)] disabled:cursor-not-allowed disabled:opacity-50"
-        disabled={actionsDisabled}
+        disabled={commitInputsDisabled}
         placeholder="Summary"
         type="text"
         bind:value={summary}
@@ -337,7 +354,7 @@
         id="commit-description"
         class="h-20 w-full resize-none rounded-md border border-[var(--app-theme-input)] bg-[var(--app-theme-canvas)] px-3 py-2 text-sm text-[var(--app-theme-text)] outline-none placeholder:text-[var(--app-theme-placeholder)] focus:border-[var(--app-theme-focus)] focus:ring-2 focus:ring-[var(--app-theme-focus-ring)] disabled:cursor-not-allowed disabled:opacity-50"
         aria-label="Commit description"
-        disabled={actionsDisabled}
+        disabled={commitInputsDisabled}
         placeholder="Description (optional)"
         bind:value={description}
       ></textarea>
@@ -346,7 +363,7 @@
         disabled={commitDisabled}
         type="submit"
       >
-        {#if pending}
+        {#if commitPending}
           <LoaderCircle aria-hidden="true" class="animate-spin" size={16} />
           Committing...
         {:else}
