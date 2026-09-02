@@ -769,6 +769,14 @@ import { onDestroy, onMount } from "svelte";
     await runWorkspaceCommand(() => requireWorkspace().openKnownRepository(repositoryId));
   }
 
+  async function removeRepository(repositoryId: string) {
+    const removed = await runWorkspaceCommand(() => requireWorkspace().removeRepository(repositoryId));
+    if (removed) {
+      repositoryCatalog = repositoryCatalog.filter((repository) => repository.id !== repositoryId);
+      activeView = "start";
+    }
+  }
+
   async function selectRepo(repoId: string) {
     await runWorkspaceCommand(() => requireWorkspace().selectRepository(repoId));
   }
@@ -1613,6 +1621,7 @@ import { onDestroy, onMount } from "svelte";
         {connectionError}
         onChooseRepository={chooseRepository}
         onCreateRepository={chooseCreateRepository}
+        onRemoveRepository={removeRepository}
         canCreateRepository={desktopRuntime}
         onOpenRepository={openRepository}
         onRetryConnection={retryLocalConnection}

@@ -33,6 +33,8 @@ import type {
   RepositoriesOpenResult,
   RepositoriesRefreshParams,
   RepositoriesRefreshResult,
+  RepositoriesRemoveParams,
+  RepositoriesRemoveResult,
   RepositoryGraphParams,
   RepositoryGraphResult,
   RepositorySnapshotParams,
@@ -237,6 +239,11 @@ export class GitGuiClient {
       initializeLfs: options.initializeLfs ?? false,
     };
     return this.request<RepositoriesCreateResult>("repositories.create", params);
+  }
+
+  removeRepository(repositoryId: string): Promise<RepositoriesRemoveResult> {
+    const params: RepositoriesRemoveParams = { repositoryId: assertRepositoryId(repositoryId) };
+    return this.request<RepositoriesRemoveResult>("repositories.remove", params);
   }
 
   getRepositorySnapshot(repositoryId: string): Promise<RepositorySnapshotResult> {

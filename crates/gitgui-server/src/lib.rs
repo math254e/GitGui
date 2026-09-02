@@ -53,7 +53,8 @@ use gitgui_protocol::{
     PrefetchCommitFilesParams, PrefetchCommitFilesResult, ProtocolError, ProtocolErrorMessage,
     RepositoriesCreateParams, RepositoriesCreateResult, RepositoriesListResult,
     RepositoriesOpenParams, RepositoriesOpenResult,
-    RepositoriesRefreshParams, RepositoriesRefreshResult, RepositoryInfo as ProtocolRepositoryInfo,
+    RepositoriesRefreshParams, RepositoriesRefreshResult, RepositoriesRemoveParams,
+    RepositoriesRemoveResult, RepositoryInfo as ProtocolRepositoryInfo,
     RepositoryGraphParams, RepositoryGraphResult, RepositoryRefreshItem, RepositorySnapshot,
     RepositorySnapshotParams, RepositorySnapshotResult,
     RepositoryStatus as ProtocolRepositoryStatus, RepositorySummary, RequestEnvelope,
@@ -67,6 +68,7 @@ use gitgui_protocol::{
     CAPABILITY_GIT_WORKING_TREE_FILE_DIFF, CAPABILITY_REPOSITORIES_CREATE,
     CAPABILITY_REPOSITORIES_GET_GRAPH, CAPABILITY_REPOSITORIES_GET_SNAPSHOT,
     CAPABILITY_REPOSITORIES_LIST, CAPABILITY_REPOSITORIES_OPEN, CAPABILITY_REPOSITORIES_REFRESH,
+    CAPABILITY_REPOSITORIES_REMOVE,
     CAPABILITY_SERVER_INFO, CAPABILITY_SERVER_STATUS, MAX_GRAPH_TARGETS,
     MAX_PREFETCH_COMMIT_DIFF_TARGETS, MAX_PREFETCH_COMMIT_HASHES, METHOD_GIT_BRANCH_CREATE,
     METHOD_GIT_BRANCH_LIST, METHOD_GIT_BRANCH_SWITCH, METHOD_GIT_COMMIT, METHOD_GIT_COMMIT_FILES,
@@ -75,7 +77,8 @@ use gitgui_protocol::{
     METHOD_GIT_STASH_POP, METHOD_GIT_STASH_PUSH, METHOD_GIT_STATUS, METHOD_GIT_UNSTAGE,
     METHOD_GIT_WORKING_TREE_FILE_DIFF, METHOD_REPOSITORIES_CREATE, METHOD_REPOSITORIES_GET_GRAPH,
     METHOD_REPOSITORIES_GET_SNAPSHOT, METHOD_REPOSITORIES_LIST, METHOD_REPOSITORIES_OPEN,
-    METHOD_REPOSITORIES_REFRESH, METHOD_SERVER_GET_INFO, METHOD_SERVER_GET_STATUS,
+    METHOD_REPOSITORIES_REFRESH, METHOD_REPOSITORIES_REMOVE, METHOD_SERVER_GET_INFO,
+    METHOD_SERVER_GET_STATUS,
     PROTOCOL_VERSION,
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -686,6 +689,7 @@ async fn dispatch(request: RequestEnvelope, state: &ServerState) -> ResponseEnve
         METHOD_REPOSITORIES_LIST => repositories_list(request.id, state).await,
         METHOD_REPOSITORIES_OPEN => repositories_open(request.id, request.params, state).await,
         METHOD_REPOSITORIES_CREATE => repositories_create(request.id, request.params, state).await,
+        METHOD_REPOSITORIES_REMOVE => repositories_remove(request.id, request.params, state).await,
         METHOD_REPOSITORIES_GET_SNAPSHOT => {
             repositories_get_snapshot(request.id, request.params, state).await
         }
@@ -885,6 +889,33 @@ async fn repositories_create(
             snapshot: normalize_snapshot(snapshot, &repository_summary),
         },
     )
+}
+
+async fn repositories_remove(
+    request_id: String,
+    params: Value,
+    state: &ServerState,
+) -> ResponseEnvelope {
+    let params = match parse_params::<RepositoriesRemoveParams>(params, "repositories.remove") {
+        Ok(params) => params,
+        Err(error) => return ResponseEnvelope::error(request_id, error),
+    };
+    if let Err(error) = validate_repository_id(&params.repository_id) {
+        return ResponseEnvelope::error(request_id, error);
+    }
+
+    let repository_id = params.repository_id;
+    match state.remove_repository(&repository_id).await {
+        Ok(true) => response_success(
+            request_id,
+            RepositoriesRemoveResult { repository_id },
+        ),
+        Ok(false) => repository_not_configured(request_id, &repository_id),
+        Err(error) => {
+            warn!(error = %error, "repository catalog persistence failed");
+            internal_error(request_id, "repository catalog could not be updated")
+        }
+    }
 }
 
 async fn repositories_get_snapshot(
@@ -2141,6 +2172,26 @@ impl ServerState {
         Ok(repository)
     }
 
+    async fn remove_repository(&self, repository_id: &str) -> Result<bool, String> {
+        let _mutation = self.catalog_mutation.lock().await;
+        let removed_repository = {
+            let mut repositories = self.repositories.write().await;
+            let Some(index) = repositories
+                .iter()
+                .position(|repository| repository.summary.id == repository_id)
+            else {
+                return Ok(false);
+            };
+            repositories.remove(index)
+        };
+
+        if let Ok(mut cache) = self.cache.lock() {
+            cache.evict_repo(&removed_repository.operation_path);
+        }
+        self.persist_catalog().await?;
+        Ok(true)
+    }
+
     async fn persist_catalog(&self) -> Result<(), String> {
         let Some(data_dir) = self.data_dir.clone() else {
             return Ok(());
@@ -2587,6 +2638,7 @@ fn implemented_capabilities() -> Vec<String> {
         CAPABILITY_REPOSITORIES_GET_SNAPSHOT,
         CAPABILITY_REPOSITORIES_GET_GRAPH,
         CAPABILITY_REPOSITORIES_REFRESH,
+        CAPABILITY_REPOSITORIES_REMOVE,
         CAPABILITY_GIT_STATUS,
         CAPABILITY_GIT_COMMIT_FILES,
         CAPABILITY_GIT_COMMIT_FILE_DIFF,

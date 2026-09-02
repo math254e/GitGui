@@ -249,6 +249,18 @@ repository: RepositorySummary,
  */
 snapshot: RepositorySnapshot, };
 
+export type RepositoriesRemoveParams = {
+/**
+ * Stable ID from the host's configured repository catalog.
+ */
+repositoryId: string, };
+
+export type RepositoriesRemoveResult = {
+/**
+ * Stable ID removed from the host's configured repository catalog.
+ */
+repositoryId: string, };
+
 export type RepositorySnapshotParams = {
 /**
  * Stable ID from the host's configured repository catalog.

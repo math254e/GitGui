@@ -24,6 +24,8 @@ pub const METHOD_REPOSITORIES_LIST: &str = "repositories.list";
 pub const METHOD_REPOSITORIES_OPEN: &str = "repositories.open";
 /// Canonical host-admin method for creating, registering, and loading a repository.
 pub const METHOD_REPOSITORIES_CREATE: &str = "repositories.create";
+/// Canonical host-admin method for removing a repository from the catalog.
+pub const METHOD_REPOSITORIES_REMOVE: &str = "repositories.remove";
 /// Canonical method for loading a complete repository snapshot.
 pub const METHOD_REPOSITORIES_GET_SNAPSHOT: &str = "repositories.get_snapshot";
 /// Canonical method for loading a graph limited to selected commit targets.
@@ -82,6 +84,8 @@ pub const CAPABILITY_REPOSITORIES_LIST: &str = "repositories.list";
 pub const CAPABILITY_REPOSITORIES_OPEN: &str = "repositories.open";
 /// Capability advertised when host-admin repository creation is available.
 pub const CAPABILITY_REPOSITORIES_CREATE: &str = "repositories.create";
+/// Capability advertised when host-admin repository removal is available.
+pub const CAPABILITY_REPOSITORIES_REMOVE: &str = "repositories.remove";
 /// Capability advertised when complete repository snapshots are available.
 pub const CAPABILITY_REPOSITORIES_GET_SNAPSHOT: &str = "repositories.get_snapshot";
 /// Capability advertised when filtered repository graphs are available.
@@ -458,6 +462,22 @@ pub struct RepositoriesCreateResult {
     pub repository: RepositorySummary,
     /// Fresh snapshot computed for the new repository.
     pub snapshot: RepositorySnapshot,
+}
+
+/// Parameters for removing a repository from the host catalog.
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RepositoriesRemoveParams {
+    /// Stable ID from the host's configured repository catalog.
+    pub repository_id: String,
+}
+
+/// Result returned after a repository is removed from the host catalog.
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RepositoriesRemoveResult {
+    /// Stable ID removed from the host's configured repository catalog.
+    pub repository_id: String,
 }
 
 /// Parameters for loading a complete snapshot by server-issued repository ID.
