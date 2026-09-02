@@ -27,6 +27,8 @@ import type {
   PrefetchCommitFilesParams,
   PrefetchCommitFilesResult,
   RepositoriesListResult,
+  RepositoriesCreateParams,
+  RepositoriesCreateResult,
   RepositoriesOpenParams,
   RepositoriesOpenResult,
   RepositoriesRefreshParams,
@@ -219,6 +221,22 @@ export class GitGuiClient {
     if (!path.trim()) throw new TypeError("Repository path cannot be empty");
     const params: RepositoriesOpenParams = { path };
     return this.request<RepositoriesOpenResult>("repositories.open", params);
+  }
+
+  createRepository(
+    parentPath: string,
+    name: string,
+    options: { initialBranch?: string; initializeLfs?: boolean } = {},
+  ): Promise<RepositoriesCreateResult> {
+    if (!parentPath.trim()) throw new TypeError("Repository parent path cannot be empty");
+    if (!name.trim()) throw new TypeError("Repository name cannot be empty");
+    const params: RepositoriesCreateParams = {
+      parentPath,
+      name,
+      ...(options.initialBranch?.trim() ? { initialBranch: options.initialBranch.trim() } : {}),
+      initializeLfs: options.initializeLfs ?? false,
+    };
+    return this.request<RepositoriesCreateResult>("repositories.create", params);
   }
 
   getRepositorySnapshot(repositoryId: string): Promise<RepositorySnapshotResult> {

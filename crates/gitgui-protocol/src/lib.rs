@@ -22,6 +22,8 @@ pub const METHOD_SERVER_GET_STATUS: &str = "server.get_status";
 pub const METHOD_REPOSITORIES_LIST: &str = "repositories.list";
 /// Canonical host-admin method for registering and loading a repository.
 pub const METHOD_REPOSITORIES_OPEN: &str = "repositories.open";
+/// Canonical host-admin method for creating, registering, and loading a repository.
+pub const METHOD_REPOSITORIES_CREATE: &str = "repositories.create";
 /// Canonical method for loading a complete repository snapshot.
 pub const METHOD_REPOSITORIES_GET_SNAPSHOT: &str = "repositories.get_snapshot";
 /// Canonical method for loading a graph limited to selected commit targets.
@@ -78,6 +80,8 @@ pub const CAPABILITY_SERVER_STATUS: &str = "server.status";
 pub const CAPABILITY_REPOSITORIES_LIST: &str = "repositories.list";
 /// Capability advertised when host-admin repository registration is available.
 pub const CAPABILITY_REPOSITORIES_OPEN: &str = "repositories.open";
+/// Capability advertised when host-admin repository creation is available.
+pub const CAPABILITY_REPOSITORIES_CREATE: &str = "repositories.create";
 /// Capability advertised when complete repository snapshots are available.
 pub const CAPABILITY_REPOSITORIES_GET_SNAPSHOT: &str = "repositories.get_snapshot";
 /// Capability advertised when filtered repository graphs are available.
@@ -133,6 +137,8 @@ pub mod error_codes {
     pub const REPOSITORY_NOT_CONFIGURED: &str = "repository_not_configured";
     /// A configured repository path could not be found or resolved as a repository.
     pub const REPOSITORY_NOT_FOUND: &str = "repository_not_found";
+    /// A new repository could not be created at the requested location.
+    pub const REPOSITORY_CREATE_FAILED: &str = "repository_create_failed";
     /// A Git operation failed after request and repository validation succeeded.
     pub const GIT_OPERATION_FAILED: &str = "git_operation_failed";
     /// An internal server failure occurred while handling a request.
@@ -425,6 +431,32 @@ pub struct RepositoriesOpenResult {
     /// Server-owned repository catalog entry.
     pub repository: RepositorySummary,
     /// Fresh snapshot computed for the calling client.
+    pub snapshot: RepositorySnapshot,
+}
+
+/// Parameters for creating a new repository below an existing host directory.
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RepositoriesCreateParams {
+    /// Existing directory on the server host where the repository folder is created.
+    pub parent_path: String,
+    /// Single folder name for the new repository.
+    pub name: String,
+    /// Optional initial branch name. Git's configured default is used when omitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initial_branch: Option<String>,
+    /// Whether to configure Git LFS hooks and filters in the new repository.
+    #[serde(default)]
+    pub initialize_lfs: bool,
+}
+
+/// Result returned after a new repository is initialized and loaded.
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RepositoriesCreateResult {
+    /// Server-owned repository catalog entry.
+    pub repository: RepositorySummary,
+    /// Fresh snapshot computed for the new repository.
     pub snapshot: RepositorySnapshot,
 }
 

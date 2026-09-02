@@ -13,6 +13,8 @@
     error: string;
     connectionError?: boolean;
     onChooseRepository: () => void;
+    onCreateRepository: () => void;
+    canCreateRepository?: boolean;
     onOpenRepository: (repositoryId: string) => void;
     onRetryConnection?: () => void;
   };
@@ -23,6 +25,8 @@
     error,
     connectionError = false,
     onChooseRepository,
+    onCreateRepository,
+    canCreateRepository = false,
     onOpenRepository,
     onRetryConnection,
   }: Props = $props();
@@ -66,9 +70,11 @@
       </button>
 
       <button
-        class="inline-flex h-14 items-center justify-center gap-3 rounded border border-[var(--app-theme-border)] bg-[var(--app-theme-surface-raised)] px-4 text-[21px] font-medium text-[var(--app-theme-text-muted)] opacity-75"
+        class="inline-flex h-14 items-center justify-center gap-3 rounded border border-[var(--app-theme-border)] bg-[var(--app-theme-surface-raised)] px-4 text-[21px] font-medium text-[var(--app-theme-text)] transition hover:bg-[var(--app-theme-sidebar-row-hover)] disabled:cursor-not-allowed disabled:opacity-55"
         type="button"
-        disabled
+        disabled={!canCreateRepository || loading}
+        title={canCreateRepository ? "Create a repository" : "Create is available in the desktop app"}
+        onclick={onCreateRepository}
       >
         <PlusSquare aria-hidden="true" class="text-[var(--app-theme-text-muted)]" size={24} />
         Create

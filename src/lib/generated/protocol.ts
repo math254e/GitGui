@@ -221,6 +221,34 @@ repository: RepositorySummary,
  */
 snapshot: RepositorySnapshot, };
 
+export type RepositoriesCreateParams = {
+/**
+ * Existing directory on the server host where the repository folder is created.
+ */
+parentPath: string,
+/**
+ * Single folder name for the new repository.
+ */
+name: string,
+/**
+ * Optional initial branch name. Git's configured default is used when omitted.
+ */
+initialBranch?: string | null,
+/**
+ * Whether to configure Git LFS hooks and filters in the new repository.
+ */
+initializeLfs: boolean, };
+
+export type RepositoriesCreateResult = {
+/**
+ * Server-owned repository catalog entry.
+ */
+repository: RepositorySummary,
+/**
+ * Fresh snapshot computed for the new repository.
+ */
+snapshot: RepositorySnapshot, };
+
 export type RepositorySnapshotParams = {
 /**
  * Stable ID from the host's configured repository catalog.

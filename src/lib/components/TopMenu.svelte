@@ -12,7 +12,7 @@
   import { Home, Settings, X } from "@lucide/svelte";
 
   type Props = {
-    activeView: "start" | "repo" | "settings";
+    activeView: "start" | "repo" | "settings" | "create";
     activeRepoId: string | null;
     tabs: RepoTab[];
     onShowStart: () => void;

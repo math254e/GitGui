@@ -157,6 +157,37 @@ export class ClientWorkspace {
     return this.serializeStateOperation(() => this.openRepositoryPathOperation(path));
   }
 
+  async createRepository(
+    parentPath: string,
+    name: string,
+    options: { initialBranch?: string; initializeLfs?: boolean } = {},
+  ): Promise<ClientWorkspaceState> {
+    if (!parentPath.trim()) throw new TypeError("Repository parent path cannot be empty");
+    if (!name.trim()) throw new TypeError("Repository name cannot be empty");
+    return this.serializeStateOperation(() => this.createRepositoryOperation(parentPath, name, options));
+  }
+
+  private async createRepositoryOperation(
+    parentPath: string,
+    name: string,
+    options: { initialBranch?: string; initializeLfs?: boolean },
+  ): Promise<ClientWorkspaceState> {
+    const lifecycle = this.lifecycleGeneration;
+    this.update({ opening: true, error: undefined });
+    try {
+      const result = await this.client.createRepository(parentPath, name, options);
+      if (lifecycle !== this.lifecycleGeneration) return this.state;
+      this.addHydratedRepository(result.repository, result.snapshot);
+      await this.persist();
+      return this.state;
+    } catch (error) {
+      if (lifecycle === this.lifecycleGeneration) this.update({ error: toWorkspaceError(error) });
+      throw error;
+    } finally {
+      if (lifecycle === this.lifecycleGeneration) this.update({ opening: false });
+    }
+  }
+
   private async openRepositoryPathOperation(path: string): Promise<ClientWorkspaceState> {
     const lifecycle = this.lifecycleGeneration;
     this.update({ opening: true, error: undefined });

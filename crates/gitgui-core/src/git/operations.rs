@@ -1,6 +1,25 @@
 use super::command::{GitCommand, GitError};
 use std::path::Path;
 
+pub fn init_repository(
+    root: &str,
+    initial_branch: Option<&str>,
+    initialize_lfs: bool,
+) -> Result<(), GitError> {
+    let mut init_args = vec!["init".to_string()];
+    if let Some(initial_branch) = initial_branch {
+        init_args.push("--initial-branch".to_string());
+        init_args.push(initial_branch.to_string());
+    }
+    GitCommand::run_owned(&init_args, Some(Path::new(root)))?;
+
+    if initialize_lfs {
+        GitCommand::run(&["lfs", "install", "--local"], Some(Path::new(root)))?;
+    }
+
+    Ok(())
+}
+
 pub fn stage(root: &str, paths: &[String]) -> Result<(), GitError> {
     let mut args = vec!["add".to_string()];
     if paths.is_empty() {

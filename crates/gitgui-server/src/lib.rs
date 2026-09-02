@@ -20,8 +20,9 @@ use gitgui_core::git::{
     command::GitError,
     operations::{
         commit as run_commit, create_branch as run_create_branch, fetch as run_fetch,
-        list_local_branches, pull as run_pull, push as run_push, stage as run_stage,
-        stash_pop as run_stash_pop, stash_push as run_stash_push,
+        init_repository as run_init_repository, list_local_branches, pull as run_pull,
+        push as run_push, stage as run_stage, stash_pop as run_stash_pop,
+        stash_push as run_stash_push,
         switch_branch as run_switch_branch, unstage as run_unstage,
     },
     repository::{
@@ -50,7 +51,8 @@ use gitgui_protocol::{
     GraphCommit as ProtocolGraphCommit, GraphEdge as ProtocolGraphEdge,
     GraphEdgeType as ProtocolGraphEdgeType, PrefetchCommitDiffsParams, PrefetchCommitDiffsResult,
     PrefetchCommitFilesParams, PrefetchCommitFilesResult, ProtocolError, ProtocolErrorMessage,
-    RepositoriesListResult, RepositoriesOpenParams, RepositoriesOpenResult,
+    RepositoriesCreateParams, RepositoriesCreateResult, RepositoriesListResult,
+    RepositoriesOpenParams, RepositoriesOpenResult,
     RepositoriesRefreshParams, RepositoriesRefreshResult, RepositoryInfo as ProtocolRepositoryInfo,
     RepositoryGraphParams, RepositoryGraphResult, RepositoryRefreshItem, RepositorySnapshot,
     RepositorySnapshotParams, RepositorySnapshotResult,
@@ -62,19 +64,19 @@ use gitgui_protocol::{
     CAPABILITY_GIT_PREFETCH_COMMIT_DIFFS, CAPABILITY_GIT_PREFETCH_COMMIT_FILES,
     CAPABILITY_GIT_PULL, CAPABILITY_GIT_PUSH, CAPABILITY_GIT_STAGE, CAPABILITY_GIT_STASH_POP,
     CAPABILITY_GIT_STASH_PUSH, CAPABILITY_GIT_STATUS, CAPABILITY_GIT_UNSTAGE,
-    CAPABILITY_GIT_WORKING_TREE_FILE_DIFF, CAPABILITY_REPOSITORIES_GET_GRAPH,
-    CAPABILITY_REPOSITORIES_GET_SNAPSHOT, CAPABILITY_REPOSITORIES_LIST,
-    CAPABILITY_REPOSITORIES_OPEN, CAPABILITY_REPOSITORIES_REFRESH, CAPABILITY_SERVER_INFO,
-    CAPABILITY_SERVER_STATUS, MAX_GRAPH_TARGETS, MAX_PREFETCH_COMMIT_DIFF_TARGETS,
-    MAX_PREFETCH_COMMIT_HASHES, METHOD_GIT_BRANCH_CREATE, METHOD_GIT_BRANCH_LIST,
-    METHOD_GIT_BRANCH_SWITCH, METHOD_GIT_COMMIT, METHOD_GIT_COMMIT_FILES,
+    CAPABILITY_GIT_WORKING_TREE_FILE_DIFF, CAPABILITY_REPOSITORIES_CREATE,
+    CAPABILITY_REPOSITORIES_GET_GRAPH, CAPABILITY_REPOSITORIES_GET_SNAPSHOT,
+    CAPABILITY_REPOSITORIES_LIST, CAPABILITY_REPOSITORIES_OPEN, CAPABILITY_REPOSITORIES_REFRESH,
+    CAPABILITY_SERVER_INFO, CAPABILITY_SERVER_STATUS, MAX_GRAPH_TARGETS,
+    MAX_PREFETCH_COMMIT_DIFF_TARGETS, MAX_PREFETCH_COMMIT_HASHES, METHOD_GIT_BRANCH_CREATE,
+    METHOD_GIT_BRANCH_LIST, METHOD_GIT_BRANCH_SWITCH, METHOD_GIT_COMMIT, METHOD_GIT_COMMIT_FILES,
     METHOD_GIT_COMMIT_FILE_DIFF, METHOD_GIT_FETCH, METHOD_GIT_PREFETCH_COMMIT_DIFFS,
     METHOD_GIT_PREFETCH_COMMIT_FILES, METHOD_GIT_PULL, METHOD_GIT_PUSH, METHOD_GIT_STAGE,
     METHOD_GIT_STASH_POP, METHOD_GIT_STASH_PUSH, METHOD_GIT_STATUS, METHOD_GIT_UNSTAGE,
-    METHOD_GIT_WORKING_TREE_FILE_DIFF, METHOD_REPOSITORIES_GET_GRAPH,
+    METHOD_GIT_WORKING_TREE_FILE_DIFF, METHOD_REPOSITORIES_CREATE, METHOD_REPOSITORIES_GET_GRAPH,
     METHOD_REPOSITORIES_GET_SNAPSHOT, METHOD_REPOSITORIES_LIST, METHOD_REPOSITORIES_OPEN,
-    METHOD_REPOSITORIES_REFRESH, METHOD_SERVER_GET_INFO,
-    METHOD_SERVER_GET_STATUS, PROTOCOL_VERSION,
+    METHOD_REPOSITORIES_REFRESH, METHOD_SERVER_GET_INFO, METHOD_SERVER_GET_STATUS,
+    PROTOCOL_VERSION,
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -683,6 +685,7 @@ async fn dispatch(request: RequestEnvelope, state: &ServerState) -> ResponseEnve
         METHOD_SERVER_GET_STATUS => response_success(request.id, state.status().await),
         METHOD_REPOSITORIES_LIST => repositories_list(request.id, state).await,
         METHOD_REPOSITORIES_OPEN => repositories_open(request.id, request.params, state).await,
+        METHOD_REPOSITORIES_CREATE => repositories_create(request.id, request.params, state).await,
         METHOD_REPOSITORIES_GET_SNAPSHOT => {
             repositories_get_snapshot(request.id, request.params, state).await
         }
@@ -786,6 +789,98 @@ async fn repositories_open(
     response_success(
         request_id,
         RepositoriesOpenResult {
+            repository: repository_summary.clone(),
+            snapshot: normalize_snapshot(snapshot, &repository_summary),
+        },
+    )
+}
+
+async fn repositories_create(
+    request_id: String,
+    params: Value,
+    state: &ServerState,
+) -> ResponseEnvelope {
+    let params = match parse_params::<RepositoriesCreateParams>(params, "repositories.create") {
+        Ok(params) => params,
+        Err(error) => return ResponseEnvelope::error(request_id, error),
+    };
+    if params.parent_path.trim().is_empty() || params.parent_path.len() > 32_768 {
+        return invalid_params(request_id, "parentPath must be a non-empty directory path");
+    }
+    if let Err(error) = validate_repository_name(&params.name) {
+        return ResponseEnvelope::error(request_id, error);
+    }
+
+    let parent_path = params.parent_path;
+    let name = params.name;
+    let initial_branch = params
+        .initial_branch
+        .as_deref()
+        .map(str::trim)
+        .filter(|branch| !branch.is_empty())
+        .map(ToOwned::to_owned);
+    if let Some(branch) = initial_branch.as_deref() {
+        if let Err(error) = validate_branch_argument(branch, "initialBranch") {
+            return ResponseEnvelope::error(request_id, error);
+        }
+    }
+    let initialize_lfs = params.initialize_lfs;
+    let loaded = spawn_blocking(move || {
+        create_repository_at(&parent_path, &name, initial_branch.as_deref(), initialize_lfs)
+    })
+    .await;
+    let (candidate, core_snapshot) = match loaded {
+        Ok(Ok(value)) => value,
+        Ok(Err(CreateRepositoryError::ParentNotFound)) => {
+            return ResponseEnvelope::error(
+                request_id,
+                ProtocolError::new(
+                    error_codes::REPOSITORY_CREATE_FAILED,
+                    "The selected parent folder could not be found.",
+                ),
+            )
+        }
+        Ok(Err(CreateRepositoryError::AlreadyExists)) => {
+            return ResponseEnvelope::error(
+                request_id,
+                ProtocolError::new(
+                    error_codes::REPOSITORY_CREATE_FAILED,
+                    "A folder with that repository name already exists.",
+                ),
+            )
+        }
+        Ok(Err(CreateRepositoryError::Filesystem)) => {
+            return ResponseEnvelope::error(
+                request_id,
+                ProtocolError::new(
+                    error_codes::REPOSITORY_CREATE_FAILED,
+                    "The repository folder could not be created.",
+                ),
+            )
+        }
+        Ok(Err(CreateRepositoryError::Git(error))) => {
+            warn!(error = %error.message, "repository create operation failed");
+            return git_failure(request_id, "Git could not initialize the repository");
+        }
+        Err(error) => {
+            warn!(error = %error, "repository create worker failed");
+            return git_failure(request_id, "repository create worker failed");
+        }
+    };
+
+    let repository = match state.upsert_repository(candidate).await {
+        Ok(repository) => repository,
+        Err(error) => {
+            warn!(error = %error, "repository catalog persistence failed");
+            return internal_error(request_id, "repository catalog could not be updated");
+        }
+    };
+    let snapshot = protocol_snapshot(core_snapshot, &repository.summary);
+    let repository_summary = repository.summary.clone();
+
+    response_success(
+        request_id,
+        RepositoriesCreateResult {
             repository: repository_summary.clone(),
             snapshot: normalize_snapshot(snapshot, &repository_summary),
         },
@@ -1790,6 +1885,22 @@ fn validate_branch_argument(value: &str, field: &str) -> Result<(), ProtocolErro
     Ok(())
 }
 
+fn validate_repository_name(value: &str) -> Result<(), ProtocolError> {
+    if value.trim().is_empty()
+        || value.len() > 255
+        || value == "."
+        || value == ".."
+        || value.bytes().any(|byte| byte.is_ascii_control())
+        || value.contains(['/', '\\', ':'])
+    {
+        return Err(ProtocolError::new(
+            error_codes::INVALID_PARAMS,
+            "name must be a single valid folder name",
+        ));
+    }
+    Ok(())
+}
+
 fn build_commit_message(summary: &str, description: Option<&str>) -> String {
     let summary = summary.trim();
     match description
@@ -1907,6 +2018,14 @@ enum RepositoryLoadError {
 #[derive(Debug)]
 enum OpenRepositoryError {
     NotFound,
+    Git(GitError),
+}
+
+#[derive(Debug)]
+enum CreateRepositoryError {
+    ParentNotFound,
+    AlreadyExists,
+    Filesystem,
     Git(GitError),
 }
 
@@ -2464,6 +2583,7 @@ fn implemented_capabilities() -> Vec<String> {
         CAPABILITY_SERVER_STATUS,
         CAPABILITY_REPOSITORIES_LIST,
         CAPABILITY_REPOSITORIES_OPEN,
+        CAPABILITY_REPOSITORIES_CREATE,
         CAPABILITY_REPOSITORIES_GET_SNAPSHOT,
         CAPABILITY_REPOSITORIES_GET_GRAPH,
         CAPABILITY_REPOSITORIES_REFRESH,
@@ -2500,6 +2620,46 @@ fn load_open_repository(
         summary: RepositorySummary {
             id: stable_repository_id(&root),
             path: canonicalize_path(&info.path),
+            root: root.clone(),
+        },
+        operation_path: root,
+    };
+    Ok((candidate, snapshot))
+}
+
+fn create_repository_at(
+    parent_path: &str,
+    name: &str,
+    initial_branch: Option<&str>,
+    initialize_lfs: bool,
+) -> Result<(ConfiguredRepository, CoreRepositorySnapshot), CreateRepositoryError> {
+    let parent =
+        fs::canonicalize(parent_path).map_err(|_| CreateRepositoryError::ParentNotFound)?;
+    if !parent.is_dir() {
+        return Err(CreateRepositoryError::ParentNotFound);
+    }
+
+    let root = parent.join(name);
+    fs::create_dir(&root).map_err(|error| {
+        if error.kind() == io::ErrorKind::AlreadyExists {
+            CreateRepositoryError::AlreadyExists
+        } else {
+            CreateRepositoryError::Filesystem
+        }
+    })?;
+
+    run_init_repository(
+        &root.display().to_string(),
+        initial_branch,
+        initialize_lfs,
+    )
+    .map_err(CreateRepositoryError::Git)?;
+    let root = canonicalize_path(&root.display().to_string());
+    let snapshot = load_core_repository(&root).map_err(CreateRepositoryError::Git)?;
+    let candidate = ConfiguredRepository {
+        summary: RepositorySummary {
+            id: stable_repository_id(&root),
+            path: root.clone(),
             root: root.clone(),
         },
         operation_path: root,
@@ -2919,4 +3079,39 @@ async fn shutdown_signal(state: Arc<ServerState>) {
         _ = terminate => {},
     }
     state.set_lifecycle(ServerLifecycle::Stopping).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn creates_and_loads_empty_repository() {
+        let parent = env::temp_dir().join(format!(
+            "gitgui-create-test-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system clock should be after Unix epoch")
+                .as_nanos()
+        ));
+        fs::create_dir(&parent).expect("test parent should be creatable");
+
+        let result = create_repository_at(
+            parent.to_str().expect("test path should be UTF-8"),
+            "new-repo",
+            Some("main"),
+            false,
+        )
+        .expect("repository should be created");
+
+        assert_eq!(
+            result.0.summary.root,
+            canonicalize_path(&parent.join("new-repo").display().to_string())
+        );
+        assert!(parent.join("new-repo/.git").is_dir());
+        assert!(result.1.commits.is_empty());
+
+        fs::remove_dir_all(parent).expect("test repository should be removable");
+    }
 }

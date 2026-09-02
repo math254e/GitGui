@@ -9,6 +9,9 @@ import { onDestroy, onMount } from "svelte";
   } from "$lib/client-runtime";
   import CommitDetailsPanel from "$lib/components/CommitDetailsPanel.svelte";
   import CommitFileDiffViewer from "$lib/components/CommitFileDiffViewer.svelte";
+  import CreateRepositoryView, {
+    type CreateRepositoryProvider,
+  } from "$lib/components/CreateRepositoryView.svelte";
   import EmptyDetailsPanel from "$lib/components/EmptyDetailsPanel.svelte";
   import GitActionStatusBar from "$lib/components/GitActionStatusBar.svelte";
   import GitGraph from "$lib/components/GitGraph.svelte";
@@ -28,9 +31,9 @@ import { onDestroy, onMount } from "svelte";
   import type { ChangedFile, RepositorySummary } from "$lib/generated/protocol";
   import type { CommitFile, CommitInfo, CommitRef, RepositorySnapshot } from "$lib/types/repository";
   import { graphRefKey, isCurrentBranchRef } from "$lib/types/branch-visibility";
-  import { readBranchSwitchMergePreference } from "$lib/preferences";
+  import { readBranchSwitchMergePreference, resolveProjectsLocation } from "$lib/preferences";
 
-  type ActiveView = "start" | "repo" | "settings";
+  type ActiveView = "start" | "repo" | "settings" | "create";
   type SelectedGraphItem = { type: "changes" } | { type: "commit"; commit: CommitInfo };
   type LayoutStorage = {
     sidebarWidth?: number;
@@ -137,10 +140,16 @@ import { onDestroy, onMount } from "svelte";
   let bootstrapGeneration = 0;
   let pageDestroyed = false;
   let connectionError = $state(false);
-  let desktopRuntime = false;
+  let desktopRuntime = $state(false);
   let repositoryPathDialogOpen = $state(false);
   let repositoryPathValue = $state("");
   let repositoryPathError = $state("");
+  let createRepositoryParentPath = $state("");
+  let createRepositoryName = $state("");
+  let createRepositoryInitialBranch = $state("");
+  let createRepositoryInitializeLfs = $state(false);
+  let createRepositoryProvider = $state<CreateRepositoryProvider>("local");
+  let createRepositoryError = $state("");
   let gitNameDialogKind = $state<"branch" | "stash" | null>(null);
   let gitNameDialogValue = $state("");
   let gitNameDialogError = $state("");
@@ -641,6 +650,79 @@ import { onDestroy, onMount } from "svelte";
     }
   }
 
+  async function chooseCreateRepository() {
+    createRepositoryProvider = "local";
+    createRepositoryParentPath = await resolveProjectsLocation();
+    createRepositoryName = "";
+    createRepositoryInitialBranch = "";
+    createRepositoryInitializeLfs = false;
+    createRepositoryError = "";
+    activeView = "create";
+  }
+
+  function changeCreateRepositoryProvider(provider: CreateRepositoryProvider) {
+    createRepositoryProvider = provider;
+    createRepositoryError = "";
+  }
+
+  async function browseCreateRepositoryLocation() {
+    if (!desktopRuntime) {
+      return;
+    }
+
+    try {
+      const selectedPath = await chooseDesktopCreateLocation();
+      if (typeof selectedPath === "string") {
+        createRepositoryParentPath = selectedPath;
+        createRepositoryError = "";
+      }
+    } catch (caught) {
+      createRepositoryError = formatError(caught);
+    }
+  }
+
+  function closeCreateRepositoryView() {
+    if (!operationPending) {
+      createRepositoryError = "";
+      activeView = "start";
+    }
+  }
+
+  async function submitCreateRepository() {
+    if (createRepositoryProvider !== "local") {
+      createRepositoryError = `${createRepositoryProvider === "github" ? "Github" : "Bitbucket"} repository creation is not available yet.`;
+      return;
+    }
+
+    const name = createRepositoryName.trim();
+    if (!name) {
+      createRepositoryError = "Enter a repository name to continue.";
+      return;
+    }
+    if (name === "." || name === ".." || /[\\/:]/.test(name)) {
+      createRepositoryError = "Use a single folder name without slashes or a drive prefix.";
+      return;
+    }
+
+    createRepositoryError = "";
+    const created = await runWorkspaceCommand(() =>
+      requireWorkspace().createRepository(createRepositoryParentPath.trim(), name, {
+        ...(createRepositoryInitialBranch.trim()
+          ? { initialBranch: createRepositoryInitialBranch.trim() }
+          : {}),
+        initializeLfs: createRepositoryInitializeLfs,
+      }),
+    );
+    if (created) {
+      createRepositoryParentPath = "";
+      createRepositoryName = "";
+      createRepositoryInitialBranch = "";
+      createRepositoryInitializeLfs = false;
+    } else {
+      createRepositoryError = startError || "The repository could not be created.";
+    }
+  }
+
   function closeRepositoryPathDialog() {
     if (!operationPending) {
       repositoryPathDialogOpen = false;
@@ -671,6 +753,15 @@ import { onDestroy, onMount } from "svelte";
       directory: true,
       multiple: false,
       title: "Open repository",
+    });
+  }
+
+  async function chooseDesktopCreateLocation() {
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    return open({
+      directory: true,
+      multiple: false,
+      title: "Choose repository location",
     });
   }
 
@@ -1483,6 +1574,37 @@ import { onDestroy, onMount } from "svelte";
   <section class="min-h-0 overflow-hidden">
     {#if activeView === "settings"}
       <SettingsView />
+    {:else if activeView === "create"}
+      <CreateRepositoryView
+        provider={createRepositoryProvider}
+        parentPath={createRepositoryParentPath}
+        name={createRepositoryName}
+        initialBranch={createRepositoryInitialBranch}
+        initializeLfs={createRepositoryInitializeLfs}
+        error={createRepositoryError}
+        loading={operationPending}
+        canBrowse={desktopRuntime}
+        onProviderChange={changeCreateRepositoryProvider}
+        onParentPathChange={(value) => {
+          createRepositoryParentPath = value;
+          createRepositoryError = "";
+        }}
+        onNameChange={(value) => {
+          createRepositoryName = value;
+          createRepositoryError = "";
+        }}
+        onInitialBranchChange={(value) => {
+          createRepositoryInitialBranch = value;
+          createRepositoryError = "";
+        }}
+        onInitializeLfsChange={(value) => {
+          createRepositoryInitializeLfs = value;
+          createRepositoryError = "";
+        }}
+        onBrowse={browseCreateRepositoryLocation}
+        onSubmit={submitCreateRepository}
+        onCancel={closeCreateRepositoryView}
+      />
     {:else if activeView === "start" || !activeRepo}
       <StartView
         repositories={homeRepositories}
@@ -1490,6 +1612,8 @@ import { onDestroy, onMount } from "svelte";
         error={startError}
         {connectionError}
         onChooseRepository={chooseRepository}
+        onCreateRepository={chooseCreateRepository}
+        canCreateRepository={desktopRuntime}
         onOpenRepository={openRepository}
         onRetryConnection={retryLocalConnection}
       />
