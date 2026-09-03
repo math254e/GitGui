@@ -13,6 +13,7 @@ let closing = false;
 
 runChecked("cargo", ["build", "-p", "gitgui-server"]);
 runChecked(npm, ["run", "desktop:build"]);
+runChecked(npm, ["exec", "--workspace", "@gitgui/web", "--", "svelte-kit", "sync"]);
 if (!existsSync(electron)) throw new Error("Electron is not installed; run npm install");
 
 const vite = start(npm, ["run", "ui:dev"]);

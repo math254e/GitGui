@@ -9,7 +9,7 @@ import {
   protocol,
   type IpcMainInvokeEvent,
 } from "electron";
-import { autoUpdater } from "electron-updater";
+import electronUpdater from "electron-updater";
 import type {
   DesktopConnectionRegistration,
   DesktopCredential,
@@ -20,6 +20,8 @@ import { SshEnvironmentManager } from "@gitgui/ssh";
 import { BackendManager } from "./backend-manager.js";
 import { DesktopStateStore } from "./state-store.js";
 import { extractDeepLink, normalizeDeepLink, normalizeUpdateFeedUrl } from "./lifecycle.js";
+
+const { autoUpdater } = electronUpdater;
 
 const DEVELOPMENT_ORIGIN = "http://127.0.0.1:1420";
 const APPLICATION_ORIGIN = "gitgui://app";
