@@ -53,7 +53,10 @@ export class ConnectionResolver {
     }
 
     const storedCredential = await this.credentials.get(registration.environmentId);
-    const candidates = [storedCredential, platformConnection.credential].filter(
+    // A prepared platform connection can carry a credential tied to the
+    // backend process or SSH bridge that was just resolved. Prefer it over a
+    // persisted credential, which may belong to an earlier process lifetime.
+    const candidates = [platformConnection.credential, storedCredential].filter(
       (value): value is ConnectionCredential => value !== undefined,
     );
     return authorizeConnection(
