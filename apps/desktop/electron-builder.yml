@@ -1,0 +1,25 @@
+appId: dev.gitgui.desktop
+productName: GitGui
+directories:
+  app: apps/desktop
+  output: ../../release
+files:
+  - dist/**/*
+  - package.json
+extraResources:
+  - from: apps/web/build
+    to: web
+  - from: apps/desktop/resources/server
+    to: server
+win:
+  target: nsis
+  icon: apps/desktop/build/icon.ico
+mac:
+  target: dmg
+  icon: apps/desktop/build/icon.icns
+linux:
+  target:
+    - AppImage
+    - deb
+  icon: apps/desktop/build/icon.png
+asar: true

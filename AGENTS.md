@@ -1,120 +1,254 @@
 # GitGui
 
-GitGui is a modern Git desktop GUI built with SvelteKit, Tauri, Rust, and the
-installed Git executable.
+GitGui is a modern Git desktop and web client. Its target stack is SvelteKit,
+TypeScript, Electron, Rust, and the installed Git executable.
 
-The project is inspired by T3 Code's client/host architecture, but is not being
-converted to T3's React, Electron, Node.js, or Effect stack.
+The frontend/backend/desktop/remote architecture follows T3 Code as closely as
+practical. Translate T3's Node server to the Rust `gitgui-server` and its React
+integration to Svelte. Use Electron in the same architectural role as T3 Code.
+
+Do not copy T3's product, agent, thread, or VCS behavior. Git operations and
+repository UX remain GitGui-owned.
+
+## Architecture state
+
+The Electron/client-runtime migration is complete. `apps/web` is the SvelteKit
+client, `apps/desktop` is the Electron shell, and the Rust workspace contains
+the standalone backend and Git core. Keep future changes within these target
+boundaries.
 
 ## Working principles
 
-Prefer the smallest architecture that makes behavior obvious.
+Prefer the smallest implementation that preserves the selected architecture.
 
 Keep complexity at system boundaries:
 
-- Rust owns Git and repository behavior.
-- The client renders structured state.
-- Tauri owns desktop lifecycle and native integrations.
-- The protocol remains the shared boundary between clients and servers.
-
-Avoid speculative infrastructure. Direct local and remote connections come
-before relays or cloud control planes.
+- Rust owns Git, repositories, authentication, and server state.
+- The shared client runtime owns environments, sessions, and reconnects.
+- Svelte renders structured state and user interaction.
+- Electron owns desktop lifecycle, native integration, local server supervision,
+  protected credentials, and SSH.
+- The protocol remains the common boundary for local and remote servers.
 
 Preserve existing work. Make focused changes and avoid unrelated cleanup.
 
+## T3 Code source of truth
+
+Before changing workspace structure, client/server boundaries, environments,
+remote connectivity, authentication, reconnect behavior, Electron lifecycle,
+or SSH, inspect the current local checkout:
+
+```text
+D:\GitHub\PictureTagingApp.references\t3code
+```
+
+Start with:
+
+- `docs/internals/workspace-layout.md`
+- `docs/internals/connection-runtime.md`
+- `docs/internals/remote.md`
+- `docs/internals/environment-auth.md`
+- `apps/desktop`
+- `packages/client-runtime`
+- `packages/ssh`
+
+Do not rely on memory when the checkout can answer a question. Copy applicable
+concepts, terminology, layering, lifecycle, and tests closely. If GitGui needs
+to diverge, document the concrete reason rather than silently redesigning the
+system.
+
+T3 Code is not the architecture source for Git commands, Git graph behavior,
+branch workflows, or repository product design.
+
 ## Glossary
 
-- **you** — The coding assistant reading this file and making changes to GitGui.
-- **we / us / me / I** — The people building and maintaining GitGui. These are
-  who you are talking to now.
-- **user** — The person using the GitGui application.
-- **client** — The SvelteKit UI and shared client runtime.
-- **desktop shell** — The Tauri application providing native integrations and
-  managing the local server.
+- **you** — The coding assistant reading this file and changing GitGui.
+- **we / us / me / I** — The people building and maintaining GitGui.
+- **user** — A person using the GitGui application.
+- **client** — The SvelteKit UI and shared TypeScript client runtime.
+- **desktop shell** — Electron main/preload and desktop-only services.
 - **server** — The standalone Rust `gitgui-server` process.
-- **host** — A machine running a GitGui server and providing repository access.
-- **environment** — A client-side connection configuration for a local or remote
-  GitGui host.
-- **project** — The GitGui codebase and workspace being changed.
-- **repository** — A Git repository opened or exposed through GitGui.
-- **workspace** — The project directory being edited, or the client-owned UI
-  state for open repositories, depending on context.
-- **repository catalog** — The server-owned list of repositories available on a
-  host.
-- **protocol** — The typed JSON request, response, and event contract shared by
-  clients and servers.
+- **host** — A machine running a GitGui server and exposing repositories.
+- **environment** — One running backend using one persistent state directory.
+- **EnvironmentId** — Stable UUID issued and persisted by that backend.
+- **connection target** — A strategy for reaching an environment.
+- **connection profile** — Non-secret settings for a target.
+- **connection credential** — Secret authentication material.
+- **connection registration** — A client's durable known-environment record.
+- **prepared connection** — Temporary resolved endpoint/auth information.
+- **RPC session** — One live authenticated HTTP/WebSocket connection.
+- **environment supervisor** — Sole retry/session owner for one environment.
+- **environment registry** — Catalog of registrations and scoped supervisors.
+- **repository catalog** — Server-owned repositories available on one host.
+- **protocol** — Typed JSON request, response, event, and auth contracts shared
+  by clients and servers.
 
-## Architecture boundaries
+## Fixed target architecture
 
-The fixed technology boundary is:
-
-- SvelteKit and TypeScript for the UI and hosted web client.
-- Tauri for the desktop shell and native integrations.
-- Rust for Git operations, repository state, protocol handling, and the server.
-- The installed `git` executable for Git behavior.
-
-Important ownership rules:
-
-- The frontend must not execute Git commands directly.
-- Rust owns Git execution, parsing, repository snapshots, and future graph logic.
+- SvelteKit and TypeScript are the client stack.
+- Electron is the desktop shell.
+- Rust owns Git domain behavior and the backend.
+- The installed `git` executable supplies Git behavior.
+- `gitgui-server` must run without Electron.
+- Electron manages the primary local server; it is not another backend.
+- Normal GitGui requests go directly from the client runtime to the selected
+  server over HTTP/WebSocket, never through Electron IPC.
 - `crates/gitgui-protocol` is the canonical wire contract.
-- TypeScript protocol types are generated into `src/lib/generated`.
-- `gitgui-server` must run without Tauri.
-- Tauri manages the local server process; it does not define a second backend.
-- The server owns the host repository catalog.
-- The client owns tabs, recents, active selection, and layout.
-- Direct remote connections come before relay work.
-- Do not replace SvelteKit, Tauri, or Rust with another application stack.
+- TypeScript server contracts are generated from Rust definitions.
+- Electron bridge contracts are separate from Git RPC contracts.
+- The server owns repository catalogs, filesystem access, and shared host state.
+- The client owns tabs, recents, active selection, and layout per environment.
+- Direct remote and Tailscale connections are ordinary authenticated endpoints.
+- Electron owns SSH setup; the Svelte client sees a forwarded normal endpoint.
+- Relay/control-plane infrastructure is deferred until concretely required.
 
-## Where code lives
+## Client runtime architecture
 
-- `src/` — SvelteKit routes, components, styling, and client runtime.
-- `src/lib/client-runtime/` — connections, environments, transport, and reconnects.
-- `src/lib/generated/` — generated TypeScript protocol types.
-- `src/lib/components/` — repository and Git UI.
-- `crates/gitgui-core/` — Git execution, parsing, domain logic, and caches.
-- `crates/gitgui-protocol/` — canonical Rust contracts and type generation.
-- `crates/gitgui-server/` — standalone Axum server and RPC dispatch.
-- `src-tauri/` — desktop lifecycle, server management, dialogs, and packaging.
-- `docs/` — architecture decisions, plans, and roadmap.
+Follow T3 Code's layering:
 
-Read the architecture documents before changing process boundaries, protocol
-ownership, or client/server responsibilities.
+```text
+EnvironmentRegistry
+  -> EnvironmentSupervisor
+     -> ConnectionDriver
+        -> ConnectionResolver
+        -> RpcSessionFactory
+```
 
-## Ways to run GitGui
+Rules:
 
-Before starting Vite, Tauri, `gitgui-server`, or any other development process,
-check whether the user already has a development session running, including an
-attached shared preview. Reuse the existing session and its processes. Do not
-start a second development stack unless the user explicitly asks for one or
-confirms that no reusable session exists.
+- The backend-generated `EnvironmentId`, not a URL hash, identifies an
+  environment.
+- Use primary, bearer, and SSH connection targets initially.
+- Tailscale uses the bearer/direct target; “hosted web” is a client surface,
+  not a target type.
+- The resolver prepares endpoint/auth information.
+- The driver and session factory perform one attempt and never retry.
+- The supervisor is the only retry owner.
+- Transient failures retry indefinitely with capped backoff.
+- Auth, permission, invalid configuration, and incompatible protocol failures
+  block until external state changes.
+- Offline state releases transport without consuming retry attempts.
+- Foreground/wakeup probes active sessions.
+- A replacement session advances an environment generation.
+- Queries revalidate, subscriptions switch, and mutations resolve the current
+  session after a generation change.
+- Explicit environment removal disposes registration, credentials, session,
+  supervisor, cache, and client workspace state.
 
-### Desktop development
+Implement the shared runtime as framework-independent TypeScript. A thin Svelte
+store/context adapter is mounted once at the application root. Routes and
+components must not own sockets, retries, credentials, Electron detection, or
+SSH behavior.
 
-Use the single development command for the full desktop app. It prepares the
-server sidecar, starts the Vite frontend, launches Tauri, and lets Tauri start
-and manage the local GitGui server:
+Use plain TypeScript lifecycle primitives initially: `AbortController`, explicit
+disposables, serialized async operations, and observable stores. Do not add
+Effect solely to match T3's implementation library; copy the boundaries,
+semantics, and applicable tests.
+
+## Authentication and transport
+
+Loopback is not authentication. Local and remote backends use the same session
+model.
+
+- Electron creates the primary bootstrap credential.
+- Pass it to Rust through a dedicated inherited pipe/file descriptor, not a
+  command argument or log.
+- Exchange bootstrap/pairing credentials over HTTP for scoped bearer sessions.
+- Use short-lived, single-use WebSocket tickets in WebSocket URLs.
+- Authorize every RPC method against explicit GitGui scopes.
+- Never expose durable tokens in URLs, logs, generated bundles, crash reports,
+  or ordinary plaintext settings.
+
+The target discovery/auth surface includes:
+
+```text
+GET  /.well-known/gitgui/environment
+GET  /health
+GET  /ready
+POST /oauth/token
+GET  /api/auth/session
+POST /api/auth/websocket-ticket
+GET  /ws
+```
+
+The environment descriptor carries stable identity, label, server/protocol
+versions, platform/architecture, capabilities, authentication methods, and
+advertised endpoints.
+
+## Electron boundary
+
+Electron main owns:
+
+- secure BrowserWindow and custom application-origin setup;
+- local Rust binary discovery, packaging, start, readiness, restart, and stop;
+- bootstrap delivery and primary registration;
+- protected credential and connection-catalog persistence;
+- native dialogs, deep links, updates, and desktop lifecycle;
+- SSH discovery, prompts, remote server setup, tunnels, and restoration.
+
+Use secure renderer defaults:
+
+- `contextIsolation: true`
+- `nodeIntegration: false`
+- renderer sandbox enabled
+- bundled narrow preload bridge
+- explicit origin/navigation validation
+
+Expose typed capabilities such as primary bootstrap, connection registrations,
+protected credentials, folder selection, and SSH setup. Do not expose Node,
+generic filesystem access, arbitrary process execution, unrestricted IPC, or
+Git operations.
+
+## SSH behavior
+
+Adapt T3 Code's desktop-managed SSH flow:
+
+1. Resolve/connect using system OpenSSH configuration and known hosts.
+2. Handle host-key, password, and passphrase prompts through Electron.
+3. Detect, launch, or reuse a remote `gitgui-server` bound to loopback.
+4. Open a local port forward.
+5. Check readiness and stable environment identity.
+6. Return ordinary local HTTP/WebSocket endpoints to the connection resolver.
+7. Restore the SSH bridge before the supervisor creates a replacement session.
+
+Initially the remote server may be required on `PATH`. Later binary provisioning
+must remain behind the same SSH runner abstraction. Track ownership and stop
+only remote server processes GitGui started and owns.
+
+## Target workspace
+
+```text
+apps/web/                     SvelteKit client and Svelte adapters
+apps/desktop/                 Electron main, preload, and native services
+packages/contracts/           generated protocol and desktop bridge types
+packages/client-runtime/      browser-safe connection runtime
+packages/ssh/                 Electron/Node SSH implementation
+packages/shared/              narrow TypeScript utilities
+crates/gitgui-core/           Git execution, parsing, and domain logic
+crates/gitgui-protocol/       canonical Rust contracts and generation
+crates/gitgui-server/         standalone Axum backend
+docs/                         architecture, plans, and domain design
+```
+
+The target paths above are the active workspace layout. Do not reintroduce a
+second desktop shell or root-level client implementation.
+
+## Current run modes
+
+Before starting Vite, Electron, `gitgui-server`, or any development process,
+check whether the user already has a development session, including an
+attached shared preview. Reuse it. Do not start a second stack unless
+explicitly asked or no reusable session exists.
+
+### Current desktop development
 
 ```sh
 npm run dev
 ```
 
-The Tauri window loads the SvelteKit/Vite development server at:
+This starts the Electron development stack and its managed Rust server.
 
-```text
-http://localhost:1420
-```
-
-For frontend-only work without the desktop shell, use:
-
-```sh
-npm run ui:dev
-```
-
-The UI may not have a GitGui server in this mode unless one is provided
-separately.
-
-### Browser client with a separate development server
+### Browser client and separate server
 
 Terminal 1:
 
@@ -134,33 +268,21 @@ Open:
 http://localhost:1420/?server=http://127.0.0.1:3774
 ```
 
-Use this when working on the browser client and Rust server independently.
-
 ### Combined browser mode
 
 ```sh
 npm run web:serve
 ```
 
-This builds the SvelteKit app and starts the Rust server, which serves the
-compiled app and API from one origin.
+Open `http://127.0.0.1:3774`.
 
-Open:
-
-```text
-http://127.0.0.1:3774
-```
-
-The standalone server auto-detects `./build/index.html`. Use `--web-dir <path>`
-or `GITGUI_SERVER_WEB_DIR` when the compiled frontend is elsewhere.
-
-### Standalone Rust server
+### Standalone server
 
 ```sh
 cargo run -p gitgui-server -- --port 3774
 ```
 
-Useful options include:
+Useful current options include:
 
 ```sh
 cargo run -p gitgui-server -- --port 3774 --repository <path>
@@ -168,98 +290,82 @@ cargo run -p gitgui-server -- --data-dir <path>
 cargo run -p gitgui-server -- --web-dir <path>
 ```
 
-The server can run independently of the desktop shell. Be careful when binding
-to non-loopback interfaces or using persistent data directories.
-
-### Tauri development
-
-`npm run dev` is the canonical desktop development command. The
-`tauri:dev` script remains available as an explicit alias for tooling that
-already calls it directly.
-
-### Frontend preview
-
-```sh
-npm run build
-npm run preview
-```
-
-This previews the compiled frontend. Repository functionality still requires a
-reachable GitGui server unless the app is served by `gitgui-server`.
-
-### Desktop packaging
-
-```sh
-npm run tauri:build
-```
-
-This prepares the release server sidecar, builds the frontend, and packages the
-desktop application.
+Use isolated data directories for persistence and migration experiments.
 
 ## Development commands
 
-- `npm run check` — SvelteKit and TypeScript validation.
-- `npm run build` — frontend production build.
+- `npm run check` — current SvelteKit and TypeScript validation.
+- `npm run build` — current frontend production build.
 - `cargo check --workspace` — Rust workspace validation.
-- `npm run protocol:generate` — regenerate TypeScript types after protocol changes.
+- `npm run protocol:generate` — regenerate TypeScript protocol types.
 - `git diff --check` — whitespace and patch validation.
 
+Commands and paths must be updated when workspace migration lands. Do not invent
+future commands in user-facing docs before they exist.
+
 ## Change guidance
+
+When changing distributed architecture:
+
+1. Read the applicable current T3 sources.
+2. Identify the T3 concept and exact GitGui translation.
+3. Preserve the one-client/one-server protocol boundary.
+4. Record any concrete divergence.
+5. Add lifecycle/failure tests, not only success-path tests.
+6. Update architecture documentation in the same change.
 
 When changing the protocol:
 
 1. Update Rust definitions in `crates/gitgui-protocol`.
 2. Run `npm run protocol:generate`.
 3. Update server dispatch and client usage.
-4. Run Rust and frontend checks.
+4. Verify compatibility, authorization, Rust, and frontend checks.
 
-When changing server lifecycle behavior, verify readiness, reconnect, shutdown,
-and restart behavior.
+When changing server lifecycle behavior, verify cold start, readiness timeout,
+crash, reconnect, shutdown, and process ownership.
+
+When changing client connection behavior, verify transient retry, blocked
+failure, offline transitions, foreground wakeup, generation replacement,
+explicit removal, and at least two independent environments.
 
 When changing repository behavior, consider unusual paths, inaccessible
-repositories, malformed Git output, and partial refresh failures.
+repositories, malformed Git output, large output, and partial refresh failures.
 
-When changing the UI, keep it independent of Tauri-only imports so the hosted
-web client remains buildable.
+When changing UI, keep shared code independent of Electron imports so hosted
+web remains buildable.
 
 ## Pull requests
 
 - Do not open, merge, or publish a pull request unless explicitly requested.
-- Use concise conventional commit titles, for example:
+- Use concise conventional commit titles, such as
   `fix(server): preserve repository state after restart`.
 - Keep one concern per pull request.
-- The pull request description should explain:
-  - the problem;
-  - the implemented change;
-  - how it was verified;
-  - any known limitations or follow-up work.
-- UI changes should include before/after screenshots.
-- Motion, timing, or interaction changes should include a short recording.
-- Architecture or protocol changes should update the relevant documentation.
-- Do not hide unrelated work inside a feature or bug-fix pull request.
+- Explain the problem, implementation, verification, limitations, and follow-up.
+- Include before/after screenshots for visual changes.
+- Include a short recording for material motion or interaction changes.
+- Update architecture/protocol documents with relevant boundary changes.
+- Do not hide unrelated work inside a feature or fix.
 
 ## Safety
 
 - Inspect `git status` before making changes.
 - Preserve unrelated changes.
-- Do not use `reset --hard`, `checkout`, or `clean` destructively unless
-  explicitly requested.
+- Do not use destructive `reset`, `checkout`, or `clean` operations unless the
+  user explicitly requests them.
 - Do not kill processes by name or pattern.
-- Do not expose bootstrap tokens or session credentials in logs, arguments,
-  generated bundles, or committed files.
-- Use isolated server data directories for persistence and migration experiments.
-- Do not bake local development origins into hosted production behavior.
-- Treat repository paths, Git output, protocol messages, and persisted metadata
-  as untrusted input.
+- Do not expose bootstrap tokens, bearer credentials, WebSocket tickets, or SSH
+  secrets in logs, arguments, bundles, settings, or screenshots.
+- Verify exact targets before deleting migration files or directories.
+- Treat repository paths, Git output, protocol messages, remote endpoints, SSH
+  responses, and persisted metadata as untrusted input.
 
 ## Style
 
-Prefer clear names, small functions, and explicit ownership.
+Prefer clear names, small functions, and explicit ownership. Comments should
+explain why a boundary or non-obvious lifecycle rule exists.
 
-Comments should explain why a boundary or non-obvious behavior exists.
+Keep Svelte components focused on presentation and interaction. Keep Git,
+connection, authentication, and protocol decisions out of shared UI code.
 
-Keep UI components focused on presentation and interaction. Keep Git and
-protocol decisions out of shared UI code.
-
-If an existing rule conflicts with the task, call out the conflict before
-weakening the architectural boundary.
+If an existing implementation conflicts with the target architecture, call out
+that migration state before weakening the target boundary.

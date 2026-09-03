@@ -1,76 +1,60 @@
-# Roadmap
+# GitGui roadmap
 
-## Phase 1
+## Current position
 
-- Create Tauri, SvelteKit, TypeScript, and Rust project
-- Execute Git through a Rust command service
-- Detect repository roots
-- Parse repository status
-- Load commit history
-- Render repository path, branch, changed files, and commits
+The frontend/backend/desktop migration is complete. GitGui now has:
 
-## Phase 2
+- a standalone Rust `gitgui-server` and Git-owned `gitgui-core`;
+- a canonical Rust protocol with generated TypeScript contracts;
+- an `apps/web` SvelteKit client;
+- a framework-independent `packages/client-runtime` environment registry,
+  resolver, session factory, driver, and supervisor;
+- an `apps/desktop` Electron shell with secure preload, local server
+  supervision, protected credential storage, and lifecycle management;
+- `packages/ssh` for Electron-managed remote server launch and port forwarding;
+- one HTTP/WebSocket session model for primary, bearer/direct, Tailscale, and
+  SSH-prepared environments.
 
-- Add native folder selection
-- Improve status parsing and file grouping
-- Add file detail views
-- Add refresh and repository switching controls
+The previous desktop shell and root-level SvelteKit layout are removed. The normal
+development command is now `npm run dev`.
 
-## Phase 3
+## Verified migration gates
 
-- Research Gitamine's graph implementation and document the behavior baseline
-- Implement the first graph engine iteration based on Gitamine's graph semantics
-- Render commit lanes and edges
-- Add branch and checkout interactions
+- Rust workspace tests and checks pass.
+- Protocol generation and all TypeScript/Svelte checks pass.
+- Web and Electron production builds pass.
+- Standalone server readiness and descriptor discovery pass.
+- Bootstrap-to-bearer exchange, authenticated session inspection, and
+  single-use WebSocket ticket issuance pass.
+- Electron uses direct renderer-to-server HTTP/WebSocket traffic; Git RPC does
+  not cross preload IPC.
+- Runtime retry, blocked, offline, wakeup, generation, and removal behavior is
+  centralized in the environment supervisor/registry.
+- Direct and SSH onboarding verifies discovery, authentication, and a live RPC
+  session before saving the registration.
+- Environment IDs are persisted UUIDs, including standalone CLI runs by
+  default, and switching environments cannot expose another environment's live
+  workspace.
+- SSH lifecycle tests cover persisted managed ownership/reuse contracts, and
+  desktop tests cover deep-link and secure update-feed validation.
 
-## Future Ideas
+## Next product work
 
-- Monaco file and diff viewing
-- Mismerge conflict resolution
-- Commit creation workflows
-- Merge and rebase workflows
-- Remote fetch, pull, and push operations
+Continue GitGui-owned Git product development independently of the T3-shaped
+transport architecture:
 
-## Git Operations Rollout
+- complete repository mutations with confirmation and progress behavior;
+- improve graph scale, lane stability, virtualization, and interaction;
+- expand branch, tag, remote, stash, worktree, submodule, and conflict flows;
+- add repository watching and targeted refresh events;
+- harden unusual paths, malformed Git output, large repositories, and partial
+  failures.
 
-The first mutation flow will cover staging, un-staging, commit creation, fetch,
-pull, push, branch switching/creation, and stash/pop. These operations should
-be reliable before adding the following advanced features:
+## Deferred until justified
 
-- Amend commits
-- Interactive or partial staging
-- Stash apply and stash drop
-- Branch deletion
-- Progress streaming for long-running Git commands
-
-The advanced features are intentionally deferred so they do not complicate the
-initial protocol, server lifecycle, or working-tree UI before the basic Git
-mutation flow is proven.
-
-## Deferred Technical Work
-
-These items are intentionally deferred while the project remains a personal read-only viewer:
-
-- Verify and correct commit rename parsing and rename diffs, including quoted and unusual paths.
-- Add pagination or bounded history loading for large repositories instead of reloading all history on every refresh.
-
-## Client/Host Rearchitecture
-
-The approved architecture reference is [t3-architecture-reference.md](t3-architecture-reference.md), with the detailed assignable implementation backlog in [rearchitecture-plan.md](rearchitecture-plan.md).
-
-- Keep SvelteKit for the UI and hosted web client.
-- Keep Tauri as the desktop shell.
-- Keep Rust as the backend and Git implementation.
-- Add a Rust HTTP/WebSocket server that Tauri starts and manages.
-- Add a shared typed protocol and client runtime for local and remote environments.
-- Start with direct client-to-remote connections; do not build the relay yet.
-- Treat the hosted web client as another client surface, not as a second backend.
-- Revisit a T3-style relay and any Convex control-plane usage later.
-
-Current state as of 2026-08-15:
-
-- The local desktop migration is complete through the installed-sidecar smoke gate.
-- The Svelte UI now uses the same typed HTTP/WebSocket client boundary intended for remote hosts.
-- Direct Tauri Git/workspace commands and duplicate desktop caches have been removed.
-- Direct-remote pairing, TLS/WSS exposure, and hosted browser connection UX are the active next phase.
-- The relay remains deliberately unimplemented.
+- relay or cloud control-plane infrastructure;
+- multi-user collaboration semantics beyond scoped access;
+- replacing the installed Git executable with a Git library;
+- adopting React or T3's product/VCS model;
+- adopting Effect solely for architectural resemblance;
+- managed remote binary provisioning beyond the current `PATH`-based SSH flow.

@@ -4,12 +4,15 @@
 //! Clients receive stable repository IDs and use those IDs for all read
 //! operations; repository paths never cross the wire after catalog lookup.
 
+mod auth;
+
+use auth::{AuthError, AuthStore};
 use axum::{
     extract::{ws::Message, ws::WebSocket, ws::WebSocketUpgrade, Query, State},
-    http::{HeaderMap, StatusCode},
+    http::{header, HeaderMap, HeaderValue, Method, StatusCode},
     response::{IntoResponse, Redirect, Response},
-    routing::get,
-    Json, Router,
+    routing::{get, post},
+    Form, Json, Router,
 };
 use futures_util::{SinkExt, StreamExt};
 use gitgui_core::git::{
@@ -22,8 +25,7 @@ use gitgui_core::git::{
         commit as run_commit, create_branch as run_create_branch, fetch as run_fetch,
         init_repository as run_init_repository, list_local_branches, pull as run_pull,
         push as run_push, stage as run_stage, stash_pop as run_stash_pop,
-        stash_push as run_stash_push,
-        switch_branch as run_switch_branch, unstage as run_unstage,
+        stash_push as run_stash_push, switch_branch as run_switch_branch, unstage as run_unstage,
     },
     repository::{
         load_commit_file_diff as load_core_commit_file_diff,
@@ -39,24 +41,23 @@ use gitgui_core::git::{
     },
 };
 use gitgui_protocol::{
-    error_codes, ChangedFile as ProtocolChangedFile, CommitFile as ProtocolCommitFile,
-    CommitFileDiff as ProtocolCommitFileDiff, CommitFilesParams, CommitFilesResult,
-    CommitGraph as ProtocolCommitGraph, CommitInfo as ProtocolCommitInfo,
-    CommitRef as ProtocolCommitRef, CommitRefType as ProtocolCommitRefType, FileDiffResult,
-    GitBranch, GitBranchCreateParams, GitBranchCreateResult, GitBranchListParams,
-    GitBranchListResult, GitBranchSwitchParams, GitBranchSwitchResult, GitCommitParams,
-    GitCommitResult, GitFetchResult, GitPathsParams, GitPullResult, GitPushResult,
+    error_codes, AdvertisedEndpoint, AuthSession, ChangedFile as ProtocolChangedFile,
+    CommitFile as ProtocolCommitFile, CommitFileDiff as ProtocolCommitFileDiff, CommitFilesParams,
+    CommitFilesResult, CommitGraph as ProtocolCommitGraph, CommitInfo as ProtocolCommitInfo,
+    CommitRef as ProtocolCommitRef, CommitRefType as ProtocolCommitRefType, EnvironmentAuthPolicy,
+    EnvironmentDescriptor, FileDiffResult, GitBranch, GitBranchCreateParams, GitBranchCreateResult,
+    GitBranchListParams, GitBranchListResult, GitBranchSwitchParams, GitBranchSwitchResult,
+    GitCommitParams, GitCommitResult, GitFetchResult, GitPathsParams, GitPullResult, GitPushResult,
     GitRepositoryParams, GitStageResult, GitStashPopParams, GitStashPopResult, GitStashPushParams,
     GitStashPushResult, GitStatusParams, GitStatusResult, GitUnstageResult,
     GraphCommit as ProtocolGraphCommit, GraphEdge as ProtocolGraphEdge,
     GraphEdgeType as ProtocolGraphEdgeType, PrefetchCommitDiffsParams, PrefetchCommitDiffsResult,
     PrefetchCommitFilesParams, PrefetchCommitFilesResult, ProtocolError, ProtocolErrorMessage,
     RepositoriesCreateParams, RepositoriesCreateResult, RepositoriesListResult,
-    RepositoriesOpenParams, RepositoriesOpenResult,
-    RepositoriesRefreshParams, RepositoriesRefreshResult, RepositoriesRemoveParams,
-    RepositoriesRemoveResult, RepositoryInfo as ProtocolRepositoryInfo,
-    RepositoryGraphParams, RepositoryGraphResult, RepositoryRefreshItem, RepositorySnapshot,
-    RepositorySnapshotParams, RepositorySnapshotResult,
+    RepositoriesOpenParams, RepositoriesOpenResult, RepositoriesRefreshParams,
+    RepositoriesRefreshResult, RepositoriesRemoveParams, RepositoriesRemoveResult,
+    RepositoryGraphParams, RepositoryGraphResult, RepositoryInfo as ProtocolRepositoryInfo,
+    RepositoryRefreshItem, RepositorySnapshot, RepositorySnapshotParams, RepositorySnapshotResult,
     RepositoryStatus as ProtocolRepositoryStatus, RepositorySummary, RequestEnvelope,
     ResponseEnvelope, ServerInfo, ServerLifecycle, ServerReadiness, ServerStatus,
     StashInfo as ProtocolStashInfo, WelcomeMessage, CAPABILITY_GIT_BRANCH_CREATE,
@@ -68,18 +69,17 @@ use gitgui_protocol::{
     CAPABILITY_GIT_WORKING_TREE_FILE_DIFF, CAPABILITY_REPOSITORIES_CREATE,
     CAPABILITY_REPOSITORIES_GET_GRAPH, CAPABILITY_REPOSITORIES_GET_SNAPSHOT,
     CAPABILITY_REPOSITORIES_LIST, CAPABILITY_REPOSITORIES_OPEN, CAPABILITY_REPOSITORIES_REFRESH,
-    CAPABILITY_REPOSITORIES_REMOVE,
-    CAPABILITY_SERVER_INFO, CAPABILITY_SERVER_STATUS, MAX_GRAPH_TARGETS,
-    MAX_PREFETCH_COMMIT_DIFF_TARGETS, MAX_PREFETCH_COMMIT_HASHES, METHOD_GIT_BRANCH_CREATE,
-    METHOD_GIT_BRANCH_LIST, METHOD_GIT_BRANCH_SWITCH, METHOD_GIT_COMMIT, METHOD_GIT_COMMIT_FILES,
-    METHOD_GIT_COMMIT_FILE_DIFF, METHOD_GIT_FETCH, METHOD_GIT_PREFETCH_COMMIT_DIFFS,
-    METHOD_GIT_PREFETCH_COMMIT_FILES, METHOD_GIT_PULL, METHOD_GIT_PUSH, METHOD_GIT_STAGE,
-    METHOD_GIT_STASH_POP, METHOD_GIT_STASH_PUSH, METHOD_GIT_STATUS, METHOD_GIT_UNSTAGE,
-    METHOD_GIT_WORKING_TREE_FILE_DIFF, METHOD_REPOSITORIES_CREATE, METHOD_REPOSITORIES_GET_GRAPH,
-    METHOD_REPOSITORIES_GET_SNAPSHOT, METHOD_REPOSITORIES_LIST, METHOD_REPOSITORIES_OPEN,
-    METHOD_REPOSITORIES_REFRESH, METHOD_REPOSITORIES_REMOVE, METHOD_SERVER_GET_INFO,
-    METHOD_SERVER_GET_STATUS,
-    PROTOCOL_VERSION,
+    CAPABILITY_REPOSITORIES_REMOVE, CAPABILITY_SERVER_INFO, CAPABILITY_SERVER_STATUS,
+    MAX_GRAPH_TARGETS, MAX_PREFETCH_COMMIT_DIFF_TARGETS, MAX_PREFETCH_COMMIT_HASHES,
+    METHOD_GIT_BRANCH_CREATE, METHOD_GIT_BRANCH_LIST, METHOD_GIT_BRANCH_SWITCH, METHOD_GIT_COMMIT,
+    METHOD_GIT_COMMIT_FILES, METHOD_GIT_COMMIT_FILE_DIFF, METHOD_GIT_FETCH,
+    METHOD_GIT_PREFETCH_COMMIT_DIFFS, METHOD_GIT_PREFETCH_COMMIT_FILES, METHOD_GIT_PULL,
+    METHOD_GIT_PUSH, METHOD_GIT_STAGE, METHOD_GIT_STASH_POP, METHOD_GIT_STASH_PUSH,
+    METHOD_GIT_STATUS, METHOD_GIT_UNSTAGE, METHOD_GIT_WORKING_TREE_FILE_DIFF,
+    METHOD_REPOSITORIES_CREATE, METHOD_REPOSITORIES_GET_GRAPH, METHOD_REPOSITORIES_GET_SNAPSHOT,
+    METHOD_REPOSITORIES_LIST, METHOD_REPOSITORIES_OPEN, METHOD_REPOSITORIES_REFRESH,
+    METHOD_REPOSITORIES_REMOVE, METHOD_SERVER_GET_INFO, METHOD_SERVER_GET_STATUS, PROTOCOL_VERSION,
+    SCOPE_REPOSITORY_MANAGE, SCOPE_REPOSITORY_OPERATE, SCOPE_REPOSITORY_READ,
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -93,14 +93,17 @@ use std::{
     net::{IpAddr, SocketAddr},
     path::{Component, Path, PathBuf},
     sync::Arc,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime},
 };
 use tokio::{
     net::TcpListener,
     sync::{oneshot, Mutex, RwLock},
     task::{spawn_blocking, JoinHandle},
 };
-use tower_http::services::{ServeDir, ServeFile};
+use tower_http::{
+    cors::{AllowOrigin, CorsLayer},
+    services::{ServeDir, ServeFile},
+};
 use tracing::{info, warn};
 
 /// Environment variable for the bind IP address.
@@ -111,6 +114,8 @@ pub const PORT_ENV: &str = "GITGUI_SERVER_PORT";
 pub const DATA_DIR_ENV: &str = "GITGUI_SERVER_DATA_DIR";
 /// Environment variable containing the local bootstrap/session token.
 pub const BOOTSTRAP_TOKEN_ENV: &str = "GITGUI_SERVER_BOOTSTRAP_TOKEN";
+/// When set to `1`, the binary reads the bootstrap credential from one line on stdin.
+pub const BOOTSTRAP_STDIN_ENV: &str = "GITGUI_SERVER_BOOTSTRAP_STDIN";
 /// Environment variable replacing the default exact browser-origin allowlist.
 pub const ALLOWED_ORIGINS_ENV: &str = "GITGUI_SERVER_ALLOWED_ORIGINS";
 /// Environment variable containing additional exact browser origins.
@@ -120,14 +125,13 @@ pub const DEV_URL_ENV: &str = "GITGUI_SERVER_DEV_URL";
 /// Environment variable pointing at the compiled SvelteKit web application.
 pub const WEB_DIR_ENV: &str = "GITGUI_SERVER_WEB_DIR";
 
-/// Query parameter used by browser WebSocket clients for the session token.
-pub const SESSION_TOKEN_QUERY_KEY: &str = "session_token";
-/// Exact browser origins accepted by the local Tauri webview in development
-/// and packaged builds.
+/// Query parameter used for short-lived single-use WebSocket tickets.
+pub const WEBSOCKET_TICKET_QUERY_KEY: &str = "wsTicket";
+/// Exact browser origins accepted by Electron and local web development.
 pub const DEFAULT_ALLOWED_ORIGINS: &[&str] = &[
     "http://localhost:1420",
-    "http://tauri.localhost",
-    "tauri://localhost",
+    "http://127.0.0.1:1420",
+    "gitgui://app",
 ];
 
 /// Default bind IP. Loopback is required until authentication exists.
@@ -143,7 +147,7 @@ const REPOSITORY_CATALOG_FILE: &str = "repositories.json";
 /// after its listener binds.
 pub const SERVER_READY_LINE_PREFIX: &str = "GITGUI_SERVER_READY=";
 
-/// Server configuration used by both the binary and future Tauri management.
+/// Server configuration used by both the binary and Electron management.
 #[derive(Clone)]
 pub struct ServerConfig {
     /// Requested bind address. Port `0` is allowed and becomes an ephemeral port.
@@ -178,7 +182,7 @@ impl Default for ServerConfig {
                     .expect("the default bind IP is a valid IPv4 address"),
                 DEFAULT_PORT,
             ),
-            server_id: generate_server_id(),
+            server_id: generate_environment_id(),
             server_version: env!("CARGO_PKG_VERSION").to_string(),
             capabilities: implemented_capabilities(),
             repository_paths: Vec::new(),
@@ -224,6 +228,10 @@ impl ServerConfig {
         S: Into<String>,
     {
         let mut config = Self::default();
+        // A CLI-started server is a durable environment by default. Library
+        // callers retain the explicit `None` default so tests and embedders do
+        // not unexpectedly write into the user's profile.
+        config.data_dir = default_server_data_dir();
         if let Ok(bind) = env::var(BIND_ENV) {
             config.bind_addr.set_ip(parse_ip(&bind)?);
         }
@@ -272,6 +280,7 @@ impl ServerConfig {
                     })?;
                     config.data_dir = Some(parse_data_dir(&value)?);
                 }
+                "--ephemeral" => config.data_dir = None,
                 "--repository" | "--repo" => {
                     let value = args.next().ok_or_else(|| ConfigError::MissingValue {
                         flag: argument.clone(),
@@ -454,17 +463,25 @@ pub async fn run(config: ServerConfig) -> Result<(), ServerError> {
 fn router(state: Arc<ServerState>, web_dir: Option<PathBuf>) -> Router {
     let dev_url = state.dev_url.clone();
     let server_address = state.info.bind_address.clone();
-    let session_token = state.bootstrap_token.clone();
+    let cors = cors_layer(&state.allowed_origins);
     let router = Router::new()
+        .route(
+            "/.well-known/gitgui/environment",
+            get(environment_descriptor),
+        )
         .route("/health", get(health))
         .route("/ready", get(ready))
         .route("/info", get(info))
+        .route("/oauth/token", post(exchange_token))
+        .route("/api/auth/session", get(auth_session))
+        .route("/api/auth/websocket-ticket", post(issue_websocket_ticket))
+        .route("/api/auth/pairing", post(issue_pairing_credential))
         .route("/ws", get(websocket))
+        .layer(cors)
         .with_state(state);
 
     if let Some(dev_url) = dev_url {
-        let redirect_url =
-            build_dev_redirect_url(&dev_url, &server_address, session_token.as_deref());
+        let redirect_url = build_dev_redirect_url(&dev_url, &server_address);
         return router.route(
             "/",
             get(move || async move { Redirect::temporary(&redirect_url) }),
@@ -484,11 +501,7 @@ fn router(state: Arc<ServerState>, web_dir: Option<PathBuf>) -> Router {
     )
 }
 
-fn build_dev_redirect_url(
-    dev_url: &str,
-    server_address: &str,
-    session_token: Option<&str>,
-) -> String {
+fn build_dev_redirect_url(dev_url: &str, server_address: &str) -> String {
     let separator = if dev_url.ends_with('?') || dev_url.ends_with('&') {
         ""
     } else if dev_url.contains('?') {
@@ -496,12 +509,46 @@ fn build_dev_redirect_url(
     } else {
         "?"
     };
-    let mut redirect_url = format!("{dev_url}{separator}server=http://{server_address}");
-    if let Some(session_token) = session_token {
-        redirect_url.push_str("#session_token=");
-        redirect_url.push_str(session_token);
-    }
-    redirect_url
+    format!("{dev_url}{separator}server=http://{server_address}")
+}
+
+fn cors_layer(allowed_origins: &[String]) -> CorsLayer {
+    let origins = allowed_origins
+        .iter()
+        .filter_map(|origin| HeaderValue::from_str(origin).ok())
+        .collect::<Vec<_>>();
+    CorsLayer::new()
+        .allow_origin(AllowOrigin::list(origins))
+        .allow_methods([Method::GET, Method::POST])
+        .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE])
+}
+
+fn bearer_token(headers: &HeaderMap) -> Option<&str> {
+    let value = headers.get(header::AUTHORIZATION)?.to_str().ok()?;
+    value
+        .strip_prefix("Bearer ")
+        .filter(|token| !token.is_empty())
+}
+
+fn auth_error_response(error: AuthError) -> Response {
+    let (status, code, message) = match error {
+        AuthError::Unauthorized => (
+            StatusCode::UNAUTHORIZED,
+            error_codes::UNAUTHORIZED,
+            "A valid GitGui session is required",
+        ),
+        AuthError::Forbidden => (
+            StatusCode::FORBIDDEN,
+            error_codes::FORBIDDEN,
+            "The current GitGui session lacks the required scope",
+        ),
+        AuthError::InvalidScope => (
+            StatusCode::BAD_REQUEST,
+            "invalid_scope",
+            "The requested scope is not granted by this credential",
+        ),
+    };
+    (status, Json(json!({ "error": code, "message": message }))).into_response()
 }
 
 #[derive(Serialize)]
@@ -521,16 +568,69 @@ async fn info(State(state): State<Arc<ServerState>>) -> Json<ServerInfo> {
     Json(state.info.clone())
 }
 
+async fn environment_descriptor(
+    State(state): State<Arc<ServerState>>,
+) -> Json<EnvironmentDescriptor> {
+    Json(state.descriptor())
+}
+
+#[derive(Debug, Deserialize)]
+struct TokenExchangeRequest {
+    subject_token: String,
+    #[serde(default)]
+    scope: Option<String>,
+}
+
+async fn exchange_token(
+    State(state): State<Arc<ServerState>>,
+    Form(request): Form<TokenExchangeRequest>,
+) -> Response {
+    match state
+        .auth
+        .exchange(&request.subject_token, request.scope.as_deref())
+        .await
+    {
+        Ok(response) => Json(response).into_response(),
+        Err(error) => auth_error_response(error),
+    }
+}
+
+async fn auth_session(State(state): State<Arc<ServerState>>, headers: HeaderMap) -> Response {
+    let token = bearer_token(&headers).unwrap_or_default();
+    match state.auth.session(token).await {
+        Ok(session) => Json(session).into_response(),
+        Err(error) => auth_error_response(error),
+    }
+}
+
+async fn issue_websocket_ticket(
+    State(state): State<Arc<ServerState>>,
+    headers: HeaderMap,
+) -> Response {
+    let token = bearer_token(&headers).unwrap_or_default();
+    match state.auth.issue_websocket_ticket(token).await {
+        Ok(ticket) => Json(ticket).into_response(),
+        Err(error) => auth_error_response(error),
+    }
+}
+
+async fn issue_pairing_credential(
+    State(state): State<Arc<ServerState>>,
+    headers: HeaderMap,
+) -> Response {
+    let token = bearer_token(&headers).unwrap_or_default();
+    match state.auth.issue_pairing_credential(token).await {
+        Ok(credential) => Json(credential).into_response(),
+        Err(error) => auth_error_response(error),
+    }
+}
+
 async fn websocket(
     State(state): State<Arc<ServerState>>,
     headers: HeaderMap,
     Query(query): Query<WebSocketQuery>,
     upgrade: WebSocketUpgrade,
 ) -> Response {
-    if !state.authorizes_token(query.session_token.as_deref()) {
-        return StatusCode::UNAUTHORIZED.into_response();
-    }
-
     if let Some(origin) = headers.get(axum::http::header::ORIGIN) {
         let Ok(origin) = origin.to_str() else {
             return StatusCode::FORBIDDEN.into_response();
@@ -549,20 +649,29 @@ async fn websocket(
         }
     }
 
+    let session = match state
+        .auth
+        .consume_websocket_ticket(query.websocket_ticket.as_deref())
+        .await
+    {
+        Ok(session) => session,
+        Err(error) => return auth_error_response(error),
+    };
+
     upgrade
-        .on_upgrade(move |socket| handle_socket(socket, state))
+        .on_upgrade(move |socket| handle_socket(socket, state, session))
         .into_response()
 }
 
 #[derive(Debug, Default, Deserialize)]
 struct WebSocketQuery {
-    #[serde(rename = "session_token")]
-    session_token: Option<String>,
+    #[serde(rename = "wsTicket")]
+    websocket_ticket: Option<String>,
 }
 
-async fn handle_socket(mut socket: WebSocket, state: Arc<ServerState>) {
-    let welcome = WelcomeMessage::new(
-        state.info.server_id.clone(),
+async fn handle_socket(mut socket: WebSocket, state: Arc<ServerState>, session: AuthSession) {
+    let welcome = WelcomeMessage::for_environment(
+        state.info.environment_id.clone(),
         state.info.protocol_version,
         state.info.capabilities.clone(),
     );
@@ -573,7 +682,7 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<ServerState>) {
     while let Some(frame) = socket.next().await {
         match frame {
             Ok(Message::Text(text)) => {
-                if process_text_frame(&mut socket, &state, text.as_str())
+                if process_text_frame(&mut socket, &state, &session, text.as_str())
                     .await
                     .is_err()
                 {
@@ -594,7 +703,7 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<ServerState>) {
                         )
                     })
                     .and_then(|text| parse_request(&text));
-                if process_request_result(&mut socket, &state, result, request_id)
+                if process_request_result(&mut socket, &state, &session, result, request_id)
                     .await
                     .is_err()
                 {
@@ -622,10 +731,11 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<ServerState>) {
 async fn process_text_frame(
     socket: &mut WebSocket,
     state: &ServerState,
+    session: &AuthSession,
     text: &str,
 ) -> Result<(), ()> {
     let result = parse_request(text);
-    process_request_result(socket, state, result, request_id_from_text(text)).await
+    process_request_result(socket, state, session, result, request_id_from_text(text)).await
 }
 
 fn parse_request(text: &str) -> Result<RequestEnvelope, ProtocolError> {
@@ -655,12 +765,13 @@ fn parse_request(text: &str) -> Result<RequestEnvelope, ProtocolError> {
 async fn process_request_result(
     socket: &mut WebSocket,
     state: &ServerState,
+    session: &AuthSession,
     result: Result<RequestEnvelope, ProtocolError>,
     request_id: Option<String>,
 ) -> Result<(), ()> {
     match result {
         Ok(request) => {
-            let response = dispatch(request, state).await;
+            let response = dispatch_authorized(request, state, session).await;
             send_json(socket, &response).await
         }
         Err(error) => match request_id {
@@ -680,6 +791,59 @@ fn request_id_from_text(text: &str) -> Option<String> {
                 .map(ToOwned::to_owned)
         })
         .filter(|id| !id.trim().is_empty())
+}
+
+async fn dispatch_authorized(
+    request: RequestEnvelope,
+    state: &ServerState,
+    session: &AuthSession,
+) -> ResponseEnvelope {
+    let required_scope = required_scope_for_method(&request.method);
+    if let Some(required_scope) = required_scope {
+        if !session.scopes.iter().any(|scope| scope == required_scope) {
+            return ResponseEnvelope::error(
+                request.id,
+                ProtocolError::with_details(
+                    error_codes::FORBIDDEN,
+                    "The current session does not permit this GitGui operation",
+                    json!({ "requiredScope": required_scope }),
+                ),
+            );
+        }
+    }
+    dispatch(request, state).await
+}
+
+fn required_scope_for_method(method: &str) -> Option<&'static str> {
+    match method {
+        METHOD_REPOSITORIES_OPEN | METHOD_REPOSITORIES_CREATE | METHOD_REPOSITORIES_REMOVE => {
+            Some(SCOPE_REPOSITORY_MANAGE)
+        }
+        METHOD_GIT_STAGE
+        | METHOD_GIT_UNSTAGE
+        | METHOD_GIT_COMMIT
+        | METHOD_GIT_FETCH
+        | METHOD_GIT_PULL
+        | METHOD_GIT_PUSH
+        | METHOD_GIT_BRANCH_CREATE
+        | METHOD_GIT_BRANCH_SWITCH
+        | METHOD_GIT_STASH_PUSH
+        | METHOD_GIT_STASH_POP => Some(SCOPE_REPOSITORY_OPERATE),
+        METHOD_SERVER_GET_INFO
+        | METHOD_SERVER_GET_STATUS
+        | METHOD_REPOSITORIES_LIST
+        | METHOD_REPOSITORIES_GET_SNAPSHOT
+        | METHOD_REPOSITORIES_GET_GRAPH
+        | METHOD_REPOSITORIES_REFRESH
+        | METHOD_GIT_STATUS
+        | METHOD_GIT_COMMIT_FILES
+        | METHOD_GIT_COMMIT_FILE_DIFF
+        | METHOD_GIT_WORKING_TREE_FILE_DIFF
+        | METHOD_GIT_PREFETCH_COMMIT_FILES
+        | METHOD_GIT_PREFETCH_COMMIT_DIFFS
+        | METHOD_GIT_BRANCH_LIST => Some(SCOPE_REPOSITORY_READ),
+        _ => None,
+    }
 }
 
 async fn dispatch(request: RequestEnvelope, state: &ServerState) -> ResponseEnvelope {
@@ -830,7 +994,12 @@ async fn repositories_create(
     }
     let initialize_lfs = params.initialize_lfs;
     let loaded = spawn_blocking(move || {
-        create_repository_at(&parent_path, &name, initial_branch.as_deref(), initialize_lfs)
+        create_repository_at(
+            &parent_path,
+            &name,
+            initial_branch.as_deref(),
+            initialize_lfs,
+        )
     })
     .await;
     let (candidate, core_snapshot) = match loaded {
@@ -906,10 +1075,7 @@ async fn repositories_remove(
 
     let repository_id = params.repository_id;
     match state.remove_repository(&repository_id).await {
-        Ok(true) => response_success(
-            request_id,
-            RepositoriesRemoveResult { repository_id },
-        ),
+        Ok(true) => response_success(request_id, RepositoriesRemoveResult { repository_id }),
         Ok(false) => repository_not_configured(request_id, &repository_id),
         Err(error) => {
             warn!(error = %error, "repository catalog persistence failed");
@@ -971,7 +1137,10 @@ async fn repositories_get_graph(
     if params.target_commits.len() > MAX_GRAPH_TARGETS
         || params.target_commits.iter().any(|target| target.is_empty())
     {
-        return invalid_params(request_id, "targetCommits contains too many or empty commit IDs");
+        return invalid_params(
+            request_id,
+            "targetCommits contains too many or empty commit IDs",
+        );
     }
 
     let Some(repository) = state.repository(&params.repository_id).await else {
@@ -985,7 +1154,11 @@ async fn repositories_get_graph(
             request_id,
             RepositoryGraphResult {
                 repository: repository_summary,
-                commits: graph.commits.into_iter().map(protocol_commit_info).collect(),
+                commits: graph
+                    .commits
+                    .into_iter()
+                    .map(protocol_commit_info)
+                    .collect(),
                 graph: protocol_graph(graph.graph),
             },
         ),
@@ -1651,7 +1824,7 @@ async fn git_working_tree_file_diff(
             &file,
             staged,
         )
-            .map_err(StatusLoadError::Git)
+        .map_err(StatusLoadError::Git)
     })
     .await
     {
@@ -2029,7 +2202,7 @@ struct ServerState {
     git_mutation_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
     data_dir: Option<PathBuf>,
     cache: SharedCommitFilesCache,
-    bootstrap_token: Option<String>,
+    auth: AuthStore,
     allowed_origins: Vec<String>,
     dev_url: Option<String>,
 }
@@ -2092,6 +2265,7 @@ impl ServerState {
         Self {
             info: ServerInfo {
                 server_id: config.server_id.clone(),
+                environment_id: config.server_id.clone(),
                 protocol_version: PROTOCOL_VERSION,
                 server_version: config.server_version.clone(),
                 bind_address: local_addr.to_string(),
@@ -2104,21 +2278,63 @@ impl ServerState {
             git_mutation_locks: Mutex::new(HashMap::new()),
             data_dir: config.data_dir.clone(),
             cache: SharedCommitFilesCache::default(),
-            bootstrap_token: config
-                .bootstrap_token
-                .clone()
-                .filter(|token| !token.is_empty()),
+            auth: AuthStore::new(config.server_id.clone(), config.bootstrap_token.clone()),
             allowed_origins: config.allowed_origins.clone(),
             dev_url: config.dev_url.clone(),
         }
     }
 
-    fn authorizes_token(&self, supplied: Option<&str>) -> bool {
-        match self.bootstrap_token.as_deref() {
-            Some(expected) => supplied
-                .map(|supplied| constant_time_equal(expected.as_bytes(), supplied.as_bytes()))
-                .unwrap_or(false),
-            None => true,
+    fn descriptor(&self) -> EnvironmentDescriptor {
+        let http_url = format!("http://{}", self.info.bind_address);
+        let websocket_url = format!("ws://{}/ws", self.info.bind_address);
+        let reachability = self
+            .info
+            .bind_address
+            .parse::<SocketAddr>()
+            .map(|address| {
+                if address.ip().is_loopback() {
+                    "loopback"
+                } else {
+                    "lan"
+                }
+            })
+            .unwrap_or("unknown")
+            .to_string();
+        EnvironmentDescriptor {
+            schema_version: 1,
+            environment_id: self.info.environment_id.clone(),
+            label: environment_label(),
+            server_version: self.info.server_version.clone(),
+            protocol_version: self.info.protocol_version,
+            platform: env::consts::OS.to_string(),
+            architecture: env::consts::ARCH.to_string(),
+            capabilities: self.info.capabilities.clone(),
+            auth: EnvironmentAuthPolicy {
+                required: self.auth.required(),
+                bootstrap_methods: if self.auth.required() {
+                    vec![
+                        "token-exchange".to_string(),
+                        "pairing-credential".to_string(),
+                    ]
+                } else {
+                    Vec::new()
+                },
+                session_methods: if self.auth.required() {
+                    vec![
+                        "bearer-access-token".to_string(),
+                        "websocket-ticket".to_string(),
+                    ]
+                } else {
+                    vec!["development-anonymous".to_string()]
+                },
+            },
+            endpoints: vec![AdvertisedEndpoint {
+                key: reachability.clone(),
+                http_url,
+                websocket_url,
+                is_default: true,
+                reachability,
+            }],
         }
     }
 
@@ -2223,6 +2439,7 @@ impl ServerState {
             ready: lifecycle == ServerLifecycle::Ready,
             lifecycle,
             server_id: self.info.server_id.clone(),
+            environment_id: self.info.environment_id.clone(),
             protocol_version: self.info.protocol_version,
         }
     }
@@ -2233,6 +2450,7 @@ impl ServerState {
             ready: lifecycle == ServerLifecycle::Ready,
             lifecycle,
             server_id: self.info.server_id.clone(),
+            environment_id: self.info.environment_id.clone(),
             protocol_version: self.info.protocol_version,
             uptime_seconds: self
                 .started_at
@@ -2326,7 +2544,7 @@ fn load_startup_state(config: &ServerConfig) -> Result<StartupState, String> {
                 && !identity.server_id.trim().is_empty()
         })
         .map(|identity| identity.server_id)
-        .unwrap_or_else(generate_server_id);
+        .unwrap_or_else(generate_environment_id);
     let identity = PersistedServerIdentity {
         schema_version: PERSISTENCE_SCHEMA_VERSION,
         server_id: server_id.clone(),
@@ -2620,12 +2838,32 @@ fn resolve_web_dir(config: &ServerConfig) -> Result<Option<PathBuf>, String> {
     Ok(None)
 }
 
-fn generate_server_id() -> String {
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or(Duration::ZERO)
-        .as_nanos();
-    format!("gitgui-{}-{timestamp}", std::process::id())
+fn generate_environment_id() -> String {
+    uuid::Uuid::new_v4().to_string()
+}
+
+fn default_server_data_dir() -> Option<PathBuf> {
+    if cfg!(target_os = "windows") {
+        return env::var_os("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .map(|path| path.join("GitGui").join("server"));
+    }
+    if cfg!(target_os = "macos") {
+        return env::var_os("HOME").map(PathBuf::from).map(|path| {
+            path.join("Library")
+                .join("Application Support")
+                .join("GitGui")
+                .join("server")
+        });
+    }
+    env::var_os("XDG_STATE_HOME")
+        .map(PathBuf::from)
+        .or_else(|| {
+            env::var_os("HOME")
+                .map(PathBuf::from)
+                .map(|path| path.join(".local").join("state"))
+        })
+        .map(|path| path.join("gitgui"))
 }
 
 fn implemented_capabilities() -> Vec<String> {
@@ -2700,12 +2938,8 @@ fn create_repository_at(
         }
     })?;
 
-    run_init_repository(
-        &root.display().to_string(),
-        initial_branch,
-        initialize_lfs,
-    )
-    .map_err(CreateRepositoryError::Git)?;
+    run_init_repository(&root.display().to_string(), initial_branch, initialize_lfs)
+        .map_err(CreateRepositoryError::Git)?;
     let root = canonicalize_path(&root.display().to_string());
     let snapshot = load_core_repository(&root).map_err(CreateRepositoryError::Git)?;
     let candidate = ConfiguredRepository {
@@ -2833,11 +3067,7 @@ fn protocol_graph(graph: CoreCommitGraph) -> ProtocolCommitGraph {
             .into_iter()
             .map(protocol_graph_commit)
             .collect(),
-        edges: graph
-            .edges
-            .into_iter()
-            .map(protocol_graph_edge)
-            .collect(),
+        edges: graph.edges.into_iter().map(protocol_graph_edge).collect(),
         width: graph.width,
         head_lane: graph.head_lane,
     }
@@ -3076,15 +3306,13 @@ fn log_bind_address(local_addr: SocketAddr, config: &ServerConfig) {
     info!(address = %local_addr, "GitGui server listening");
 }
 
-fn constant_time_equal(expected: &[u8], supplied: &[u8]) -> bool {
-    let mut difference = expected.len() ^ supplied.len();
-    let length = expected.len().max(supplied.len());
-    for index in 0..length {
-        difference |= usize::from(
-            expected.get(index).copied().unwrap_or(0) ^ supplied.get(index).copied().unwrap_or(0),
-        );
-    }
-    difference == 0
+fn environment_label() -> String {
+    let host = env::var("COMPUTERNAME")
+        .or_else(|_| env::var("HOSTNAME"))
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "This computer".to_string());
+    format!("GitGui on {host}")
 }
 
 fn emit_ready_line(local_addr: SocketAddr) {
@@ -3138,12 +3366,32 @@ mod tests {
     use super::*;
 
     #[test]
+    fn environment_identity_is_a_persisted_uuid() {
+        let data_dir = env::temp_dir().join(format!(
+            "gitgui-environment-id-test-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let mut first_config = ServerConfig::default();
+        first_config.data_dir = Some(data_dir.clone());
+        let first = load_startup_state(&first_config).expect("first startup state");
+        uuid::Uuid::parse_str(&first.server_id).expect("environment ID is a UUID");
+
+        let mut second_config = ServerConfig::default();
+        second_config.data_dir = Some(data_dir.clone());
+        let second = load_startup_state(&second_config).expect("second startup state");
+        assert_eq!(first.server_id, second.server_id);
+
+        fs::remove_dir_all(data_dir).expect("remove isolated test state");
+    }
+
+    #[test]
     fn creates_and_loads_empty_repository() {
         let parent = env::temp_dir().join(format!(
             "gitgui-create-test-{}-{}",
             std::process::id(),
             SystemTime::now()
-                .duration_since(UNIX_EPOCH)
+                .duration_since(std::time::UNIX_EPOCH)
                 .expect("system clock should be after Unix epoch")
                 .as_nanos()
         ));

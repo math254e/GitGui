@@ -1,0 +1,10 @@
+{
+  "name": "@gitgui/contracts",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/protocol.ts",
+    "./desktop": "./src/desktop.ts"
+  }
+}

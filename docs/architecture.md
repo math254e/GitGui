@@ -1,41 +1,260 @@
-# Architecture
+# GitGui architecture
 
-> This document describes the currently implemented architecture. The migration target is specified in [t3-architecture-reference.md](t3-architecture-reference.md), with implementation tasks in [rearchitecture-plan.md](rearchitecture-plan.md).
+## Target shape
 
-GitGui is structured as a desktop UI over the system Git executable. The application does not implement Git storage, refs, merge logic, or object parsing itself.
-
-## Frontend Responsibilities
-
-- Render repository state
-- Handle user input
-- Present commit history and file changes
-- Integrate future UI tools such as Monaco and graph rendering
-
-## Backend Responsibilities
-
-- Execute Git commands through the system `git` binary
-- Parse machine-readable Git output
-- Return typed data to the frontend
-- Own repository state and future graph layout logic
-
-## Data Flow
+GitGui uses the same fundamental process boundary as T3 Code, translated from Node/React to Rust/Svelte:
 
 ```text
-SvelteKit
-  -> Tauri invoke
-  -> Rust command handler
-  -> Git service
-  -> Git CLI
+                           one HTTP/WebSocket connection
+SvelteKit client runtime  <----------------------------->  Rust gitgui-server
+        ^                                                        |
+        |                                                        v
+        |                                                   gitgui-core
+        |                                                        |
+        |                                                        v
+        |                                                installed git + filesystem
+        |
+Electron main process
+  - loads the web client
+  - supervises the primary local server
+  - stores desktop credentials and connection metadata
+  - manages SSH sessions and port forwards
+  - owns native dialogs, lifecycle, and updates
 ```
 
-The frontend calls Tauri commands such as `load_repository`. Rust validates the path, detects the repository root, loads status and commits, then returns a `RepositorySnapshot`.
+The Rust server is the application backend. Electron is a thin desktop host, not a second backend and not a proxy for ordinary repository traffic. The Svelte client never runs Git commands or accesses repositories directly.
 
-## Future Graph Engine
+This is the implemented repository architecture. Electron is the only desktop
+shell; the Rust server remains independently runnable and the browser client
+uses the same connection runtime without Electron.
 
-The graph engine should live in Rust and emit frontend-friendly structures such as `GraphCommit` and `GraphEdge`. The UI should render those structures without knowing Git CLI details.
+## Source of truth
 
-## Planned Direction
+For frontend/backend separation, Electron responsibilities, environments, connection supervision, authentication, reconnect behavior, and SSH, inspect the current local T3 Code checkout before designing or changing those systems:
 
-The current direct Tauri invocation path will move toward a T3-inspired client/host model. Rust remains the backend. A separate Rust GitGui server will expose HTTP/WebSocket transport, readiness, a typed protocol, ordered server pushes, and host/repository catalog state. Tauri remains the desktop shell that manages the local server, while a shared client runtime connects the SvelteKit UI to local or remote environments.
+```text
+D:\GitHub\PictureTagingApp.references\t3code
+```
 
-A hosted SvelteKit client and direct remote connections come before any relay. Convex is not selected for the relay and will only be reconsidered later for control-plane metadata.
+The primary references are:
+
+- `docs/internals/workspace-layout.md`
+- `docs/internals/connection-runtime.md`
+- `docs/internals/remote.md`
+- `docs/internals/environment-auth.md`
+- `apps/desktop`
+- `packages/client-runtime`
+- `packages/ssh`
+
+Copy T3 Code's concepts, terminology, layering, and infrastructure where they apply to these concerns. Translate its server implementation to Rust and its UI integration to Svelte. Do not copy its product model or VCS implementation; GitGui's Git behavior is designed separately.
+
+## Ownership boundaries
+
+### Rust server
+
+`gitgui-server` runs independently of Electron and owns:
+
+- stable backend/environment identity;
+- authentication and authorization;
+- the repository catalog and filesystem paths;
+- protocol request dispatch and ordered events;
+- repository watching and cache invalidation;
+- serving the hosted client when configured;
+- readiness, health, version, and capability reporting.
+
+### Rust Git core
+
+`gitgui-core` owns:
+
+- execution of the installed Git executable;
+- repository discovery and validation;
+- parsing untrusted Git output;
+- status, history, diff, graph, branch, remote, and mutation behavior;
+- domain caches that are valid within one backend environment.
+
+### Protocol
+
+`gitgui-protocol` is the canonical wire contract. Rust types generate the browser-safe TypeScript contracts consumed by the client. Desktop IPC contracts are separate because they describe Electron capabilities, not Git RPC.
+
+### Svelte client
+
+The client owns presentation and client-local workspace state:
+
+- open tabs and ordering;
+- active environment and repository selection;
+- recents and layout preferences;
+- query cache and optimistic UI state;
+- rendering and user interaction.
+
+It reaches Git and repository state only through the shared client runtime. Components and routes do not own sockets, retries, credentials, or SSH behavior. Desktop-only settings consume only the narrow typed preload capabilities.
+
+### Electron
+
+Electron owns desktop-only capabilities:
+
+- locating, packaging, launching, supervising, and stopping the local Rust server;
+- safely delivering the local bootstrap credential;
+- exposing the primary environment registration to the renderer;
+- encrypted credential and connection-catalog persistence;
+- native folder dialogs and operating-system integration;
+- SSH host discovery, prompts, remote server launch/reuse, tunnels, and restoration;
+- desktop lifecycle, deep links, updates, and window management.
+
+Normal GitGui HTTP/WebSocket requests go directly from the renderer's client runtime to the selected server. They do not pass through Electron IPC.
+
+## Environment and connection model
+
+An environment is one running GitGui backend using one persistent state directory. Its stable UUID `EnvironmentId` is generated and persisted by the backend, then returned in the environment descriptor and protocol welcome. CLI runs use a per-user data directory by default; `--ephemeral` is the explicit opt-out. Changing an address or rebuilding an SSH tunnel does not create a new environment identity.
+
+The client stores connection information separately from backend identity:
+
+- `ConnectionTarget` describes how an environment may be reached.
+- `ConnectionProfile` stores non-secret user configuration.
+- `ConnectionCredential` stores secret authentication material.
+- `ConnectionRegistration` associates a known environment with target/profile data.
+- `PreparedConnection` is the resolver's temporary, connectable result.
+
+Initial targets mirror T3's useful connection categories:
+
+- `PrimaryConnectionTarget` for Electron's managed local backend.
+- `BearerConnectionTarget` for a directly reachable authenticated backend.
+- `SshConnectionTarget` for an Electron-managed SSH bridge.
+
+Tailscale is an ordinary directly reachable endpoint, normally represented by a bearer target. A relay target is added only when a relay actually exists. “Hosted web” describes a client surface, not a connection target.
+
+## Client connection runtime
+
+The browser-safe runtime follows T3 Code's layering:
+
+```text
+EnvironmentRegistry
+  -> one EnvironmentSupervisor per known environment
+     -> ConnectionDriver
+        -> ConnectionResolver
+        -> RpcSessionFactory
+```
+
+- `ConnectionResolver` converts a target into a prepared endpoint and authentication setup. For SSH it asks the Electron platform adapter to ensure the bridge.
+- `ConnectionDriver` performs one connection cycle and reports preparation, opening, and synchronization progress.
+- `RpcSessionFactory` creates exactly one HTTP/WebSocket session and never retries.
+- `EnvironmentSupervisor` is the sole owner of retry, offline, blocked, wakeup, and replacement-session behavior.
+- `EnvironmentRegistry` owns known registrations and one scoped supervisor per environment.
+
+The core runtime should be framework-independent TypeScript. Svelte gets a thin store/context adapter mounted once at the application root. Electron and hosted browser behavior are supplied through platform adapters.
+
+Supervisor state is explicit:
+
+```text
+desired, network, phase, stage, attempt, generation, lastFailure, retryAt
+```
+
+Required behavior:
+
+- transient failures retry indefinitely with capped backoff;
+- authentication, configuration, permission, and unsupported-version failures become blocked until external input changes;
+- going offline releases the active session without consuming retry attempts;
+- an involuntary disconnect retains the environment registration and cached UI state;
+- foreground/wakeup probes an active session and reconnects if stale;
+- a stable connection resets the retry counter;
+- explicit environment removal disposes its supervisor, session, registration, credentials, cache, and client workspace state;
+- queries revalidate when the session generation changes;
+- durable subscriptions switch to the replacement session;
+- mutations resolve the current session at execution time.
+
+No route or component implements its own retry loop.
+
+## Authentication and transport
+
+Loopback is not authentication. The local and remote protocols use the same authenticated session model.
+
+Recommended bootstrap flow, adapted from T3 Code:
+
+1. Electron creates an unguessable bootstrap credential.
+2. Electron passes it to the Rust server through a dedicated inherited pipe or file descriptor, not command-line arguments or logs.
+3. The client exchanges the bootstrap credential over HTTP for a scoped bearer session.
+4. The client requests a short-lived, single-use WebSocket ticket.
+5. Only that short-lived ticket appears in the WebSocket URL.
+6. Every RPC method checks the session's scopes.
+
+The target server surface includes:
+
+```text
+GET  /.well-known/gitgui/environment
+GET  /health
+GET  /ready
+POST /oauth/token
+GET  /api/auth/session
+POST /api/auth/websocket-ticket
+GET  /ws
+```
+
+The environment descriptor reports identity, label, server and protocol versions, platform, architecture, capabilities, supported authentication/session methods, and advertised endpoints.
+
+Initial GitGui scopes should express GitGui permissions, for example:
+
+- `repository:read`
+- `repository:operate`
+- `repository:manage`
+- `access:read`
+- `access:write`
+
+The authentication architecture is copied from T3 where useful; the permission vocabulary is GitGui-specific.
+
+## SSH-managed environments
+
+SSH remains entirely behind the Electron platform boundary:
+
+1. Resolve the SSH host using system OpenSSH configuration and known-host behavior.
+2. Connect and satisfy host-key/password prompts through Electron-owned UI.
+3. Detect, launch, or reuse a remote `gitgui-server` bound to remote loopback.
+4. Open a local port forward.
+5. verify readiness and the remote environment descriptor.
+6. Return local HTTP/WebSocket endpoints and authentication material to the normal connection resolver.
+7. Restore the bridge before the supervisor reconnects after a drop.
+
+The Svelte client and GitGui RPC protocol contain no SSH-specific Git behavior. Initially, the remote binary may be required on `PATH`; managed binary provisioning can be added behind the same SSH runner abstraction later.
+
+The SSH launcher records its remote PID, selected port, ownership marker, and
+state directory under `~/.gitgui`. A surviving managed process can therefore be
+reused after an Electron crash. Disconnect and orderly shutdown stop only a
+process carrying GitGui's `managed` marker. Unknown host keys require an
+Electron confirmation; changed host keys remain hard failures.
+
+## Target workspace
+
+```text
+apps/
+  web/                    SvelteKit application and Svelte adapters
+  desktop/                Electron main process, preload, and native services
+packages/
+  contracts/              generated server contracts and Electron bridge types
+  client-runtime/         framework-independent environment/connection runtime
+  ssh/                    Electron/Node SSH discovery, launch, and tunnels
+  shared/                 narrowly shared TypeScript utilities
+crates/
+  gitgui-core/             Git execution and domain behavior
+  gitgui-protocol/         canonical Rust wire contracts and type generation
+  gitgui-server/           standalone Axum backend
+```
+
+The JavaScript side uses npm workspaces and Rust uses a Cargo workspace. This is
+the active layout; the former root SvelteKit and Tauri desktop trees are no
+longer runtime paths.
+
+## Desktop lifecycle
+
+Electron enforces a single application instance, forwards validated `gitgui://`
+deep links over the narrow preload bridge, and owns update checks and
+installation. Packaged builds enable updates only when
+`GITGUI_UPDATE_FEED_URL` is a credential-free HTTPS URL. The renderer receives
+typed update state and cannot configure arbitrary feeds.
+
+## Security invariants
+
+- Treat repository paths, Git output, protocol input, and persisted metadata as untrusted.
+- Do not place durable bearer credentials or bootstrap secrets in URLs, logs, command arguments, or generated frontend bundles.
+- Keep `contextIsolation` enabled, `nodeIntegration` disabled, and Electron renderer sandboxing enabled.
+- Expose a narrow, typed preload bridge; do not expose Node or generic IPC.
+- Validate renderer origins and navigation targets.
+- Bind remotely launched servers to loopback behind the SSH tunnel unless the user explicitly configures direct exposure.
+- Authorize every server operation; do not rely only on connection establishment.

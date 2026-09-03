@@ -1,5 +1,10 @@
 # Git Graph Engine
 
+> Architecture note: this is a GitGui-owned domain design and is independent of
+> the desktop shell and connection runtime. Source paths in this document refer
+> to the current tree and should move mechanically when the Svelte client moves
+> under `apps/web`.
+
 This document describes the current commit-graph architecture and the behavior
 that future graph changes must preserve.
 

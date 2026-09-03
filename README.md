@@ -1,66 +1,98 @@
 # GitGui
 
-GitGui is a modern Git desktop GUI inspired by tools like GitKraken, built as a visual interface over the installed Git executable.
+GitGui is a Git desktop and web client built around one independently runnable Rust backend. The target application stack is:
 
-## Technology Stack
+- SvelteKit and TypeScript for the client.
+- Electron for the desktop shell.
+- Rust for Git behavior, repository state, the protocol, and the server.
+- The installed `git` executable for Git operations.
 
-- Tauri for the desktop shell
-- SvelteKit and TypeScript for the UI
-- Rust for repository logic and Git command execution
-- System Git CLI for all Git behavior
+The frontend/backend/desktop/remote architecture follows the current T3 Code implementation as closely as practical. T3 Code is the reference for application structure, environments, connection supervision, authentication, reconnects, Electron lifecycle, and SSH-managed remote backends. GitGui does not copy T3 Code's product or VCS behavior; Git semantics remain GitGui-owned.
 
 ## Architecture
 
 ```text
-SvelteKit UI (Tauri webview or browser)
-  -> GitGui Rust server (same-origin HTTP + WebSocket)
-  -> gitgui-core repository services
-  -> Git CLI
+SvelteKit client
+  -> shared client runtime
+     -> HTTP/WebSocket
+        -> gitgui-server
+           -> gitgui-core
+              -> installed git executable
+
+Electron desktop
+  -> loads the SvelteKit client
+  -> starts and supervises the primary local gitgui-server
+  -> manages credentials, native prompts, SSH, and local port forwards
 ```
 
-The Rust server can serve the compiled SvelteKit application alongside its API and WebSocket. This gives GitGui the same local-web shape as T3 Code: one process and one origin for the browser UI and the machine-local Git host. The Tauri desktop app still uses the same server as its local backend.
+One client talks to one server over HTTP/WebSocket. The server owns the actual host environment, repository catalog, filesystem access, and Git execution. Remote access changes how the client reaches that server; it does not move Git logic into Electron or the browser.
 
-The server-owned repository catalog is persisted when the server is started with `--data-dir` (the desktop app configures this automatically). Every client connected to that server sees the same catalog on the home page. Open repository tabs and their active selection remain client-local.
+The same client API is used for:
 
-To run the complete desktop app, use the single development command:
+- the primary backend managed by Electron;
+- a directly reachable authenticated backend, including one reached over Tailscale;
+- a backend reached through an Electron-managed SSH tunnel.
 
-```text
+See [architecture](docs/architecture.md), [T3 architecture reference](docs/t3-architecture-reference.md), and the [migration record](docs/rearchitecture-plan.md).
+
+## Architecture status
+
+The Electron/client-runtime migration is complete. The repository now uses the
+T3-shaped frontend/backend/desktop boundaries: the standalone Rust
+`gitgui-server` owns Git and server state, the SvelteKit client uses the shared
+TypeScript connection runtime, and Electron supervises the local server and
+owns SSH/native capabilities.
+
+The previous desktop shell and root-level SvelteKit layout have been removed. Local,
+direct/Tailscale, and Electron-managed SSH environments all enter the same
+HTTP/WebSocket client session model.
+
+## Current development commands
+
+These commands describe the completed workspace:
+
+```sh
+npm install
 npm run dev
 ```
 
-This starts the Vite frontend and Tauri desktop shell; Tauri starts and manages the local GitGui server for the desktop window. Use `npm run ui:dev` only when you intentionally want the frontend without the desktop shell.
+`npm run dev` launches the Electron shell, Vite client, and locally managed
+Rust server.
 
-While `npm run dev` is running, open `http://127.0.0.1:3774` in a regular browser. The Tauri-managed GitGui server redirects that request to the Vite client at `http://localhost:1420` with the local connection details, so the browser uses the same backend and repository catalog as the desktop window.
+For browser development with a separate server:
 
-To run the local browser version from the repository root:
+```sh
+npm run server:dev
+npm run ui:dev
+```
 
-```text
+Open `http://localhost:1420/?server=http://127.0.0.1:3774`.
+
+For combined browser mode:
+
+```sh
 npm run web:serve
 ```
 
-Then open `http://127.0.0.1:3774`. The standalone server auto-detects `./build/index.html`; use `--web-dir <path>` or `GITGUI_SERVER_WEB_DIR` when the compiled web app lives elsewhere.
+Open `http://127.0.0.1:3774`.
 
-The development web commands register the current repository automatically. To expose a different repository, run the standalone server with one or more explicit `--repository <path>` arguments.
+Run the Rust server independently with:
 
-Rust owns repository detection, command execution, parsing, state shaping, commit loading, and future graph algorithms. The frontend renders structured data returned by Rust and never shells out to Git directly.
+```sh
+cargo run -p gitgui-server -- --port 3774
+```
 
-The commit graph engine is intended to match Gitamine's graph behavior as closely as practical while keeping GitGui's own visual layer.
+Standalone CLI runs use a persistent per-user state directory so the backend's
+UUID `EnvironmentId` survives restarts. Use `--data-dir <path>` to select an
+isolated environment or `--ephemeral` for a deliberately temporary server.
 
-## Current Status
+Useful validation commands:
 
-The current application implements the repository viewer foundation:
-
-- Open a repository by path
-- Open repositories with the native folder picker
-- Restore open repository tabs per client
-- Detect the repository root
-- Show the current branch and ahead/behind counts
-- Show changed files from `git status --porcelain=v2 --branch`
-- Show recent commit history from `git log --all`
-- View changed files and commit files with Monaco-powered file and diff views
-
-## Planned Features
-
-- Gitamine-aligned commit graph rendering
-- Mismerge-powered conflict resolution
-- Commit, checkout, merge, and rebase workflows
+```sh
+npm run check
+npm run test
+npm run build
+cargo check --workspace
+npm run protocol:generate
+git diff --check
+```

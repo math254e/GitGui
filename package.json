@@ -1,44 +1,27 @@
 {
-  "name": "gitgui",
+  "name": "gitgui-workspace",
   "version": "0.1.0",
-  "description": "A modern Git GUI built on Tauri, SvelteKit, Rust, and the system Git executable.",
+  "private": true,
+  "description": "GitGui Electron, SvelteKit, TypeScript, and Rust workspace",
   "type": "module",
+  "workspaces": ["apps/*", "packages/*"],
   "scripts": {
-    "dev": "tauri dev",
-    "ui:dev": "vite dev",
-    "build": "vite build",
+    "dev": "node scripts/dev-electron.mjs",
+    "ui:dev": "npm run dev -w @gitgui/web",
+    "build": "npm run protocol:generate && npm run build -w @gitgui/web",
+    "desktop:build": "npm run build -w @gitgui/ssh && npm run build -w @gitgui/desktop",
     "server:dev": "cargo run -p gitgui-server -- --port 3774 --repository .",
-    "web:serve": "npm run build && cargo run -p gitgui-server -- --bind 127.0.0.1 --port 3774 --repository .",
+    "server:prepare": "node scripts/prepare-gitgui-server.mjs",
+    "web:serve": "npm run build && cargo run -p gitgui-server -- --bind 127.0.0.1 --port 3774 --repository . --web-dir apps/web/build",
     "protocol:generate": "cargo run -p gitgui-protocol --bin generate-typescript --quiet",
-    "preview": "vite preview",
-    "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
-    "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
-    "tauri": "tauri",
-    "tauri:prepare-sidecar": "node scripts/prepare-gitgui-server.mjs",
-    "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build"
+    "preview": "npm run preview -w @gitgui/web",
+    "check": "npm run protocol:generate && npm run check --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present && cargo test --workspace",
+    "electron:package": "npm run server:prepare -- --release && npm run build && npm run desktop:build && electron-builder --config apps/desktop/electron-builder.yml"
   },
   "license": "MIT",
-  "dependencies": {
-    "@lucide/svelte": "^1.17.0",
-    "@pierre/trees": "1.0.0-beta.6",
-    "@tauri-apps/api": "^2",
-    "@tauri-apps/plugin-dialog": "^2.7.1",
-    "@tauri-apps/plugin-opener": "^2",
-    "monaco-editor": "^0.55.1",
-    "svelte-sonner": "^1.2.1"
-  },
   "devDependencies": {
-    "@sveltejs/adapter-static": "^3.0.6",
-    "@sveltejs/kit": "^2.9.0",
-    "@sveltejs/vite-plugin-svelte": "^5.0.0",
-    "@tailwindcss/vite": "^4.3.0",
-    "@tauri-apps/cli": "^2",
-    "@types/node": "^25.9.1",
-    "svelte": "^5.0.0",
-    "svelte-check": "^4.0.0",
-    "tailwindcss": "^4.3.0",
-    "typescript": "~5.6.2",
-    "vite": "^6.0.3"
+    "electron-builder": "^26.0.12",
+    "typescript": "~5.6.2"
   }
 }

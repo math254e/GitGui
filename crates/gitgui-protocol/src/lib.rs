@@ -12,7 +12,30 @@ use serde_json::Value;
 use ts_rs::TS;
 
 /// Version of the public JSON protocol.
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
+
+/// Read repository catalogs, snapshots, status, history, and diffs.
+pub const SCOPE_REPOSITORY_READ: &str = "repository:read";
+/// Run Git operations that change repository state.
+pub const SCOPE_REPOSITORY_OPERATE: &str = "repository:operate";
+/// Add, create, and remove repositories from the host catalog.
+pub const SCOPE_REPOSITORY_MANAGE: &str = "repository:manage";
+/// Inspect the current authorized client session.
+pub const SCOPE_ACCESS_READ: &str = "access:read";
+/// Issue pairing credentials and revoke client access.
+pub const SCOPE_ACCESS_WRITE: &str = "access:write";
+
+/// All scopes granted by the desktop bootstrap credential.
+pub const ADMIN_SCOPES: &[&str] = &[
+    SCOPE_REPOSITORY_READ,
+    SCOPE_REPOSITORY_OPERATE,
+    SCOPE_REPOSITORY_MANAGE,
+    SCOPE_ACCESS_READ,
+    SCOPE_ACCESS_WRITE,
+];
+
+/// Scopes granted by an ordinary pairing credential.
+pub const CLIENT_SCOPES: &[&str] = &[SCOPE_REPOSITORY_READ, SCOPE_REPOSITORY_OPERATE];
 
 /// Canonical method for retrieving immutable server metadata.
 pub const METHOD_SERVER_GET_INFO: &str = "server.get_info";
@@ -129,6 +152,10 @@ pub const CAPABILITY_GIT_STASH_POP: &str = "git.stash.pop";
 
 /// Machine-readable protocol error codes.
 pub mod error_codes {
+    /// The current session is missing or expired.
+    pub const UNAUTHORIZED: &str = "unauthorized";
+    /// The current session lacks a required scope.
+    pub const FORBIDDEN: &str = "forbidden";
     /// The incoming WebSocket message was not a valid request envelope.
     pub const INVALID_REQUEST: &str = "invalid_request";
     /// The request method is not in the canonical method registry.
@@ -275,8 +302,10 @@ impl ResponseEnvelope {
 /// Welcome payload sent immediately after a WebSocket connection is accepted.
 #[derive(Clone, Debug, Deserialize, Serialize, TS)]
 pub struct WelcomePayload {
-    /// Stable identity of the running server process.
+    /// Deprecated compatibility alias for `environment_id`.
     pub server_id: String,
+    /// Stable identity persisted by the backend environment.
+    pub environment_id: String,
     /// Public protocol version understood by this server.
     pub protocol_version: u32,
     /// Server capabilities available to the client.
@@ -302,10 +331,30 @@ impl WelcomeMessage {
         protocol_version: u32,
         capabilities: Vec<String>,
     ) -> Self {
+        let server_id = server_id.into();
         Self {
             message_type: "welcome".to_string(),
             payload: WelcomePayload {
-                server_id: server_id.into(),
+                server_id: server_id.clone(),
+                environment_id: server_id,
+                protocol_version,
+                capabilities,
+            },
+        }
+    }
+
+    /// Builds a welcome message with canonical backend environment identity.
+    pub fn for_environment(
+        environment_id: impl Into<String>,
+        protocol_version: u32,
+        capabilities: Vec<String>,
+    ) -> Self {
+        let environment_id = environment_id.into();
+        Self {
+            message_type: "welcome".to_string(),
+            payload: WelcomePayload {
+                server_id: environment_id.clone(),
+                environment_id,
                 protocol_version,
                 capabilities,
             },
@@ -357,11 +406,104 @@ pub enum ServerLifecycle {
     Failed,
 }
 
+/// One concrete endpoint advertised by a GitGui environment.
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AdvertisedEndpoint {
+    /// Stable provider-specific key; unlike the URL this may survive network changes.
+    pub key: String,
+    /// HTTP base URL used for discovery, authentication, and other HTTP APIs.
+    pub http_url: String,
+    /// WebSocket base URL used for the GitGui RPC session.
+    pub websocket_url: String,
+    /// Whether the server recommends this route when it is reachable.
+    pub is_default: bool,
+    /// Reachability hint such as `loopback`, `lan`, `private`, `public`, or `tunnel`.
+    pub reachability: String,
+}
+
+/// Authentication capabilities advertised before a client connects.
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvironmentAuthPolicy {
+    /// Whether an authenticated session is required for WebSocket RPC.
+    pub required: bool,
+    /// Supported bootstrap/pairing exchange mechanisms.
+    pub bootstrap_methods: Vec<String>,
+    /// Supported authenticated session mechanisms.
+    pub session_methods: Vec<String>,
+}
+
+/// Stable, versioned description of one running backend environment.
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvironmentDescriptor {
+    /// Descriptor schema version, independent of the RPC protocol version.
+    pub schema_version: u32,
+    /// Stable identity persisted in the backend state directory.
+    pub environment_id: String,
+    /// User-facing default label for this environment.
+    pub label: String,
+    /// GitGui server package version.
+    pub server_version: String,
+    /// Public RPC protocol version.
+    pub protocol_version: u32,
+    /// Server operating-system family.
+    pub platform: String,
+    /// Server CPU architecture.
+    pub architecture: String,
+    /// Available protocol methods and server features.
+    pub capabilities: Vec<String>,
+    /// Authentication policy for this server.
+    pub auth: EnvironmentAuthPolicy,
+    /// Candidate routes authored by this server or its desktop host.
+    pub endpoints: Vec<AdvertisedEndpoint>,
+}
+
+/// OAuth-shaped token exchange response.
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+pub struct TokenExchangeResponse {
+    pub access_token: String,
+    pub issued_token_type: String,
+    pub token_type: String,
+    pub expires_in: u64,
+    pub scope: String,
+}
+
+/// Safe information about the current authenticated session.
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AuthSession {
+    pub session_id: String,
+    pub environment_id: String,
+    pub scopes: Vec<String>,
+    pub expires_at_unix_ms: u64,
+}
+
+/// A short-lived single-use credential for the WebSocket handshake.
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct WebSocketTicketResponse {
+    pub ticket: String,
+    pub expires_in: u64,
+}
+
+/// A one-time credential that can create an ordinary client session.
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PairingCredentialResponse {
+    pub credential: String,
+    pub expires_in: u64,
+    pub scopes: Vec<String>,
+}
+
 /// Immutable server metadata returned by `/info` and `server.get_info`.
 #[derive(Clone, Debug, Deserialize, Serialize, TS)]
 pub struct ServerInfo {
-    /// Stable identity of this server process.
+    /// Deprecated compatibility alias for `environment_id`.
     pub server_id: String,
+    /// Stable identity of the backend environment.
+    pub environment_id: String,
     /// Public protocol version.
     pub protocol_version: u32,
     /// GitGui server package version.
@@ -381,6 +523,8 @@ pub struct ServerReadiness {
     pub lifecycle: ServerLifecycle,
     /// Server identity for correlating readiness with a process.
     pub server_id: String,
+    /// Stable backend environment identity.
+    pub environment_id: String,
     /// Protocol version exposed by the server.
     pub protocol_version: u32,
 }
@@ -394,6 +538,8 @@ pub struct ServerStatus {
     pub ready: bool,
     /// Stable server identity.
     pub server_id: String,
+    /// Stable backend environment identity.
+    pub environment_id: String,
     /// Public protocol version.
     pub protocol_version: u32,
     /// Whole seconds since the server entered its running state.

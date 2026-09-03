@@ -5,24 +5,25 @@
 //! does not need to duplicate wire definitions by hand.
 
 use gitgui_protocol::{
-    ChangedFile, CommitFile, CommitFileDiff, CommitFileDiffParams, CommitFilesParams,
-    CommitFilesResult, CommitGraph, CommitInfo, CommitRef, CommitRefType, FileDiffResult,
-    GitBranch, GitBranchCreateParams, GitBranchCreateResult, GitBranchListParams,
-    GitBranchListResult, GitBranchSwitchParams, GitBranchSwitchResult, GitCommitParams,
-    GitCommitResult, GitFetchResult, GitPathsParams, GitPullResult, GitPushResult,
-    GitRepositoryParams, GitStageResult, GitStashPopParams, GitStashPopResult, GitStashPushParams,
-    GitStashPushResult, GitStatusParams, GitStatusResult, GitUnstageResult, GraphCommit, GraphEdge,
-    GraphEdgeType, OrderedEventEnvelope, PrefetchCommitDiffTarget, PrefetchCommitDiffsParams,
+    AdvertisedEndpoint, AuthSession, ChangedFile, CommitFile, CommitFileDiff, CommitFileDiffParams,
+    CommitFilesParams, CommitFilesResult, CommitGraph, CommitInfo, CommitRef, CommitRefType,
+    EnvironmentAuthPolicy, EnvironmentDescriptor, FileDiffResult, GitBranch, GitBranchCreateParams,
+    GitBranchCreateResult, GitBranchListParams, GitBranchListResult, GitBranchSwitchParams,
+    GitBranchSwitchResult, GitCommitParams, GitCommitResult, GitFetchResult, GitPathsParams,
+    GitPullResult, GitPushResult, GitRepositoryParams, GitStageResult, GitStashPopParams,
+    GitStashPopResult, GitStashPushParams, GitStashPushResult, GitStatusParams, GitStatusResult,
+    GitUnstageResult, GraphCommit, GraphEdge, GraphEdgeType, OrderedEventEnvelope,
+    PairingCredentialResponse, PrefetchCommitDiffTarget, PrefetchCommitDiffsParams,
     PrefetchCommitDiffsResult, PrefetchCommitFilesParams, PrefetchCommitFilesResult, ProtocolError,
     ProtocolErrorMessage, RepositoriesCreateParams, RepositoriesCreateResult,
     RepositoriesListResult, RepositoriesOpenParams, RepositoriesOpenResult,
     RepositoriesRefreshParams, RepositoriesRefreshResult, RepositoriesRemoveParams,
-    RepositoriesRemoveResult, RepositoryInfo, RepositoryRefreshItem,
-    RepositoryGraphParams, RepositoryGraphResult, RepositorySnapshot, RepositorySnapshotParams,
-    RepositorySnapshotResult, RepositoryStatus,
-    RepositorySummary, RequestEnvelope, ResponseEnvelope, ResponseErrorEnvelope,
+    RepositoriesRemoveResult, RepositoryGraphParams, RepositoryGraphResult, RepositoryInfo,
+    RepositoryRefreshItem, RepositorySnapshot, RepositorySnapshotParams, RepositorySnapshotResult,
+    RepositoryStatus, RepositorySummary, RequestEnvelope, ResponseEnvelope, ResponseErrorEnvelope,
     ResponseSuccessEnvelope, ServerInfo, ServerLifecycle, ServerReadiness, ServerStatus, StashInfo,
-    WelcomeMessage, WelcomePayload, WorkingTreeFileDiffParams,
+    TokenExchangeResponse, WebSocketTicketResponse, WelcomeMessage, WelcomePayload,
+    WorkingTreeFileDiffParams,
 };
 use std::{
     fs, io,
@@ -40,7 +41,7 @@ export type JsonValue = null | boolean | number | string | JsonValue[] | { [key:
 "#;
 
 fn main() -> io::Result<()> {
-    let output_path = repository_root().join("src/lib/generated/protocol.ts");
+    let output_path = repository_root().join("packages/contracts/src/protocol.ts");
     // These values are serialized as JSON numbers by serde_json and are
     // intentionally represented as browser numbers in this first protocol.
     let config = Config::default().with_large_int("number");
@@ -57,6 +58,13 @@ fn main() -> io::Result<()> {
         <ServerInfo as TS>::decl(&config),
         <ServerReadiness as TS>::decl(&config),
         <ServerStatus as TS>::decl(&config),
+        <AdvertisedEndpoint as TS>::decl(&config),
+        <EnvironmentAuthPolicy as TS>::decl(&config),
+        <EnvironmentDescriptor as TS>::decl(&config),
+        <TokenExchangeResponse as TS>::decl(&config),
+        <AuthSession as TS>::decl(&config),
+        <WebSocketTicketResponse as TS>::decl(&config),
+        <PairingCredentialResponse as TS>::decl(&config),
         <RepositorySummary as TS>::decl(&config),
         <RepositoriesListResult as TS>::decl(&config),
         <RepositoriesOpenParams as TS>::decl(&config),
