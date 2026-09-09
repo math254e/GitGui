@@ -1,6 +1,7 @@
 <script lang="ts">
   import { ChevronRight } from "@lucide/svelte";
   import BranchTree from "$lib/components/BranchTree.svelte";
+  import WorktreeTree from "$lib/components/WorktreeTree.svelte";
   import type { CommitInfo, CommitRef, RepositorySnapshot, StashInfo } from "$lib/types/repository";
 
   type Props = {
@@ -10,12 +11,14 @@
     visibleRefKeys?: ReadonlySet<string>;
     onSelectRef?: (ref: CommitRef) => void;
     onSwitchBranch?: (branchName: string) => void;
+    onSwitchWorktree?: (path: string) => void;
     onToggleRefs?: (refs: CommitRef[], visible: boolean) => void;
   };
 
   type SidebarSections = {
     LocalBranches: boolean;
     RemoteBranches: boolean;
+    Worktrees: boolean;
     Stashes: boolean;
   };
 
@@ -23,6 +26,7 @@
   const defaultOpen: SidebarSections = {
     LocalBranches: true,
     RemoteBranches: true,
+    Worktrees: true,
     Stashes: false,
   };
 
@@ -33,6 +37,7 @@
     visibleRefKeys = new Set<string>(),
     onSelectRef,
     onSwitchBranch,
+    onSwitchWorktree,
     onToggleRefs,
   }: Props = $props();
 
@@ -91,6 +96,7 @@
       return {
         LocalBranches: typeof value.LocalBranches === "boolean" ? value.LocalBranches : fallback.LocalBranches,
         RemoteBranches: typeof value.RemoteBranches === "boolean" ? value.RemoteBranches : fallback.RemoteBranches,
+        Worktrees: typeof value.Worktrees === "boolean" ? value.Worktrees : fallback.Worktrees,
         Stashes: typeof value.Stashes === "boolean" ? value.Stashes : fallback.Stashes,
       };
     } catch {
@@ -176,6 +182,31 @@
             />
           {:else}
             <p class="px-2 py-1 text-sm text-[var(--app-theme-text-subtle)]">No remote branches.</p>
+          {/if}
+        </div>
+      {/if}
+    </section>
+
+    <section class={`flex min-h-0 flex-col border-b border-[var(--app-theme-sidebar-border)] py-2 last:border-b-0 ${open.Worktrees ? 'flex-1' : 'flex-none'}`}>
+      <button
+        type="button"
+        onclick={() => toggle("Worktrees")}
+        class="group mb-1 inline-flex items-center gap-1 text-xs font-bold uppercase text-[var(--app-theme-sidebar-muted-foreground)] transition-colors hover:text-[var(--app-theme-accent-surface-foreground)]"
+      >
+        <ChevronRight
+          aria-hidden="true"
+          size={14}
+          strokeWidth={2.5}
+          class={`shrink-0 origin-center transition-transform duration-200 ${open.Worktrees ? 'rotate-90' : 'rotate-0'}`}
+        />
+        <span>Worktrees {snapshot ? `(${(snapshot.worktrees ?? []).length})` : ""}</span>
+      </button>
+      {#if open.Worktrees}
+        <div class="min-h-0 flex-1 overflow-auto">
+          {#if snapshot?.worktrees?.length}
+            <WorktreeTree worktrees={snapshot.worktrees} treeId="gitgui-worktrees" {onSwitchWorktree} />
+          {:else}
+            <p class="px-2 py-1 text-sm text-[var(--app-theme-text-subtle)]">No worktrees.</p>
           {/if}
         </div>
       {/if}

@@ -297,13 +297,21 @@ export type RepositorySummary = {
  */
 id: string,
 /**
+ * Display name of the main repository, shared by its linked worktrees.
+ */
+name: string,
+/**
  * Canonical path used to perform operations.
  */
 path: string,
 /**
  * Canonical Git repository root.
  */
-root: string, };
+root: string,
+/**
+ * Whether this entry is a linked Git worktree rather than the main worktree.
+ */
+isWorktree: boolean, };
 
 export type RepositoriesListResult = {
 /**
@@ -687,7 +695,11 @@ refs: Array<CommitRef>,
 /**
  * Local stash metadata for commits included in the history graph.
  */
-stashes: Array<StashInfo>, };
+stashes: Array<StashInfo>,
+/**
+ * Git worktrees attached to this repository.
+ */
+worktrees: Array<WorktreeInfo>, };
 
 export type CommitInfo = { hash: string, parents: Array<string>, author: string, timestamp: number, message: string, };
 
@@ -720,6 +732,24 @@ message: string,
  * Unix timestamp of the stash entry.
  */
 timestamp: number, };
+
+export type WorktreeInfo = {
+/**
+ * Filesystem path used to open this worktree.
+ */
+path: string,
+/**
+ * Commit currently checked out in this worktree.
+ */
+headOid: string | null,
+/**
+ * Local branch checked out in this worktree, if any.
+ */
+branch: string | null,
+/**
+ * Whether this is the worktree represented by the current snapshot.
+ */
+current: boolean, };
 
 export type CommitGraph = { commits: Array<GraphCommit>, edges: Array<GraphEdge>, width: number, headLane: number | null, };
 

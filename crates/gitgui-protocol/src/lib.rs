@@ -552,10 +552,14 @@ pub struct ServerStatus {
 pub struct RepositorySummary {
     /// Stable host-local repository identifier.
     pub id: String,
+    /// Display name of the main repository, shared by its linked worktrees.
+    pub name: String,
     /// Canonical path used to perform operations.
     pub path: String,
     /// Canonical Git repository root.
     pub root: String,
+    /// Whether this entry is a linked Git worktree rather than the main worktree.
+    pub is_worktree: bool,
 }
 
 /// Result of listing the repositories explicitly configured on a host.
@@ -1069,6 +1073,8 @@ pub struct RepositorySnapshot {
     pub refs: Vec<CommitRef>,
     /// Local stash metadata for commits included in the history graph.
     pub stashes: Vec<StashInfo>,
+    /// Git worktrees attached to this repository.
+    pub worktrees: Vec<WorktreeInfo>,
 }
 
 /// Commit metadata included in a repository snapshot.
@@ -1100,6 +1106,20 @@ pub struct StashInfo {
     pub message: String,
     /// Unix timestamp of the stash entry.
     pub timestamp: i64,
+}
+
+/// One Git worktree attached to the repository.
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct WorktreeInfo {
+    /// Filesystem path used to open this worktree.
+    pub path: String,
+    /// Commit currently checked out in this worktree.
+    pub head_oid: Option<String>,
+    /// Local branch checked out in this worktree, if any.
+    pub branch: Option<String>,
+    /// Whether this is the worktree represented by the current snapshot.
+    pub current: bool,
 }
 
 /// Layout and connections for the rendered commit graph.

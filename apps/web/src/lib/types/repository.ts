@@ -20,4 +20,5 @@ export type {
   RepositorySnapshot,
   RepositoryStatus,
   StashInfo,
+  WorktreeInfo,
 } from "@gitgui/contracts";

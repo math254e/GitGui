@@ -157,6 +157,12 @@ export class ClientWorkspace {
     return this.serializeStateOperation(() => this.openRepositoryPathOperation(path));
   }
 
+  /** Replace one open tab with another repository path without adding a tab. */
+  async switchRepositoryPath(path: string, repositoryId: string): Promise<ClientWorkspaceState> {
+    if (!path.trim()) throw new TypeError("Repository path cannot be empty");
+    return this.serializeStateOperation(() => this.switchRepositoryPathOperation(path, repositoryId));
+  }
+
   async createRepository(
     parentPath: string,
     name: string,
@@ -195,6 +201,55 @@ export class ClientWorkspace {
       const result = await this.client.openRepository(path);
       if (lifecycle !== this.lifecycleGeneration) return this.state;
       this.addHydratedRepository(result.repository, result.snapshot);
+      await this.persist();
+      return this.state;
+    } catch (error) {
+      if (lifecycle === this.lifecycleGeneration) this.update({ error: toWorkspaceError(error) });
+      throw error;
+    } finally {
+      if (lifecycle === this.lifecycleGeneration) this.update({ opening: false });
+    }
+  }
+
+  private async switchRepositoryPathOperation(path: string, repositoryId: string): Promise<ClientWorkspaceState> {
+    const replacedId = assertRepositoryId(repositoryId);
+    if (!this._state.openRepositoryIds.includes(replacedId)) {
+      throw new Error(`Repository is not open: ${replacedId}`);
+    }
+
+    const lifecycle = this.lifecycleGeneration;
+    this.update({ opening: true, error: undefined });
+    try {
+      const result = await this.client.openRepository(path);
+      if (lifecycle !== this.lifecycleGeneration) return this.state;
+
+      const replacementId = assertRepositoryId(result.repository.id);
+      const replacedIndex = this._state.openRepositoryIds.indexOf(replacedId);
+      const openRepositoryIds = this._state.openRepositoryIds.filter(
+        (id) => id !== replacedId && id !== replacementId,
+      );
+      openRepositoryIds.splice(Math.max(0, Math.min(replacedIndex, openRepositoryIds.length)), 0, replacementId);
+
+      const repositories = {
+        ...this._state.repositories,
+        [replacementId]: {
+          repository: result.repository,
+          snapshot: result.snapshot,
+          loading: false,
+          refreshing: false,
+        },
+      };
+      if (replacementId !== replacedId) {
+        delete repositories[replacedId];
+        this.requestGenerations.delete(replacedId);
+      }
+
+      this.replace({
+        openRepositoryIds,
+        repositories,
+        activeRepositoryId: replacementId,
+        recentRepositories: touchRecent(this._state.recentRepositories, replacementId, this.recentLimit),
+      });
       await this.persist();
       return this.state;
     } catch (error) {

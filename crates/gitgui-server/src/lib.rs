@@ -60,7 +60,8 @@ use gitgui_protocol::{
     RepositoryRefreshItem, RepositorySnapshot, RepositorySnapshotParams, RepositorySnapshotResult,
     RepositoryStatus as ProtocolRepositoryStatus, RepositorySummary, RequestEnvelope,
     ResponseEnvelope, ServerInfo, ServerLifecycle, ServerReadiness, ServerStatus,
-    StashInfo as ProtocolStashInfo, WelcomeMessage, CAPABILITY_GIT_BRANCH_CREATE,
+    StashInfo as ProtocolStashInfo, WelcomeMessage, WorktreeInfo as ProtocolWorktreeInfo,
+    CAPABILITY_GIT_BRANCH_CREATE,
     CAPABILITY_GIT_BRANCH_LIST, CAPABILITY_GIT_BRANCH_SWITCH, CAPABILITY_GIT_COMMIT,
     CAPABILITY_GIT_COMMIT_FILES, CAPABILITY_GIT_COMMIT_FILE_DIFF, CAPABILITY_GIT_FETCH,
     CAPABILITY_GIT_PREFETCH_COMMIT_DIFFS, CAPABILITY_GIT_PREFETCH_COMMIT_FILES,
@@ -2374,8 +2375,10 @@ impl ServerState {
             if let Some(existing) = repositories.iter_mut().find(|existing| {
                 path_key(&existing.summary.root) == path_key(&candidate.summary.root)
             }) {
+                existing.summary.name = candidate.summary.name.clone();
                 existing.summary.path = candidate.summary.path.clone();
                 existing.summary.root = candidate.summary.root.clone();
+                existing.summary.is_worktree = candidate.summary.is_worktree;
                 existing.operation_path = candidate.operation_path.clone();
                 existing.clone()
             } else {
@@ -2496,12 +2499,14 @@ impl PersistedRepository {
         Some(ConfiguredRepository {
             summary: RepositorySummary {
                 id: self.id,
+                name: repository_name(&root),
                 path: if self.path.trim().is_empty() {
                     root.clone()
                 } else {
                     canonicalize_path(&self.path)
                 },
                 root: root.clone(),
+                is_worktree: is_linked_worktree(&root),
             },
             operation_path: root,
         })
@@ -2622,8 +2627,10 @@ fn configured_from_repository_info(
     ConfiguredRepository {
         summary: RepositorySummary {
             id: stable_repository_id(&root),
+            name: repository_name(&root),
             path,
             root: root.clone(),
+            is_worktree: is_linked_worktree(&root),
         },
         operation_path: root,
     }
@@ -2641,7 +2648,9 @@ fn upsert_catalog_entry(
             || existing.summary.root != candidate.summary.root
             || existing.operation_path != candidate.operation_path;
         existing.summary.path = candidate.summary.path;
+        existing.summary.name = candidate.summary.name;
         existing.summary.root = candidate.summary.root;
+        existing.summary.is_worktree = candidate.summary.is_worktree;
         existing.operation_path = candidate.operation_path;
         return changed;
     }
@@ -2746,6 +2755,50 @@ fn canonicalize_path(path: &str) -> String {
         }
     });
     canonical.to_string_lossy().into_owned()
+}
+
+fn is_linked_worktree(root: &str) -> bool {
+    fs::metadata(Path::new(root).join(".git"))
+        .map(|metadata| metadata.is_file())
+        .unwrap_or(false)
+}
+
+fn repository_name(root: &str) -> String {
+    let root_path = Path::new(root);
+    let git_path = root_path.join(".git");
+    let main_root = if git_path.is_file() {
+        fs::read_to_string(&git_path)
+            .ok()
+            .and_then(|contents| {
+                contents
+                    .strip_prefix("gitdir:")
+                    .map(str::trim)
+                    .map(str::to_string)
+            })
+            .map(|git_dir| {
+                let git_dir = PathBuf::from(git_dir);
+                if git_dir.is_absolute() {
+                    git_dir
+                } else {
+                    root_path.join(git_dir)
+                }
+            })
+            .and_then(|git_dir| {
+                git_dir
+                    .parent()
+                    .and_then(Path::parent)
+                    .and_then(Path::parent)
+                    .map(Path::to_path_buf)
+            })
+            .unwrap_or_else(|| root_path.to_path_buf())
+    } else {
+        root_path.to_path_buf()
+    };
+
+    main_root
+        .file_name()
+        .and_then(|name| (!name.is_empty()).then(|| name.to_string_lossy().into_owned()))
+        .unwrap_or_else(|| root.to_string())
 }
 
 fn path_key(path: &str) -> String {
@@ -2909,8 +2962,10 @@ fn load_open_repository(
     let candidate = ConfiguredRepository {
         summary: RepositorySummary {
             id: stable_repository_id(&root),
+            name: repository_name(&root),
             path: canonicalize_path(&info.path),
             root: root.clone(),
+            is_worktree: is_linked_worktree(&root),
         },
         operation_path: root,
     };
@@ -2945,8 +3000,10 @@ fn create_repository_at(
     let candidate = ConfiguredRepository {
         summary: RepositorySummary {
             id: stable_repository_id(&root),
+            name: repository_name(&root),
             path: root.clone(),
             root: root.clone(),
+            is_worktree: is_linked_worktree(&root),
         },
         operation_path: root,
     };
@@ -3003,6 +3060,11 @@ fn protocol_snapshot(
             .into_iter()
             .map(protocol_stash_info)
             .collect(),
+        worktrees: snapshot
+            .worktrees
+            .into_iter()
+            .map(protocol_worktree_info)
+            .collect(),
     }
 }
 
@@ -3057,6 +3119,17 @@ fn protocol_stash_info(stash: gitgui_core::git::repository::StashInfo) -> Protoc
         branch: stash.branch,
         message: stash.message,
         timestamp: stash.timestamp,
+    }
+}
+
+fn protocol_worktree_info(
+    worktree: gitgui_core::git::repository::WorktreeInfo,
+) -> ProtocolWorktreeInfo {
+    ProtocolWorktreeInfo {
+        path: worktree.path,
+        head_oid: worktree.head_oid,
+        branch: worktree.branch,
+        current: worktree.current,
     }
 }
 

@@ -3,13 +3,14 @@
     id: string;
     title: string;
     root: string;
+    isWorktree: boolean;
     branch: string;
     error: string;
   };
 </script>
 
 <script lang="ts">
-  import { Home, Settings, X } from "@lucide/svelte";
+  import { Home, Settings, TreeDeciduous, X } from "@lucide/svelte";
 
   type Props = {
     activeView: "start" | "repo" | "settings" | "create";
@@ -62,7 +63,12 @@
         >
           <div class="flex h-full min-w-0 flex-1 items-center gap-2 px-3 text-left">
             <span class="min-w-0 flex-1">
-              <span class="block truncate text-sm font-semibold">{tab.title}</span>
+              <span class="flex min-w-0 items-center gap-1.5 truncate text-sm font-semibold">
+                {#if tab.isWorktree}
+                  <TreeDeciduous aria-hidden="true" class="shrink-0 text-[var(--app-theme-text-muted)]" size={14} />
+                {/if}
+                <span class="truncate">{tab.title}</span>
+              </span>
               <span class={`block truncate text-xs ${tab.error ? "text-[var(--app-theme-error)]" : "text-[var(--app-theme-text-subtle)]"}`}>
                 {tab.error || tab.branch}
               </span>

@@ -22,6 +22,7 @@ pub struct RepositorySnapshot {
     pub graph: CommitGraph,
     pub refs: Vec<CommitRef>,
     pub stashes: Vec<StashInfo>,
+    pub worktrees: Vec<WorktreeInfo>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -84,6 +85,15 @@ pub struct StashInfo {
     pub timestamp: i64,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorktreeInfo {
+    pub path: String,
+    pub head_oid: Option<String>,
+    pub branch: Option<String>,
+    pub current: bool,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct CommitRef {
@@ -128,6 +138,7 @@ pub fn load_repository(path: &str) -> Result<RepositorySnapshot, GitError> {
     // parents are Git implementation details. Keep the stash commit and omit
     // those helper commits before ordering and laying out the canonical graph.
     let (stashes, stash_helper_hashes) = load_stashes(root).unwrap_or_default();
+    let worktrees = load_worktrees(root)?;
     let commits = sort_commits(
         load_commits(root)?
             .into_iter()
@@ -142,6 +153,7 @@ pub fn load_repository(path: &str) -> Result<RepositorySnapshot, GitError> {
         graph,
         refs,
         stashes,
+        worktrees,
         commits,
         info,
     })
@@ -643,6 +655,73 @@ fn load_refs(root: &Path) -> Result<Vec<CommitRef>, GitError> {
     Ok(output.lines().filter_map(parse_commit_ref).collect())
 }
 
+fn load_worktrees(root: &Path) -> Result<Vec<WorktreeInfo>, GitError> {
+    let output = GitCommand::run(&["worktree", "list", "--porcelain"], Some(root))?;
+    Ok(parse_worktrees(&output, root))
+}
+
+fn parse_worktrees(output: &str, current_root: &Path) -> Vec<WorktreeInfo> {
+    let mut worktrees = Vec::new();
+    let mut current: Option<WorktreeInfo> = None;
+
+    for line in output.lines().chain(std::iter::once("")) {
+        if line.is_empty() {
+            if let Some(worktree) = current.take() {
+                worktrees.push(worktree);
+            }
+            continue;
+        }
+
+        if let Some(path) = line.strip_prefix("worktree ") {
+            if let Some(worktree) = current.take() {
+                worktrees.push(worktree);
+            }
+
+            let path = path.trim().to_string();
+            current = (!path.is_empty()).then(|| WorktreeInfo {
+                current: same_path(Path::new(&path), current_root),
+                path,
+                head_oid: None,
+                branch: None,
+            });
+            continue;
+        }
+
+        let Some(worktree) = current.as_mut() else {
+            continue;
+        };
+
+        if let Some(head_oid) = line.strip_prefix("HEAD ") {
+            let head_oid = head_oid.trim();
+            if !head_oid.is_empty() {
+                worktree.head_oid = Some(head_oid.to_string());
+            }
+        } else if let Some(branch) = line.strip_prefix("branch ") {
+            let branch = branch.trim().strip_prefix("refs/heads/").unwrap_or(branch.trim());
+            if !branch.is_empty() {
+                worktree.branch = Some(branch.to_string());
+            }
+        }
+    }
+
+    worktrees
+}
+
+fn same_path(left: &Path, right: &Path) -> bool {
+    let left = fs::canonicalize(left).unwrap_or_else(|_| left.to_path_buf());
+    let right = fs::canonicalize(right).unwrap_or_else(|_| right.to_path_buf());
+
+    #[cfg(windows)]
+    {
+        left.to_string_lossy().eq_ignore_ascii_case(&right.to_string_lossy())
+    }
+
+    #[cfg(not(windows))]
+    {
+        left == right
+    }
+}
+
 fn parse_commit_ref(line: &str) -> Option<CommitRef> {
     let mut parts = line.split('\t');
     let name = parts.next()?.trim();
@@ -994,6 +1073,24 @@ mod tests {
         assert_eq!(parsed.short_name, "v1.0.0");
         assert_eq!(parsed.target, "abc123");
         assert_eq!(parsed.ref_type, CommitRefType::Tag);
+    }
+
+    #[test]
+    fn parses_worktree_porcelain_output() {
+        let parsed = parse_worktrees(
+            "worktree /repo\nHEAD abc123\nbranch refs/heads/main\n\nworktree /repo-feature\nHEAD def456\ndetached\n",
+            Path::new("/repo"),
+        );
+
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed[0].path, "/repo");
+        assert_eq!(parsed[0].head_oid.as_deref(), Some("abc123"));
+        assert_eq!(parsed[0].branch.as_deref(), Some("main"));
+        assert!(parsed[0].current);
+        assert_eq!(parsed[1].path, "/repo-feature");
+        assert_eq!(parsed[1].head_oid.as_deref(), Some("def456"));
+        assert_eq!(parsed[1].branch, None);
+        assert!(!parsed[1].current);
     }
 
     #[test]

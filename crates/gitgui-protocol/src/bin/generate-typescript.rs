@@ -23,7 +23,7 @@ use gitgui_protocol::{
     RepositoryStatus, RepositorySummary, RequestEnvelope, ResponseEnvelope, ResponseErrorEnvelope,
     ResponseSuccessEnvelope, ServerInfo, ServerLifecycle, ServerReadiness, ServerStatus, StashInfo,
     TokenExchangeResponse, WebSocketTicketResponse, WelcomeMessage, WelcomePayload,
-    WorkingTreeFileDiffParams,
+    WorktreeInfo, WorkingTreeFileDiffParams,
 };
 use std::{
     fs, io,
@@ -118,6 +118,7 @@ fn main() -> io::Result<()> {
         <RepositorySnapshot as TS>::decl(&config),
         <CommitInfo as TS>::decl(&config),
         <StashInfo as TS>::decl(&config),
+        <WorktreeInfo as TS>::decl(&config),
         <CommitGraph as TS>::decl(&config),
         <GraphCommit as TS>::decl(&config),
         <GraphEdge as TS>::decl(&config),

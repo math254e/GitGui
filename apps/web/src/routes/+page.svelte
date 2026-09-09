@@ -43,6 +43,7 @@
     id: string;
     title: string;
     root: string;
+    isWorktree: boolean;
     snapshot?: RepositorySnapshot;
     error?: string | null;
     loading: boolean;
@@ -229,6 +230,7 @@
       id: repo.id,
       title: repo.title,
       root: repo.root,
+      isWorktree: repo.isWorktree,
       branch: repo.snapshot ? repo.snapshot.status.currentBranch ?? "Detached HEAD" : "",
       error: repo.error ?? "",
     })),
@@ -641,6 +643,7 @@
         id: repositoryState.repository.id,
         title: repositoryTitle(repositoryState.repository),
         root: repositoryState.repository.root,
+        isWorktree: repositoryState.repository.isWorktree === true,
         snapshot,
         error: repositoryState.error?.message ?? null,
         loading: repositoryState.loading || repositoryState.refreshing,
@@ -752,27 +755,39 @@
     repositories: RepositorySummary[],
     state: ClientWorkspaceState | null,
   ): RepositorySummary[] {
-    const merged = new Map(repositories.map((repository) => [repository.id, repository]));
+    const merged = new Map(
+      repositories
+        .filter((repository) => repository.isWorktree !== true)
+        .map((repository) => [repository.id, repository]),
+    );
 
     for (const repositoryState of state ? Object.values(state.repositories) : []) {
-      merged.set(repositoryState.repository.id, repositoryState.repository);
+      if (repositoryState.repository.isWorktree !== true) {
+        merged.set(repositoryState.repository.id, repositoryState.repository);
+      }
     }
 
     return [...merged.values()];
   }
 
   function repositoryTitle(repository: RepositorySummary) {
+    if (repository.name) {
+      return repository.name;
+    }
+
     const normalizedRoot = repository.root.replace(/[\\/]+$/, "");
     const separator = Math.max(normalizedRoot.lastIndexOf("/"), normalizedRoot.lastIndexOf("\\"));
     return normalizedRoot.slice(separator + 1) || repository.root;
   }
 
   const homeRepositories = $derived<RepositoryListItem[]>(
-    repositoryCatalog.map((repository) => ({
-      repositoryId: repository.id,
-      root: repository.root,
-      title: repositoryTitle(repository),
-    })),
+    repositoryCatalog
+      .filter((repository) => repository.isWorktree !== true)
+      .map((repository) => ({
+        repositoryId: repository.id,
+        root: repository.root,
+        title: repositoryTitle(repository),
+      })),
   );
 
   function initialGraphSelection(nextSnapshot: RepositorySnapshot): SelectedGraphItem | null {
@@ -932,6 +947,15 @@
           merge: readBranchSwitchMergePreference(),
         }),
     });
+  }
+
+  function switchWorktree(path: string) {
+    const repositoryId = activeRepoId;
+    if (!path.trim() || !repositoryId || !clientWorkspace || operationPending) {
+      return;
+    }
+
+    void runWorkspaceCommand(() => requireWorkspace().switchRepositoryPath(path, repositoryId));
   }
 
   function finishScrollToCommit(commandId: number) {
@@ -1436,6 +1460,7 @@
             visibleRefKeys={visibleGraphRefKeys}
             onSelectRef={selectRef}
             onSwitchBranch={switchBranch}
+            onSwitchWorktree={switchWorktree}
             onToggleRefs={toggleGraphRefs}
           />
           <div class="h-full min-h-0">
@@ -1456,6 +1481,7 @@
             stateKey={sidebarStateKey}
             visibleRefKeys={visibleGraphRefKeys}
             onSelectRef={selectRef}
+            onSwitchWorktree={switchWorktree}
             onToggleRefs={toggleGraphRefs}
           />
           <div class="flex min-h-0 flex-col overflow-hidden">
@@ -1544,6 +1570,7 @@
                 visibleRefKeys={visibleGraphRefKeys}
                 onSelectRef={selectRef}
                 onSwitchBranch={switchBranch}
+                onSwitchWorktree={switchWorktree}
                 onToggleRefs={toggleGraphRefs}
               />
             {/if}
