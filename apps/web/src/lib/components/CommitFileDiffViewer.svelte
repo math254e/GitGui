@@ -1,7 +1,7 @@
 <script lang="ts">
   import { X } from "@lucide/svelte";
-  import { onMount, tick } from "svelte";
-  import type { CodeView, FileContents, FileDiffMetadata } from "@pierre/diffs";
+  import { onMount, untrack } from "svelte";
+  import type { CodeView, DiffLineAnnotation, FileContents, FileDiffMetadata } from "@pierre/diffs";
   import type { GitHunkPreview, GitApplyHunksParams } from "@gitgui/contracts";
   import type { GitGuiClient } from "@gitgui/client-runtime";
   import { DIFF_VIEW_UNSAFE_CSS, resolveDiffThemeName } from "$lib/theme/diffTheme";
@@ -9,6 +9,7 @@
   import type { ThemeAppearance } from "$lib/theme/types";
   import type { CommitFile, CommitFileDiff, CommitInfo, RepositorySnapshot } from "$lib/types/repository";
 
+  type HunkAnnotation = { id: number; header: string; request: number; revision: string };
   type Diffs = typeof import("@pierre/diffs");
   type DiffViewMode = "hunks" | "inline" | "split";
   type ContentViewMode = "diff" | "file";
@@ -37,7 +38,7 @@
 
   let { client, repositoryId, snapshot, diffSource, selectedCommit, selectedFile, onClose, onApplyHunks, pending = false }: Props = $props();
   let viewerContainer: HTMLDivElement;
-  let renderer = $state.raw<{ library: Diffs; viewer: CodeView } | null>(null);
+  let renderer = $state.raw<{ library: Diffs; viewer: CodeView<HunkAnnotation> } | null>(null);
   let parsedDiff: { source: CommitFileDiff; metadata: FileDiffMetadata } | null = null;
   let diff = $state<CommitFileDiff | null>(null);
   let hunkPreview = $state<GitHunkPreview | null>(null);
@@ -75,6 +76,21 @@
     renderView(renderer, diff, contentViewMode, diffViewMode, wordWrap, appearance);
   });
 
+  $effect(() => {
+    const selection = selectedHunks;
+    const disabled = pending || loading || Boolean(renderError) || !onApplyHunks;
+    for (const row of viewerContainer?.querySelectorAll<HTMLElement>("[data-hunk-action]") ?? []) {
+      const input = row.querySelector<HTMLInputElement>("input");
+      const button = row.querySelector<HTMLButtonElement>("button");
+      // Update slotted controls in place so selecting a hunk keeps focus.
+      if (input) {
+        input.checked = selection.includes(Number(row.dataset.hunkAction));
+        input.disabled = disabled;
+      }
+      if (button) button.disabled = disabled;
+    }
+  });
+
   onMount(() => {
     appearance = themeStore.getSnapshot().resolvedAppearance;
     const unsubscribeTheme = themeStore.subscribe((snapshot) => {
@@ -99,7 +115,7 @@
         return;
       }
 
-      const viewer = new library.CodeView();
+      const viewer = new library.CodeView<HunkAnnotation>();
       viewer.setup(viewerContainer);
       renderer = { library, viewer };
     } catch (caught) {
@@ -235,6 +251,7 @@
         overflow: wrap ? "wrap" : "scroll",
         enableLineSelection: true,
         lineHoverHighlight: "both",
+        renderAnnotation: (annotation) => untrack(() => renderHunkAction(annotation.metadata)),
         // These measurements match the shared T3 separator stylesheet.
         itemMetrics: { hunkSeparatorHeight: 24, spacing: 0, paddingTop: 0, paddingBottom: 8 },
         layout: { paddingTop: 0, paddingBottom: 0, gap: 0 },
@@ -275,7 +292,19 @@
         };
       }
 
-      viewer.setItems([{ id: "diff", type: "diff", fileDiff: parsedDiff.metadata, version: activeRequest }]);
+      const preview = hunkPreview;
+      const annotations: DiffLineAnnotation<HunkAnnotation>[] = preview && !preview.unavailableReason && onApplyHunks
+        ? parsedDiff.metadata.hunks.map((hunk, id) => ({
+            // Place controls directly after their Git hunk, including additions
+            // and deletions where only one side has any lines.
+            side: hunk.additionCount ? "additions" : "deletions",
+            lineNumber: hunk.additionCount
+              ? hunk.additionStart + hunk.additionCount - 1
+              : hunk.deletionStart + hunk.deletionCount - 1,
+            metadata: { id: preview.hunks[id].id, header: preview.hunks[id].header, request: activeRequest, revision: preview.revision },
+          }))
+        : [];
+      viewer.setItems([{ id: "diff", type: "diff", fileDiff: parsedDiff.metadata, annotations, version: activeRequest }]);
     } catch (caught) {
       renderError = formatError(caught);
     }
@@ -285,19 +314,37 @@
     selectedHunks = selectedHunks.includes(id) ? selectedHunks.filter((selected) => selected !== id) : [...selectedHunks, id];
   }
 
-  async function showHunk(id: number) {
-    const hunk = parsedDiff?.metadata.hunks[id];
-    if (!hunk || !renderer) return;
-    const request = activeRequest;
-    contentViewMode = "diff";
-    await tick();
-    if (request !== activeRequest || destroyed || !renderer) return;
-    renderer.viewer.scrollTo({ type: "line", id: "diff", lineNumber: Math.max(1, hunk.additionCount ? hunk.additionStart : hunk.deletionStart), side: hunk.additionCount ? "additions" : "deletions", align: "start" });
+  function renderHunkAction(hunk: HunkAnnotation) {
+    const row = document.createElement("div");
+    row.className = "inline-hunk-actions";
+    row.dataset.hunkAction = String(hunk.id);
+    const label = document.createElement("label");
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = selectedHunks.includes(hunk.id);
+    checkbox.disabled = pending || loading || Boolean(renderError) || !onApplyHunks;
+    checkbox.setAttribute("aria-label", `Select hunk ${hunk.id + 1}`);
+    checkbox.onchange = () => {
+      if (hunk.request === activeRequest && !destroyed && !pending && !loading) toggleHunk(hunk.id);
+    };
+    label.append(checkbox, `Hunk ${hunk.id + 1}`);
+    const header = document.createElement("code");
+    header.textContent = hunk.header;
+    header.title = hunk.header;
+    const action = document.createElement("button");
+    action.type = "button";
+    action.textContent = diffSource === "staged" ? "Unstage hunk" : "Stage hunk";
+    action.setAttribute("aria-label", `${action.textContent} ${hunk.id + 1}`);
+    action.disabled = checkbox.disabled;
+    action.onclick = () => {
+      if (!destroyed && hunk.request === activeRequest && hunk.revision === hunkPreview?.revision) submitHunks([hunk.id]);
+    };
+    row.append(label, header, action);
+    return row;
   }
 
-  function submitHunks() {
-    if (!hunkPreview || pending || loading || !selectedHunks.length) return;
-    const ids = [...selectedHunks];
+  function submitHunks(ids = [...selectedHunks]) {
+    if (!hunkPreview || pending || loading || renderError || !ids.length) return;
     selectedHunks = [];
     onApplyHunks?.({ repositoryId, filePath: selectedFile.path, staged: diffSource === "staged", revision: hunkPreview.revision, hunkIds: ids });
   }
@@ -388,29 +435,16 @@
   </header>
 
   {#if diffSource !== "commit" && !loading && diff}
-    <div class="hunk-controls" aria-label="Hunk selection">
-      {#if hunkError || hunkPreview?.unavailableReason}
-        <p class="text-xs text-[var(--app-theme-text-muted)]">{hunkError || hunkPreview?.unavailableReason}</p>
-      {:else if hunkPreview}
-        <div class="flex items-center justify-between gap-3">
-          <span class="text-xs text-[var(--app-theme-text-muted)]">Select whole hunks ({selectedHunks.length}/{hunkPreview.hunks.length})</span>
-          <button type="button" class="state-action !mt-0" disabled={pending || loading || !renderer || Boolean(renderError) || !selectedHunks.length || !onApplyHunks} onclick={submitHunks}>
-            {diffSource === "staged" ? "Unstage selected hunks" : "Stage selected hunks"}
-          </button>
-        </div>
-        <div class="mt-2 flex flex-wrap gap-2">
-          {#each hunkPreview.hunks as hunk (hunk.id)}
-            <div class="inline-flex items-center gap-1 rounded border border-[var(--app-theme-border)] px-2 py-1 text-xs" class:selected-hunk={selectedHunks.includes(hunk.id)}>
-              <label class="inline-flex cursor-pointer items-center gap-2">
-                <input type="checkbox" checked={selectedHunks.includes(hunk.id)} disabled={pending || contentViewMode !== "diff"} onchange={() => toggleHunk(hunk.id)} aria-label={`Select hunk ${hunk.id + 1}`} />
-                Hunk {hunk.id + 1}
-              </label>
-              <button type="button" class="max-w-48 truncate font-mono text-[var(--app-theme-text-muted)] hover:underline" title={`Show hunk ${hunk.id + 1}: ${hunk.header}`} onclick={() => showHunk(hunk.id)}>{hunk.header}</button>
-            </div>
-          {/each}
-        </div>
-      {/if}
-    </div>
+    {#if hunkError || hunkPreview?.unavailableReason}
+      <div class="hunk-controls"><p class="text-xs text-[var(--app-theme-text-muted)]">{hunkError || hunkPreview?.unavailableReason}</p></div>
+    {:else if selectedHunks.length && contentViewMode === "diff"}
+      <div class="hunk-controls flex items-center justify-between gap-3" aria-label="Selected hunks">
+        <span class="text-xs text-[var(--app-theme-text-muted)]">{selectedHunks.length} {selectedHunks.length === 1 ? "hunk" : "hunks"} selected</span>
+        <button type="button" class="state-action !mt-0" disabled={pending || loading || !renderer || Boolean(renderError) || !onApplyHunks} onclick={() => submitHunks()}>
+          {diffSource === "staged" ? "Unstage selected hunks" : "Stage selected hunks"}
+        </button>
+      </div>
+    {/if}
   {/if}
 
   <div class="diff-body">
@@ -620,7 +654,69 @@
     border-bottom: 1px solid var(--app-theme-toolbar-border);
     background: var(--app-theme-toolbar);
   }
-  .selected-hunk { background: var(--app-theme-accent-surface); }
+  .diff-content :global(.inline-hunk-actions) {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-height: 36px;
+    padding: 4px 12px;
+    border-block: 1px solid var(--app-theme-toolbar-border);
+    background: var(--app-theme-toolbar);
+    color: var(--app-theme-toolbar-control-foreground);
+    font-family: var(--font-sans, system-ui, sans-serif);
+    font-size: 12px;
+  }
+  .diff-content :global(.inline-hunk-actions:has(input:checked)) {
+    background: var(--app-theme-accent-surface);
+  }
+
+  .diff-content :global(.inline-hunk-actions label) {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+
+  .diff-content :global(.inline-hunk-actions input) {
+    accent-color: var(--app-theme-accent);
+  }
+
+  .diff-content :global(.inline-hunk-actions code) {
+    min-width: 0;
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--app-theme-text-muted);
+    font-size: 11px;
+  }
+
+  .diff-content :global(.inline-hunk-actions button) {
+    margin-left: auto;
+    flex-shrink: 0;
+    padding: 2px 8px;
+    border: 1px solid var(--app-theme-border);
+    border-radius: 4px;
+    background: var(--app-theme-toolbar-control);
+    cursor: pointer;
+  }
+
+  .diff-content :global(.inline-hunk-actions button:hover) {
+    background: var(--app-theme-toolbar-control-hover);
+  }
+
+  .diff-content :global(.inline-hunk-actions button:disabled),
+  .diff-content :global(.inline-hunk-actions input:disabled) {
+    cursor: not-allowed;
+    opacity: 0.45;
+  }
+
+  .diff-content :global(.inline-hunk-actions :focus-visible) {
+    outline: 2px solid var(--app-theme-focus);
+    outline-offset: 2px;
+  }
+
   button:disabled { cursor: not-allowed; opacity: 0.45; }
 
   .diff-body {

@@ -108,8 +108,12 @@ follows the current T3 checkout's `docs/internals/connection-runtime.md` and
 `/data/references/t3code`: registration removal clears owned drafts, whereas
 transport loss retains cached data. No connectivity behavior changed.
 
-The diff viewer displays Git-generated hunks, offers whole-hunk selection and
-navigation, and reloads working-tree diffs on snapshot replacement even when
+The diff viewer displays Git-generated hunks with a checkbox and Stage/Unstage
+action inline after each hunk. Controls scroll with the code in all diff
+layouts, and a compact toolbar applies multiple selected hunks together. The
+file-only view hides these controls; switching layouts preserves selection and
+checkbox updates preserve keyboard focus. The viewer reloads working-tree
+diffs on snapshot replacement even when
 HEAD and file status are unchanged. Whole-file actions remain available for
 unsupported hunk operations. Before the first commit, whole-file unstaging
 removes only indexed entries and preserves later working-tree edits.
@@ -130,6 +134,11 @@ removes only indexed entries and preserves later working-tree edits.
   repositories, message-only and staged-content amendment, hook-error draft
   retention, discard cancellation, stale confirmation rejection, staged
   content preservation, default untracked exclusion, and explicit deletion.
+- Inline-control browser checks verified single-hunk and multiple-hunk staging,
+  unstaging, added/deleted files, selection across Hunks/Inline/Split and
+  File/Diff switches, retained keyboard focus, and clearing selection after
+  refresh. Controls use Pierre line-annotation slots and participate in the
+  existing virtualized diff layout.
 - Fault injection verified successful amendment followed by failed refresh:
   the UI reports the distinct outcome, clears the submitted amend draft, and
   retrying refresh does not repeat amendment. No browser runtime errors were
