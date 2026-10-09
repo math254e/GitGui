@@ -1,7 +1,7 @@
 # Working-tree workflow
 
-Design interview in progress. This document records agreed behavior; remaining
-questions must be settled before implementation begins.
+Behavior decisions are settled. Awaiting final confirmation of shared
+understanding before implementation begins.
 
 ## Agreed behavior
 
@@ -38,6 +38,13 @@ questions must be settled before implementation begins.
 - Keep separate normal and amend message drafts per repository for the
   current session. Toggling amend off restores the normal draft. Clear only
   the submitted draft after success.
+- Validate the full discard selection before starting. If execution fails
+  partway through, stop, refresh, and report which files changed and which
+  remain. Do not automatically retry or roll back completed changes.
+- Distinguish mutation failure from refresh failure. If the mutation succeeds
+  but refreshing the UI fails, report “Changes applied; refresh failed” and
+  offer a refresh retry without repeating the mutation. Retain commit drafts
+  when committing fails, and show Git's error without bypassing hooks.
 - Develop on `feat/working-tree-workflow` and commit focused steps as work
   progresses.
 
@@ -56,11 +63,31 @@ questions must be settled before implementation begins.
   Git behavior, the generated protocol carries structured data, and Svelte
   presents the workflow.
 
-## Unsettled behavior
+## Verification plan
 
-- Batch failure behavior, including a successful mutation followed by a
-  failed snapshot refresh.
-- Final shared-understanding confirmation before implementation.
+- Exercise hunk stage and unstage on edits, additions, and deletions; preserve
+  unselected hunks and working-tree contents. Cover repositories before their
+  first commit and files with both staged and unstaged changes.
+- Verify stale selections and changed confirmation targets reject without
+  modifying files, and that partial staging reloads the displayed diff even
+  when HEAD and file status remain unchanged.
+- Verify tracked-file discard preserves the index, bulk discard excludes
+  untracked files by default, explicit deletion affects only confirmed files,
+  cancellation changes nothing, and partial failures report actual outcomes.
+- Verify message-only and staged-content amend, normal/amend draft switching,
+  repository isolation, detached HEAD, changed HEAD, and blocked repository
+  states. Verify successful mutations with failed refreshes are not repeated.
+- Cover supported path edge cases and explanations for unsupported partial
+  operations, using isolated temporary repositories for destructive checks.
+- Regenerate protocol contracts and run relevant Rust tests, workspace checks,
+  frontend validation/build, and whitespace checks. Reuse an existing browser
+  development session for UI verification when available; capture screenshots
+  and a short recording for the new interactions.
+
+## Design status
+
+All behavior questions have been answered. The final shared-understanding
+confirmation remains pending; no workflow implementation has started.
 
 ## Git references
 
