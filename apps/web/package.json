@@ -13,8 +13,8 @@
     "@gitgui/client-runtime": "0.1.0",
     "@gitgui/contracts": "0.1.0",
     "@lucide/svelte": "^1.17.0",
+    "@pierre/diffs": "1.5.2",
     "@pierre/trees": "1.0.0-beta.6",
-    "monaco-editor": "^0.55.1",
     "svelte-sonner": "^1.2.1"
   },
   "devDependencies": {

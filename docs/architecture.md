@@ -88,6 +88,27 @@ The client owns presentation and client-local workspace state:
 
 It reaches Git and repository state only through the shared client runtime. Components and routes do not own sockets, retries, credentials, or SSH behavior. Desktop-only settings consume only the narrow typed preload capabilities.
 
+The file viewer uses `@pierre/diffs` for syntax-highlighted file contents and
+virtualized diffs. Rust supplies the original and modified contents through the
+existing file-diff RPCs; the viewer computes display hunks from those contents.
+Hunks collapses unchanged context, Inline expands it in a unified view, and
+Split expands it side by side. Both diff and file views support line wrapping.
+The browser-only renderer is loaded after the Svelte component mounts and is
+disposed when that component is removed.
+The viewer copies T3 Code's diff theming: the resolved appearance selects
+`pierre-light` or `pierre-dark` syntax highlighting with the Shiki WASM engine.
+T3's shared surface stylesheet is injected into the renderer's shadow root,
+with code and destructive tokens translated to GitGui's semantic palette.
+GitGui uses Pierre's Git green for additions because its success alias also
+represents update notifications and can be blue. Row tints are lighter than
+T3's; gutter text, split dividers, selection, hunk expansion, and scrollbars use
+the same code surface and theme roles. The overrides also apply on the shadow
+host so inherited computed surface variables update with custom palette edits.
+Separator heights and bottom padding stay paired with virtualizer metrics.
+The toolbar adapts to the viewer's width and exposes keyboard focus states.
+Loading, binary, empty, unchanged, and retryable error states share the code
+surface. File view displays the original contents for deleted files.
+
 ### Electron
 
 Electron owns desktop-only capabilities:

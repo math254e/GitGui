@@ -6,6 +6,11 @@ import { sveltekit } from "@sveltejs/kit/vite";
 export default defineConfig(async () => ({
   plugins: [tailwindcss(), sveltekit()],
 
+  // The viewer loads Diffs on mount, so prebundle it before that first import.
+  optimizeDeps: {
+    include: ["@pierre/diffs"],
+  },
+
   clearScreen: false,
   server: {
     port: 1420,
