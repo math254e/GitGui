@@ -444,7 +444,8 @@ fn parse_changed_file(line: &str) -> Option<ChangedFile> {
 }
 
 fn unquote_git_path(path: &str) -> String {
-    let trimmed = path.trim();
+    // Porcelain paths can legitimately begin or end with spaces.
+    let trimmed = path;
 
     if !(trimmed.starts_with('"') && trimmed.ends_with('"')) {
         return trimmed.to_string();

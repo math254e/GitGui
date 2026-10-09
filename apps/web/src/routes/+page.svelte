@@ -606,8 +606,10 @@
   }
 
   async function removeRepository(repositoryId: string) {
+    const draftKey = workspaceState?.environmentId ? `${workspaceState.environmentId}:${repositoryId}` : null;
     const removed = await runWorkspaceCommand(() => requireWorkspace().removeRepository(repositoryId));
     if (removed) {
+      if (draftKey) delete commitDrafts[draftKey];
       repositoryCatalog = repositoryCatalog.filter((repository) => repository.id !== repositoryId);
       activeView = "start";
     }

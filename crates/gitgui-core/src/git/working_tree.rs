@@ -289,45 +289,11 @@ pub fn apply_hunks(
         return Err(error("Select valid, distinct hunks"));
     }
     let mut patch = String::new();
-    let partial = selected.len() != preview.hunks.len();
     for line in preview
         .patch
         .split_inclusive('\n')
         .take_while(|l| !l.starts_with("@@ "))
     {
-        // A partial addition/deletion is a modification of an existing indexed
-        // file when reversing an addition or applying a deletion.
-        if partial
-            && ((staged && preview.patch.contains("new file mode "))
-                || (!staged && preview.patch.contains("deleted file mode ")))
-        {
-            if line.starts_with("new file mode ")
-                || line.starts_with("deleted file mode ")
-                || line.starts_with("index ")
-            {
-                continue;
-            }
-            if line.starts_with("--- /dev/null") {
-                let other = preview
-                    .patch
-                    .lines()
-                    .find(|l| l.starts_with("+++ "))
-                    .unwrap();
-                patch.push_str(&other.replacen("+++ ", "--- ", 1).replacen("b/", "a/", 1));
-                patch.push('\n');
-                continue;
-            }
-            if line.starts_with("+++ /dev/null") {
-                let other = preview
-                    .patch
-                    .lines()
-                    .find(|l| l.starts_with("--- "))
-                    .unwrap();
-                patch.push_str(&other.replacen("--- ", "+++ ", 1).replacen("a/", "b/", 1));
-                patch.push('\n');
-                continue;
-            }
-        }
         patch.push_str(line);
     }
     for hunk in &preview.hunks {
@@ -721,5 +687,125 @@ mod tests {
             "keep"
         );
         assert!(!root.join("link").exists());
+    }
+
+    #[test]
+    fn unstage_before_first_commit_preserves_later_edits_and_index_diff_base() {
+        let repo = repository();
+        let root = repo.path();
+        let r = root.to_str().unwrap();
+        fs::write(root.join("new.txt"), "staged\n").unwrap();
+        operations::stage(r, &["new.txt".into()]).unwrap();
+        fs::write(root.join("new.txt"), "later\n").unwrap();
+        let diff = crate::git::repository::load_working_tree_file_diff(
+            r,
+            None,
+            &crate::git::repository::CommitFile {
+                path: "new.txt".into(),
+                original_path: None,
+                status: "AM".into(),
+            },
+            false,
+        )
+        .unwrap();
+        assert_eq!(diff.original_content, "staged\n");
+        operations::unstage(r, &["new.txt".into()]).unwrap();
+        assert_eq!(git(root, &["ls-files"]), "");
+        assert_eq!(fs::read_to_string(root.join("new.txt")).unwrap(), "later\n");
+    }
+
+    #[test]
+    fn git_hunks_respect_crlf_normalization_and_missing_final_newline() {
+        let repo = repository();
+        let root = repo.path();
+        let r = root.to_str().unwrap();
+        fs::write(root.join(".gitattributes"), "*.txt text eol=crlf\n").unwrap();
+        fs::write(root.join("crlf.txt"), "before\r\nlast").unwrap();
+        git(root, &["add", "."]);
+        git(root, &["commit", "-q", "-m", "base"]);
+        fs::write(root.join("crlf.txt"), "after\r\nlast").unwrap();
+        let p = preview_hunks(r, "crlf.txt", false).unwrap();
+        apply_hunks(r, "crlf.txt", false, &p.revision, &[0]).unwrap();
+        assert_eq!(git(root, &["show", ":crlf.txt"]), "after\nlast");
+        assert_eq!(fs::read(root.join("crlf.txt")).unwrap(), b"after\r\nlast");
+    }
+
+    #[test]
+    fn discard_and_stage_treat_unusual_paths_as_literal_file_names() {
+        let repo = repository();
+        let root = repo.path();
+        let r = root.to_str().unwrap();
+        for name in [" spaced .txt ", "*.txt", "-option.txt"] {
+            fs::write(root.join(name), "base\n").unwrap();
+        }
+        git(root, &["add", "."]);
+        git(root, &["commit", "-q", "-m", "base"]);
+        for name in [" spaced .txt ", "*.txt", "-option.txt"] {
+            fs::write(root.join(name), "changed\n").unwrap();
+        }
+        let p = preview_hunks(r, "*.txt", false).unwrap();
+        apply_hunks(r, "*.txt", false, &p.revision, &[0]).unwrap();
+        assert_eq!(git(root, &["show", ":-option.txt"]), "base\n");
+        let p = preview_discard(r, &[" spaced .txt ".into(), "-option.txt".into()]).unwrap();
+        discard(r, &p, false).unwrap();
+        assert_eq!(
+            fs::read_to_string(root.join(" spaced .txt ")).unwrap(),
+            "base\n"
+        );
+        assert_eq!(fs::read_to_string(root.join("*.txt")).unwrap(), "changed\n");
+    }
+
+    #[test]
+    fn binary_hunks_are_disabled_and_amend_hook_failures_do_not_change_head() {
+        let repo = repository();
+        let root = repo.path();
+        let r = root.to_str().unwrap();
+        base_file(root, "file.txt");
+        fs::write(root.join("file.txt"), b"binary\0content").unwrap();
+        assert!(preview_hunks(r, "file.txt", false)
+            .unwrap()
+            .unavailable_reason
+            .unwrap()
+            .contains("Binary"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let hook = root.join(".git/hooks/pre-commit");
+            fs::write(&hook, "#!/bin/sh\necho hook-rejected >&2\nexit 1\n").unwrap();
+            fs::set_permissions(&hook, fs::Permissions::from_mode(0o700)).unwrap();
+            let head = amend_info(r).unwrap().head_oid.unwrap();
+            let e = amend(r, &head, "rejected").unwrap_err();
+            assert!(e.stderr.contains("hook-rejected"));
+            assert_eq!(
+                amend_info(r).unwrap().head_oid.as_deref(),
+                Some(head.as_str())
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn discard_reports_completed_and_remaining_paths_after_external_change() {
+        let repo = repository();
+        let root = repo.path();
+        let r = root.to_str().unwrap();
+        base_file(root, "file.txt");
+        fs::write(root.join(".gitattributes"), "file.txt filter=change-next\n").unwrap();
+        git(
+            root,
+            &[
+                "config",
+                "filter.change-next.smudge",
+                "cat; printf newer > next.txt",
+            ],
+        );
+        fs::write(root.join("file.txt"), "unstaged\n").unwrap();
+        fs::write(root.join("next.txt"), "before\n").unwrap();
+        let p = preview_discard(r, &["file.txt".into(), "next.txt".into()]).unwrap();
+        let result = discard(r, &p, true).unwrap();
+        assert_eq!(result.completed_paths, ["file.txt"]);
+        assert_eq!(result.remaining_paths, ["next.txt"]);
+        assert!(result.error.unwrap().contains("changed"));
+        assert_eq!(fs::read_to_string(root.join("next.txt")).unwrap(), "newer");
     }
 }

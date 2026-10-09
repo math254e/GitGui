@@ -46,6 +46,7 @@ pub fn unstage(root: &str, paths: &[String]) -> Result<(), GitError> {
             "--literal-pathspecs".to_string(),
             "rm".to_string(),
             "--cached".to_string(),
+            "--force".to_string(),
             "-r".to_string(),
             "--".to_string(),
         ]
