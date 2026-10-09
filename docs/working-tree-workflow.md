@@ -12,10 +12,32 @@ questions must be settled before implementation begins.
   partially staged file, restore the working tree to the indexed version and
   preserve staged changes. Staged changes must first be unstaged to discard
   them.
+- Offer discard for one file, selected files, and all unstaged files. The
+  confirmation lists affected files and states that staged changes remain.
+  Hunk discard is deferred.
+- Bulk discard preserves untracked files by default. An unchecked “Delete
+  untracked files” option explicitly includes them, with the exact deletion
+  list shown in confirmation. Never include ignored files or recursively
+  clean directories.
+- If files change after hunk selection or after discard confirmation opens,
+  stop the action, refresh, clear stale selections, and require review of the
+  updated changes.
+- Hunk staging and unstaging cover ordinary text-file edits, additions, and
+  deletions, including before the first commit. Binary files, renames,
+  symlinks, and mode changes retain whole-file actions. Partial operations on
+  conflicts and submodules are deferred, with an explanation in the UI.
 - An “Amend last commit” toggle loads the previous commit message. Amendment
   uses only the index, permits message-only amendments with no staged changes,
   and leaves unstaged changes untouched. Successful amendment returns the
   form to normal commit mode.
+- Amend permits detached HEAD and previously published commits, with a clear
+  explanation that the current commit is replaced. Never automatically
+  force-push. Disable amend when there is no commit or during a merge,
+  rebase, cherry-pick, or revert. Reject submission if HEAD changed after
+  loading the message.
+- Keep separate normal and amend message drafts per repository for the
+  current session. Toggling amend off restores the normal draft. Clear only
+  the submitted draft after success.
 - Develop on `feat/working-tree-workflow` and commit focused steps as work
   progresses.
 
@@ -36,14 +58,9 @@ questions must be settled before implementation begins.
 
 ## Unsettled behavior
 
-- Discard actions for one file, selected files, or all unstaged files; whether
-  selected-hunk discard is included.
-- Untracked-file deletion and its confirmation.
-- Hunk actions when the displayed diff is stale or a file is unsupported.
-- Amendment of published commits, detached HEAD, and repositories with an
-  ongoing merge or rebase.
-- Commit draft preservation when toggling amend or changing repositories.
-- Failure behavior and verification coverage.
+- Batch failure behavior, including a successful mutation followed by a
+  failed snapshot refresh.
+- Final shared-understanding confirmation before implementation.
 
 ## Git references
 
