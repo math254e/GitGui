@@ -412,6 +412,12 @@
   }
 
   function applyApplicationRuntimeState(state: WebApplicationRuntimeState) {
+    // Registrations survive disconnects. Their removal is the signal to
+    // release environment-owned drafts, matching the runtime's cache lifetime.
+    const registeredEnvironments = new Set(state.registry.entries.map((entry) => entry.registration.environmentId));
+    for (const key of Object.keys(commitDrafts)) {
+      if (!registeredEnvironments.has(key.slice(0, key.indexOf(":")))) delete commitDrafts[key];
+    }
     bootstrapping = state.loading;
     connectionError = state.connection?.phase === "blocked"
       || state.connection?.phase === "waiting"

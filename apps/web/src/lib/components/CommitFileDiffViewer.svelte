@@ -1,6 +1,6 @@
 <script lang="ts">
   import { X } from "@lucide/svelte";
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
   import type { CodeView, FileContents, FileDiffMetadata } from "@pierre/diffs";
   import type { GitHunkPreview, GitApplyHunksParams } from "@gitgui/contracts";
   import type { GitGuiClient } from "@gitgui/client-runtime";
@@ -285,10 +285,13 @@
     selectedHunks = selectedHunks.includes(id) ? selectedHunks.filter((selected) => selected !== id) : [...selectedHunks, id];
   }
 
-  function showHunk(id: number) {
+  async function showHunk(id: number) {
     const hunk = parsedDiff?.metadata.hunks[id];
     if (!hunk || !renderer) return;
+    const request = activeRequest;
     contentViewMode = "diff";
+    await tick();
+    if (request !== activeRequest || destroyed || !renderer) return;
     renderer.viewer.scrollTo({ type: "line", id: "diff", lineNumber: Math.max(1, hunk.additionCount ? hunk.additionStart : hunk.deletionStart), side: hunk.additionCount ? "additions" : "deletions", align: "start" });
   }
 

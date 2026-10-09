@@ -518,6 +518,15 @@ mod tests {
         apply_hunks(root.to_str().unwrap(), name, true, &staged.revision, &[0]).unwrap();
         assert_eq!(git(root, &["diff", "--cached"]), "");
         assert_eq!(fs::read_to_string(root.join(name)).unwrap(), content);
+
+        operations::stage(root.to_str().unwrap(), &[name.into()]).unwrap();
+        let staged = preview_hunks(root.to_str().unwrap(), name, true).unwrap();
+        assert_eq!(staged.hunks.len(), 2);
+        apply_hunks(root.to_str().unwrap(), name, true, &staged.revision, &[1]).unwrap();
+        let indexed = git(root, &["show", &format!(":{name}")]);
+        assert!(indexed.contains("first\n"));
+        assert!(!indexed.contains("last\n"));
+        assert_eq!(fs::read_to_string(root.join(name)).unwrap(), content);
     }
 
     #[test]
@@ -660,6 +669,24 @@ mod tests {
         fs::write(root.join(".git/MERGE_HEAD"), &head).unwrap();
         assert!(amend(r, &head, "blocked").is_err());
         fs::remove_file(root.join(".git/MERGE_HEAD")).unwrap();
+        for state in [
+            "rebase-merge",
+            "rebase-apply",
+            "CHERRY_PICK_HEAD",
+            "REVERT_HEAD",
+            "sequencer",
+        ] {
+            let state_path = root.join(".git").join(state);
+            if matches!(state, "rebase-merge" | "rebase-apply" | "sequencer") {
+                fs::create_dir(&state_path).unwrap();
+                assert!(amend_info(r).unwrap().blocked_reason.is_some());
+                fs::remove_dir(&state_path).unwrap();
+            } else {
+                fs::write(&state_path, &head).unwrap();
+                assert!(amend_info(r).unwrap().blocked_reason.is_some());
+                fs::remove_file(&state_path).unwrap();
+            }
+        }
         git(root, &["switch", "--detach", "-q"]);
         git(root, &["add", "file.txt"]);
         amend(r, &head, "detached").unwrap();
@@ -807,5 +834,26 @@ mod tests {
         assert_eq!(result.remaining_paths, ["next.txt"]);
         assert!(result.error.unwrap().contains("changed"));
         assert_eq!(fs::read_to_string(root.join("next.txt")).unwrap(), "newer");
+    }
+
+    #[test]
+    fn discard_preserves_staged_rename_and_its_indexed_contents() {
+        let repo = repository();
+        let root = repo.path();
+        let r = root.to_str().unwrap();
+        base_file(root, "old.txt");
+        git(root, &["mv", "old.txt", "new.txt"]);
+        fs::write(root.join("new.txt"), "unstaged rename edit\n").unwrap();
+        let p = preview_discard(r, &["new.txt".into()]).unwrap();
+        discard(r, &p, false).unwrap();
+        assert_eq!(
+            fs::read_to_string(root.join("new.txt")).unwrap(),
+            git(root, &["show", ":new.txt"])
+        );
+        assert_eq!(
+            load_repository_status(r).unwrap().status.changed_files[0].index_status,
+            "R"
+        );
+        assert!(!root.join("old.txt").exists());
     }
 }

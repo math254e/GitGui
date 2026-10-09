@@ -1,6 +1,6 @@
 # Working-tree workflow
 
-Behavior decisions were confirmed by Mathies. Implementation is in progress on
+Behavior decisions were confirmed by Mathies. Implementation is complete on
 `feat/working-tree-workflow`.
 
 ## Agreed behavior
@@ -96,6 +96,57 @@ Git actions do not cross Electron IPC.
 New reviewed mutations return their outcome before the client refreshes. Older
 mutations annotate a subsequent server snapshot failure with
 `details.mutationSucceeded` so the client can distinguish it from Git failure.
+
+The working-tree panel offers row, selected-file, and bulk discard. Its native
+modal lists exact targets, traps focus, supports cancellation, and excludes
+untracked deletion until explicitly selected. Amendment drafts are scoped by
+environment and repository, with separate normal and amend messages for the
+current session. Removing a repository or explicitly removing its environment
+registration clears its drafts; ordinary disconnects preserve them. This
+follows the current T3 checkout's `docs/internals/connection-runtime.md` and
+`packages/client-runtime/src/connection/registry.ts`, inspected under
+`/data/references/t3code`: registration removal clears owned drafts, whereas
+transport loss retains cached data. No connectivity behavior changed.
+
+The diff viewer displays Git-generated hunks, offers whole-hunk selection and
+navigation, and reloads working-tree diffs on snapshot replacement even when
+HEAD and file status are unchanged. Whole-file actions remain available for
+unsupported hunk operations. Before the first commit, whole-file unstaging
+removes only indexed entries and preserves later working-tree edits.
+
+## Verification results
+
+- `npm test`: desktop, client-runtime, SSH, and Rust workspace tests pass.
+  Focused Git tests cover stage/unstage with unselected hunks, additions and
+  deletions, initial repositories, stale selections, index-preserving discard,
+  explicit untracked deletion, literal filenames, CRLF normalization, missing
+  final newlines, symlinks, ignored files, binary fallback, staged renames,
+  partial discard failures, and amend blocking and hook failure behavior.
+- `npm run check`: all TypeScript and Svelte checks pass without diagnostics.
+- `npm run build`: production frontend build passes.
+- `cargo check --workspace` and `git diff --check` pass.
+- Browser checks in isolated repositories verified hunk staging and unstaging,
+  refreshed diffs, normal/amend draft preservation, draft isolation across two
+  repositories, message-only and staged-content amendment, hook-error draft
+  retention, discard cancellation, stale confirmation rejection, staged
+  content preservation, default untracked exclusion, and explicit deletion.
+- Fault injection verified successful amendment followed by failed refresh:
+  the UI reports the distinct outcome, clears the submitted amend draft, and
+  retrying refresh does not repeat amendment. No browser runtime errors were
+  observed in the final interaction checks.
+- Captured screenshots and an interaction recording. The shared T3 preview
+  disconnected during verification; remaining checks used an isolated
+  headless Chrome session against the same development stack.
+
+## Limits
+
+Individual-line staging and hunk discard remain deferred. Conflicts,
+submodules, renames, binary/non-UTF-8 files, symlinks, and mode changes do not
+support partial operations. Whole-file discard refuses unresolved conflicts,
+submodules, and unstaged renames rather than guessing their restoration.
+Revision checks reject observed external changes; external editors and Git
+processes do not participate in the server's mutation lock. Verification ran
+on Linux; packaged Electron and Windows/macOS execution were not exercised.
 
 ## Git references
 
