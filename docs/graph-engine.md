@@ -183,6 +183,11 @@ also cover scrolling, selection, a dirty working tree, and at least one merge.
 
 ## Intentional limits
 
+- History starts from local branches, remote branches, tags, the current HEAD,
+  every worktree HEAD, and every listed stash. Private refs are never traversal
+  roots, so tool checkpoint namespaces need no exclusion patterns. Commits also
+  reachable through these user-facing roots remain ordinary history regardless
+  of their subject or any private refs pointing to them.
 - Stash metadata is layered onto graph commits by hash. Internal index and
   untracked-file helper commits are removed before graph layout, while the
   user-facing stash remains a dashed graph node without a Branch-column badge.

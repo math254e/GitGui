@@ -140,7 +140,7 @@ pub fn load_repository(path: &str) -> Result<RepositorySnapshot, GitError> {
     let (stashes, stash_helper_hashes) = load_stashes(root).unwrap_or_default();
     let worktrees = load_worktrees(root)?;
     let commits = sort_commits(
-        load_commits(root)?
+        load_commits(root, status.head_oid.as_deref(), &stashes, &worktrees)?
             .into_iter()
             .filter(|commit| !stash_helper_hashes.contains(&commit.hash))
             .collect(),
@@ -371,7 +371,9 @@ fn repository_status(root: &Path) -> Result<RepositoryStatus, GitError> {
         }
 
         if let Some(oid) = line.strip_prefix("# branch.oid ") {
-            status.head_oid = Some(oid.to_string());
+            if oid != "(initial)" {
+                status.head_oid = Some(oid.to_string());
+            }
             continue;
         }
 
@@ -496,17 +498,39 @@ fn unquote_git_path(path: &str) -> String {
     String::from_utf8_lossy(&decoded).into_owned()
 }
 
-fn load_commits(root: &Path) -> Result<Vec<CommitInfo>, GitError> {
-    let output = GitCommand::run(
+fn load_commits(
+    root: &Path,
+    head_hash: Option<&str>,
+    stashes: &[StashInfo],
+    worktrees: &[WorktreeInfo],
+) -> Result<Vec<CommitInfo>, GitError> {
+    // Only user-facing history roots belong in the graph. Private tool refs
+    // (including checkpoint refs in future namespaces) must not seed traversal.
+    // Detached worktree heads and older stashes have no branch or tag ref.
+    let additional_roots = head_hash
+        .into_iter()
+        .chain(
+            worktrees
+                .iter()
+                .filter_map(|worktree| worktree.head_oid.as_deref()),
+        )
+        .chain(stashes.iter().map(|stash| stash.hash.as_str()))
+        // Git reports an all-zero HEAD for an unborn worktree.
+        .filter(|hash| !hash.is_empty() && !hash.bytes().all(|byte| byte == b'0'))
+        .map(|hash| format!("{hash}\n"))
+        .collect::<String>();
+    let output = GitCommand::run_with_stdin(
         &[
             "log",
-            "--exclude=refs/t3/checkpoints/**",
-            "--exclude=refs/codex/turn-diffs/checkpoints/**",
-            "--all",
+            "--branches",
+            "--remotes",
+            "--tags",
+            "--stdin",
             "--date=unix",
             "--pretty=format:%H%x1f%P%x1f%an%x1f%at%x1f%s%x1e",
         ],
         Some(root),
+        additional_roots.as_bytes(),
     )?;
 
     Ok(output
@@ -894,6 +918,134 @@ mod tests {
         ));
         std::fs::create_dir(&root).unwrap();
         TestRepository(root)
+    }
+
+    #[test]
+    fn graph_history_uses_public_refs_and_detached_worktree_heads() {
+        let repository = new_test_repository();
+        let root = repository.0.as_path();
+        run_test_git(root, &["init", "-q", "-b", "main"]);
+        run_test_git(root, &["config", "user.email", "test@example.com"]);
+        run_test_git(root, &["config", "user.name", "GitGui Test"]);
+        run_test_git(root, &["commit", "-q", "--allow-empty", "-m", "base"]);
+        let base = run_test_git(root, &["rev-parse", "HEAD"])
+            .trim()
+            .to_string();
+        let tree = run_test_git(root, &["rev-parse", "HEAD^{tree}"])
+            .trim()
+            .to_string();
+        let sibling = |message: &str| {
+            run_test_git(root, &["commit-tree", &tree, "-p", &base, "-m", message])
+                .trim()
+                .to_string()
+        };
+
+        // A real branch commit with a checkpoint-looking subject must survive.
+        let branch = sibling("t3 checkpoint ref=refs/t3/checkpoints/legitimate-commit");
+        run_test_git(root, &["update-ref", "refs/heads/feature", &branch]);
+        let remote = sibling("remote only");
+        run_test_git(
+            root,
+            &["update-ref", "refs/remotes/origin/feature", &remote],
+        );
+        let tag = sibling("lightweight tag only");
+        run_test_git(root, &["tag", "lightweight", &tag]);
+        let annotated_tag = sibling("annotated tag only");
+        run_test_git(
+            root,
+            &["tag", "-a", "annotated", "-m", "release", &annotated_tag],
+        );
+
+        for name in [
+            "refs/t3/checkpoints/test/turn/0",
+            "refs/t3/orchestration-v2/checkpoints/test/ordinal/0",
+            "refs/codex/turn-diffs/checkpoints/test",
+            "refs/future-tool/snapshots/test",
+        ] {
+            let checkpoint = sibling(name);
+            run_test_git(root, &["update-ref", name, &checkpoint]);
+        }
+
+        let detached = sibling("detached HEAD");
+        run_test_git(root, &["switch", "-q", "--detach", &detached]);
+        let linked_head = sibling("detached linked worktree");
+        let linked_path = root.join("linked worktree");
+        run_test_git(
+            root,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "--detach",
+                linked_path.to_str().unwrap(),
+                &linked_head,
+            ],
+        );
+
+        let snapshot = load_repository(root.to_str().unwrap()).unwrap();
+        let actual: HashSet<String> = snapshot
+            .commits
+            .iter()
+            .map(|commit| commit.hash.clone())
+            .collect();
+        let expected: HashSet<String> = [
+            base,
+            branch,
+            remote,
+            tag,
+            annotated_tag,
+            detached,
+            linked_head,
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(actual, expected);
+        assert_eq!(snapshot.graph.commits.len(), expected.len());
+    }
+
+    #[test]
+    fn graph_history_keeps_all_stashes_without_helper_commits() {
+        let repository = new_test_repository();
+        let root = repository.0.as_path();
+        run_test_git(root, &["init", "-q", "-b", "main"]);
+        run_test_git(root, &["config", "user.email", "test@example.com"]);
+        run_test_git(root, &["config", "user.name", "GitGui Test"]);
+        std::fs::write(root.join("file.txt"), "base\n").unwrap();
+        run_test_git(root, &["add", "file.txt"]);
+        run_test_git(root, &["commit", "-q", "-m", "base"]);
+        let base = run_test_git(root, &["rev-parse", "HEAD"])
+            .trim()
+            .to_string();
+
+        for contents in ["first stash\n", "second stash\n"] {
+            std::fs::write(root.join("file.txt"), contents).unwrap();
+            run_test_git(root, &["stash", "push", "-q", "-m", contents.trim()]);
+        }
+
+        let snapshot = load_repository(root.to_str().unwrap()).unwrap();
+        assert_eq!(snapshot.stashes.len(), 2);
+        let actual: HashSet<&str> = snapshot
+            .commits
+            .iter()
+            .map(|commit| commit.hash.as_str())
+            .collect();
+        let expected: HashSet<&str> = std::iter::once(base.as_str())
+            .chain(snapshot.stashes.iter().map(|stash| stash.hash.as_str()))
+            .collect();
+        assert_eq!(actual, expected);
+        assert_eq!(snapshot.graph.commits.len(), expected.len());
+    }
+
+    #[test]
+    fn graph_history_handles_an_unborn_repository() {
+        let repository = new_test_repository();
+        let root = repository.0.as_path();
+        run_test_git(root, &["init", "-q", "-b", "main"]);
+
+        let snapshot = load_repository(root.to_str().unwrap()).unwrap();
+        assert!(snapshot.status.head_oid.is_none());
+        assert!(snapshot.commits.is_empty());
+        assert!(snapshot.graph.commits.is_empty());
     }
 
     #[test]
