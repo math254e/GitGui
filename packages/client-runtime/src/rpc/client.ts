@@ -1,4 +1,5 @@
 import type {
+  GitHunkPreviewParams, GitHunkPreview, GitApplyHunksParams, GitDiscardFile, GitDiscardParams, GitDiscardResult, GitAmendInfo, GitAmendParams,
   OrderedEventEnvelope,
   CommitFileDiffParams,
   CommitFilesParams,
@@ -316,6 +317,30 @@ export class GitGuiClient {
   unstage(repositoryId: string, paths: string[] = []): Promise<GitUnstageResult> {
     const params: GitPathsParams = { repositoryId: assertRepositoryId(repositoryId), paths: [...paths] };
     return this.request<GitUnstageResult>("git.unstage", params);
+  }
+
+  getHunkPreview(params: GitHunkPreviewParams): Promise<GitHunkPreview> {
+    return this.request("git.hunk_preview", { ...params, repositoryId: assertRepositoryId(params.repositoryId) });
+  }
+
+  applyHunks(params: GitApplyHunksParams): Promise<Record<string, never>> {
+    return this.request("git.apply_hunks", { ...params, repositoryId: assertRepositoryId(params.repositoryId) });
+  }
+
+  previewDiscard(repositoryId: string, paths: string[]): Promise<GitDiscardFile[]> {
+    return this.request("git.discard_preview", { repositoryId: assertRepositoryId(repositoryId), paths: [...paths] });
+  }
+
+  discard(params: GitDiscardParams): Promise<GitDiscardResult> {
+    return this.request("git.discard", { ...params, repositoryId: assertRepositoryId(params.repositoryId) });
+  }
+
+  getAmendInfo(repositoryId: string): Promise<GitAmendInfo> {
+    return this.request("git.amend_info", { repositoryId: assertRepositoryId(repositoryId) });
+  }
+
+  amend(params: GitAmendParams): Promise<Record<string, never>> {
+    return this.request("git.amend", { ...params, repositoryId: assertRepositoryId(params.repositoryId) });
   }
 
   commit(params: GitCommitParams): Promise<GitCommitResult> {

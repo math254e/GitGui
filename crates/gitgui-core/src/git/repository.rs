@@ -298,12 +298,12 @@ pub fn load_working_tree_file_diff(
         } else {
             load_file_at_revision(root, head_hash.unwrap_or("HEAD"), original_path)
         }
-    } else if worktree_status == '?' || head_hash.is_none() {
+    } else if worktree_status == '?' {
         FileContent::Text(String::new())
-    } else if status_is_present(index_status) && index_status != '?' {
-        load_file_from_index(root, &file.path)
     } else {
-        load_file_at_revision(root, head_hash.unwrap_or("HEAD"), original_path)
+        // The index is always the base for unstaged changes, including before
+        // the repository's first commit.
+        load_file_from_index(root, &file.path)
     };
 
     let modified_content = if status == 'D' {

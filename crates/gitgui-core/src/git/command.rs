@@ -22,7 +22,12 @@ pub struct GitCommand;
 
 impl GitCommand {
     pub fn run(args: &[&str], cwd: Option<&Path>) -> Result<String, GitError> {
-        Self::run_command(args, cwd, None)
+        Self::run_command(args, cwd, None, false)
+    }
+
+    /// `diff --no-index` uses exit code 1 for a successfully produced diff.
+    pub fn run_diff(args: &[&str], cwd: &Path) -> Result<String, GitError> {
+        Self::run_command(args, Some(cwd), None, true)
     }
 
     pub fn run_owned(args: &[String], cwd: Option<&Path>) -> Result<String, GitError> {
@@ -35,13 +40,14 @@ impl GitCommand {
         cwd: Option<&Path>,
         stdin: &[u8],
     ) -> Result<String, GitError> {
-        Self::run_command(args, cwd, Some(stdin))
+        Self::run_command(args, cwd, Some(stdin), false)
     }
 
     fn run_command(
         args: &[&str],
         cwd: Option<&Path>,
         stdin: Option<&[u8]>,
+        diff_exit_code: bool,
     ) -> Result<String, GitError> {
         let mut command = git_command();
         command.args(args);
@@ -79,7 +85,7 @@ impl GitCommand {
             status: None,
         })?;
 
-        if !output.status.success() {
+        if !output.status.success() && !(diff_exit_code && output.status.code() == Some(1)) {
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
             let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
             let diagnostic = match (stderr.is_empty(), stdout.is_empty()) {
@@ -96,7 +102,15 @@ impl GitCommand {
             });
         }
 
-        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+        if diff_exit_code {
+            String::from_utf8(output.stdout).map_err(|_| GitError {
+                message: "Non-UTF-8 files use whole-file actions".to_string(),
+                stderr: String::new(),
+                status: None,
+            })
+        } else {
+            Ok(String::from_utf8_lossy(&output.stdout).to_string())
+        }
     }
 }
 

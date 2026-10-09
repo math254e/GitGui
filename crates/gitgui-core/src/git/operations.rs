@@ -21,7 +21,7 @@ pub fn init_repository(
 }
 
 pub fn stage(root: &str, paths: &[String]) -> Result<(), GitError> {
-    let mut args = vec!["add".to_string()];
+    let mut args = vec!["--literal-pathspecs".to_string(), "add".to_string()];
     if paths.is_empty() {
         args.push("--all".to_string());
     } else {
@@ -32,7 +32,24 @@ pub fn stage(root: &str, paths: &[String]) -> Result<(), GitError> {
 }
 
 pub fn unstage(root: &str, paths: &[String]) -> Result<(), GitError> {
-    let mut args = vec!["restore".to_string(), "--staged".to_string(), "--".to_string()];
+    let has_head =
+        GitCommand::run(&["rev-parse", "--verify", "HEAD"], Some(Path::new(root))).is_ok();
+    let mut args = if has_head {
+        vec![
+            "--literal-pathspecs".to_string(),
+            "restore".to_string(),
+            "--staged".to_string(),
+            "--".to_string(),
+        ]
+    } else {
+        vec![
+            "--literal-pathspecs".to_string(),
+            "rm".to_string(),
+            "--cached".to_string(),
+            "-r".to_string(),
+            "--".to_string(),
+        ]
+    };
     if paths.is_empty() {
         args.push(".".to_string());
     } else {
@@ -76,7 +93,11 @@ pub fn list_local_branches(root: &str) -> Result<Vec<String>, GitError> {
 }
 
 pub fn validate_branch_name(root: &str, name: &str) -> Result<(), GitError> {
-    GitCommand::run(&["check-ref-format", "--branch", name], Some(Path::new(root))).map(|_| ())
+    GitCommand::run(
+        &["check-ref-format", "--branch", name],
+        Some(Path::new(root)),
+    )
+    .map(|_| ())
 }
 
 pub fn create_branch(
@@ -87,7 +108,11 @@ pub fn create_branch(
 ) -> Result<(), GitError> {
     validate_branch_name(root, name)?;
     let mut args = if checkout {
-        vec!["switch".to_string(), "--create".to_string(), name.to_string()]
+        vec![
+            "switch".to_string(),
+            "--create".to_string(),
+            name.to_string(),
+        ]
     } else {
         vec!["branch".to_string(), name.to_string()]
     };

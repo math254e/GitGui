@@ -73,6 +73,12 @@ pub const METHOD_GIT_STAGE: &str = "git.stage";
 pub const METHOD_GIT_UNSTAGE: &str = "git.unstage";
 /// Canonical method for creating a commit from staged changes.
 pub const METHOD_GIT_COMMIT: &str = "git.commit";
+pub const METHOD_GIT_HUNK_PREVIEW: &str = "git.hunk_preview";
+pub const METHOD_GIT_APPLY_HUNKS: &str = "git.apply_hunks";
+pub const METHOD_GIT_DISCARD_PREVIEW: &str = "git.discard_preview";
+pub const METHOD_GIT_DISCARD: &str = "git.discard";
+pub const METHOD_GIT_AMEND_INFO: &str = "git.amend_info";
+pub const METHOD_GIT_AMEND: &str = "git.amend";
 /// Canonical method for fetching and pruning remote refs.
 pub const METHOD_GIT_FETCH: &str = "git.fetch";
 /// Canonical method for pulling the current configured branch.
@@ -133,6 +139,9 @@ pub const CAPABILITY_GIT_STAGE: &str = "git.stage";
 pub const CAPABILITY_GIT_UNSTAGE: &str = "git.unstage";
 /// Capability advertised when Git commits are available.
 pub const CAPABILITY_GIT_COMMIT: &str = "git.commit";
+pub const CAPABILITY_GIT_HUNKS: &str = "git.hunks";
+pub const CAPABILITY_GIT_DISCARD: &str = "git.discard";
+pub const CAPABILITY_GIT_AMEND: &str = "git.amend";
 /// Capability advertised when Git fetch is available.
 pub const CAPABILITY_GIT_FETCH: &str = "git.fetch";
 /// Capability advertised when Git pull is available.
@@ -796,6 +805,92 @@ pub struct GitCommitResult {
     pub snapshot: RepositorySnapshot,
     /// Object ID of the newly created commit.
     pub commit_hash: String,
+}
+
+/// A Git-generated hunk. Its ID is valid only for the accompanying revision.
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GitHunk {
+    pub id: u32,
+    pub header: String,
+    pub patch: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GitHunkPreviewParams {
+    pub repository_id: String,
+    pub file_path: String,
+    #[serde(default)]
+    pub staged: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GitHunkPreview {
+    pub file_path: String,
+    pub staged: bool,
+    pub revision: String,
+    /// Display-only patch. Mutations accept IDs, never client-supplied patches.
+    pub patch: String,
+    pub hunks: Vec<GitHunk>,
+    pub unavailable_reason: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GitApplyHunksParams {
+    pub repository_id: String,
+    pub file_path: String,
+    pub staged: bool,
+    pub revision: String,
+    pub hunk_ids: Vec<u32>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GitDiscardFile {
+    pub path: String,
+    pub untracked: bool,
+    pub revision: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GitDiscardParams {
+    pub repository_id: String,
+    /// Explicit targets from the confirmation preview; empty never means all.
+    pub files: Vec<GitDiscardFile>,
+    pub delete_untracked: bool,
+}
+
+/// Discard may stop after some files have changed. Refresh never retries it.
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GitDiscardResult {
+    pub completed_paths: Vec<String>,
+    pub remaining_paths: Vec<String>,
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GitAmendInfo {
+    pub head_oid: Option<String>,
+    pub summary: String,
+    pub description: String,
+    pub blocked_reason: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GitAmendParams {
+    pub repository_id: String,
+    pub expected_head: String,
+    pub summary: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub description: Option<String>,
 }
 
 /// Parameters for a repository-wide Git operation.

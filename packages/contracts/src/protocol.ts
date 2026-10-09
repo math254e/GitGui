@@ -491,6 +491,32 @@ export type GitCommitResult = { repository: RepositorySummary, snapshot: Reposit
  */
 commitHash: string, };
 
+export type GitHunk = { id: number, header: string, patch: string, };
+
+export type GitHunkPreviewParams = { repositoryId: string, filePath: string, staged: boolean, };
+
+export type GitHunkPreview = { filePath: string, staged: boolean, revision: string,
+/**
+ * Display-only patch. Mutations accept IDs, never client-supplied patches.
+ */
+patch: string, hunks: Array<GitHunk>, unavailableReason: string | null, };
+
+export type GitApplyHunksParams = { repositoryId: string, filePath: string, staged: boolean, revision: string, hunkIds: Array<number>, };
+
+export type GitDiscardFile = { path: string, untracked: boolean, revision: string, };
+
+export type GitDiscardParams = { repositoryId: string,
+/**
+ * Explicit targets from the confirmation preview; empty never means all.
+ */
+files: Array<GitDiscardFile>, deleteUntracked: boolean, };
+
+export type GitDiscardResult = { completedPaths: Array<string>, remainingPaths: Array<string>, error: string | null, };
+
+export type GitAmendInfo = { headOid: string | null, summary: string, description: string, blockedReason: string | null, };
+
+export type GitAmendParams = { repositoryId: string, expectedHead: string, summary: string, description?: string, };
+
 export type GitRepositoryParams = {
 /**
  * Stable ID from the host's configured repository catalog.

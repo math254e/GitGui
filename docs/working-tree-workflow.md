@@ -1,7 +1,7 @@
 # Working-tree workflow
 
-Behavior decisions are settled. Awaiting final confirmation of shared
-understanding before implementation begins.
+Behavior decisions were confirmed by Mathies. Implementation is in progress on
+`feat/working-tree-workflow`.
 
 ## Agreed behavior
 
@@ -48,7 +48,7 @@ understanding before implementation begins.
 - Develop on `feat/working-tree-workflow` and commit focused steps as work
   progresses.
 
-## Current implementation findings
+## Baseline implementation findings
 
 - Core mutations currently support whole-file stage, unstage, and normal
   commit only.
@@ -86,8 +86,16 @@ understanding before implementation begins.
 
 ## Design status
 
-All behavior questions have been answered. The final shared-understanding
-confirmation remains pending; no workflow implementation has started.
+All behavior questions were answered and shared understanding was confirmed.
+The Rust core now produces Git hunk previews and checks revisions before hunk
+application or discard. New protocol methods carry hunk IDs, explicit discard
+targets, and the expected amend commit. They use the existing direct
+client/server boundary, authorization scopes, and repository mutation lock;
+Git actions do not cross Electron IPC.
+
+New reviewed mutations return their outcome before the client refreshes. Older
+mutations annotate a subsequent server snapshot failure with
+`details.mutationSucceeded` so the client can distinguish it from Git failure.
 
 ## Git references
 

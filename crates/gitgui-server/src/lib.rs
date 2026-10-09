@@ -45,11 +45,12 @@ use gitgui_protocol::{
     CommitFile as ProtocolCommitFile, CommitFileDiff as ProtocolCommitFileDiff, CommitFilesParams,
     CommitFilesResult, CommitGraph as ProtocolCommitGraph, CommitInfo as ProtocolCommitInfo,
     CommitRef as ProtocolCommitRef, CommitRefType as ProtocolCommitRefType, EnvironmentAuthPolicy,
-    EnvironmentDescriptor, FileDiffResult, GitBranch, GitBranchCreateParams, GitBranchCreateResult,
-    GitBranchListParams, GitBranchListResult, GitBranchSwitchParams, GitBranchSwitchResult,
-    GitCommitParams, GitCommitResult, GitFetchResult, GitPathsParams, GitPullResult, GitPushResult,
-    GitRepositoryParams, GitStageResult, GitStashPopParams, GitStashPopResult, GitStashPushParams,
-    GitStashPushResult, GitStatusParams, GitStatusResult, GitUnstageResult,
+    EnvironmentDescriptor, FileDiffResult, GitAmendParams, GitApplyHunksParams, GitBranch,
+    GitBranchCreateParams, GitBranchCreateResult, GitBranchListParams, GitBranchListResult,
+    GitBranchSwitchParams, GitBranchSwitchResult, GitCommitParams, GitCommitResult,
+    GitDiscardParams, GitFetchResult, GitHunkPreviewParams, GitPathsParams, GitPullResult,
+    GitPushResult, GitRepositoryParams, GitStageResult, GitStashPopParams, GitStashPopResult,
+    GitStashPushParams, GitStashPushResult, GitStatusParams, GitStatusResult, GitUnstageResult,
     GraphCommit as ProtocolGraphCommit, GraphEdge as ProtocolGraphEdge,
     GraphEdgeType as ProtocolGraphEdgeType, PrefetchCommitDiffsParams, PrefetchCommitDiffsResult,
     PrefetchCommitFilesParams, PrefetchCommitFilesResult, ProtocolError, ProtocolErrorMessage,
@@ -61,26 +62,29 @@ use gitgui_protocol::{
     RepositoryStatus as ProtocolRepositoryStatus, RepositorySummary, RequestEnvelope,
     ResponseEnvelope, ServerInfo, ServerLifecycle, ServerReadiness, ServerStatus,
     StashInfo as ProtocolStashInfo, WelcomeMessage, WorktreeInfo as ProtocolWorktreeInfo,
-    CAPABILITY_GIT_BRANCH_CREATE,
-    CAPABILITY_GIT_BRANCH_LIST, CAPABILITY_GIT_BRANCH_SWITCH, CAPABILITY_GIT_COMMIT,
-    CAPABILITY_GIT_COMMIT_FILES, CAPABILITY_GIT_COMMIT_FILE_DIFF, CAPABILITY_GIT_FETCH,
-    CAPABILITY_GIT_PREFETCH_COMMIT_DIFFS, CAPABILITY_GIT_PREFETCH_COMMIT_FILES,
-    CAPABILITY_GIT_PULL, CAPABILITY_GIT_PUSH, CAPABILITY_GIT_STAGE, CAPABILITY_GIT_STASH_POP,
-    CAPABILITY_GIT_STASH_PUSH, CAPABILITY_GIT_STATUS, CAPABILITY_GIT_UNSTAGE,
-    CAPABILITY_GIT_WORKING_TREE_FILE_DIFF, CAPABILITY_REPOSITORIES_CREATE,
-    CAPABILITY_REPOSITORIES_GET_GRAPH, CAPABILITY_REPOSITORIES_GET_SNAPSHOT,
-    CAPABILITY_REPOSITORIES_LIST, CAPABILITY_REPOSITORIES_OPEN, CAPABILITY_REPOSITORIES_REFRESH,
-    CAPABILITY_REPOSITORIES_REMOVE, CAPABILITY_SERVER_INFO, CAPABILITY_SERVER_STATUS,
-    MAX_GRAPH_TARGETS, MAX_PREFETCH_COMMIT_DIFF_TARGETS, MAX_PREFETCH_COMMIT_HASHES,
-    METHOD_GIT_BRANCH_CREATE, METHOD_GIT_BRANCH_LIST, METHOD_GIT_BRANCH_SWITCH, METHOD_GIT_COMMIT,
-    METHOD_GIT_COMMIT_FILES, METHOD_GIT_COMMIT_FILE_DIFF, METHOD_GIT_FETCH,
-    METHOD_GIT_PREFETCH_COMMIT_DIFFS, METHOD_GIT_PREFETCH_COMMIT_FILES, METHOD_GIT_PULL,
-    METHOD_GIT_PUSH, METHOD_GIT_STAGE, METHOD_GIT_STASH_POP, METHOD_GIT_STASH_PUSH,
-    METHOD_GIT_STATUS, METHOD_GIT_UNSTAGE, METHOD_GIT_WORKING_TREE_FILE_DIFF,
-    METHOD_REPOSITORIES_CREATE, METHOD_REPOSITORIES_GET_GRAPH, METHOD_REPOSITORIES_GET_SNAPSHOT,
-    METHOD_REPOSITORIES_LIST, METHOD_REPOSITORIES_OPEN, METHOD_REPOSITORIES_REFRESH,
-    METHOD_REPOSITORIES_REMOVE, METHOD_SERVER_GET_INFO, METHOD_SERVER_GET_STATUS, PROTOCOL_VERSION,
-    SCOPE_REPOSITORY_MANAGE, SCOPE_REPOSITORY_OPERATE, SCOPE_REPOSITORY_READ,
+    CAPABILITY_GIT_AMEND, CAPABILITY_GIT_BRANCH_CREATE, CAPABILITY_GIT_BRANCH_LIST,
+    CAPABILITY_GIT_BRANCH_SWITCH, CAPABILITY_GIT_COMMIT, CAPABILITY_GIT_COMMIT_FILES,
+    CAPABILITY_GIT_COMMIT_FILE_DIFF, CAPABILITY_GIT_DISCARD, CAPABILITY_GIT_FETCH,
+    CAPABILITY_GIT_HUNKS, CAPABILITY_GIT_PREFETCH_COMMIT_DIFFS,
+    CAPABILITY_GIT_PREFETCH_COMMIT_FILES, CAPABILITY_GIT_PULL, CAPABILITY_GIT_PUSH,
+    CAPABILITY_GIT_STAGE, CAPABILITY_GIT_STASH_POP, CAPABILITY_GIT_STASH_PUSH,
+    CAPABILITY_GIT_STATUS, CAPABILITY_GIT_UNSTAGE, CAPABILITY_GIT_WORKING_TREE_FILE_DIFF,
+    CAPABILITY_REPOSITORIES_CREATE, CAPABILITY_REPOSITORIES_GET_GRAPH,
+    CAPABILITY_REPOSITORIES_GET_SNAPSHOT, CAPABILITY_REPOSITORIES_LIST,
+    CAPABILITY_REPOSITORIES_OPEN, CAPABILITY_REPOSITORIES_REFRESH, CAPABILITY_REPOSITORIES_REMOVE,
+    CAPABILITY_SERVER_INFO, CAPABILITY_SERVER_STATUS, MAX_GRAPH_TARGETS,
+    MAX_PREFETCH_COMMIT_DIFF_TARGETS, MAX_PREFETCH_COMMIT_HASHES, METHOD_GIT_AMEND,
+    METHOD_GIT_AMEND_INFO, METHOD_GIT_APPLY_HUNKS, METHOD_GIT_BRANCH_CREATE,
+    METHOD_GIT_BRANCH_LIST, METHOD_GIT_BRANCH_SWITCH, METHOD_GIT_COMMIT, METHOD_GIT_COMMIT_FILES,
+    METHOD_GIT_COMMIT_FILE_DIFF, METHOD_GIT_DISCARD, METHOD_GIT_DISCARD_PREVIEW, METHOD_GIT_FETCH,
+    METHOD_GIT_HUNK_PREVIEW, METHOD_GIT_PREFETCH_COMMIT_DIFFS, METHOD_GIT_PREFETCH_COMMIT_FILES,
+    METHOD_GIT_PULL, METHOD_GIT_PUSH, METHOD_GIT_STAGE, METHOD_GIT_STASH_POP,
+    METHOD_GIT_STASH_PUSH, METHOD_GIT_STATUS, METHOD_GIT_UNSTAGE,
+    METHOD_GIT_WORKING_TREE_FILE_DIFF, METHOD_REPOSITORIES_CREATE, METHOD_REPOSITORIES_GET_GRAPH,
+    METHOD_REPOSITORIES_GET_SNAPSHOT, METHOD_REPOSITORIES_LIST, METHOD_REPOSITORIES_OPEN,
+    METHOD_REPOSITORIES_REFRESH, METHOD_REPOSITORIES_REMOVE, METHOD_SERVER_GET_INFO,
+    METHOD_SERVER_GET_STATUS, PROTOCOL_VERSION, SCOPE_REPOSITORY_MANAGE, SCOPE_REPOSITORY_OPERATE,
+    SCOPE_REPOSITORY_READ,
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -822,6 +826,9 @@ fn required_scope_for_method(method: &str) -> Option<&'static str> {
         }
         METHOD_GIT_STAGE
         | METHOD_GIT_UNSTAGE
+        | METHOD_GIT_APPLY_HUNKS
+        | METHOD_GIT_DISCARD
+        | METHOD_GIT_AMEND
         | METHOD_GIT_COMMIT
         | METHOD_GIT_FETCH
         | METHOD_GIT_PULL
@@ -837,6 +844,9 @@ fn required_scope_for_method(method: &str) -> Option<&'static str> {
         | METHOD_REPOSITORIES_GET_GRAPH
         | METHOD_REPOSITORIES_REFRESH
         | METHOD_GIT_STATUS
+        | METHOD_GIT_HUNK_PREVIEW
+        | METHOD_GIT_DISCARD_PREVIEW
+        | METHOD_GIT_AMEND_INFO
         | METHOD_GIT_COMMIT_FILES
         | METHOD_GIT_COMMIT_FILE_DIFF
         | METHOD_GIT_WORKING_TREE_FILE_DIFF
@@ -877,6 +887,14 @@ async fn dispatch(request: RequestEnvelope, state: &ServerState) -> ResponseEnve
         }
         METHOD_GIT_PREFETCH_COMMIT_DIFFS => {
             git_prefetch_commit_diffs(request.id, request.params, state).await
+        }
+        METHOD_GIT_HUNK_PREVIEW
+        | METHOD_GIT_APPLY_HUNKS
+        | METHOD_GIT_DISCARD_PREVIEW
+        | METHOD_GIT_DISCARD
+        | METHOD_GIT_AMEND_INFO
+        | METHOD_GIT_AMEND => {
+            git_working_tree(request.id, &request.method, request.params, state).await
         }
         METHOD_GIT_STAGE => git_stage(request.id, request.params, state).await,
         METHOD_GIT_UNSTAGE => git_unstage(request.id, request.params, state).await,
@@ -1280,6 +1298,165 @@ async fn git_status(request_id: String, params: Value, state: &ServerState) -> R
     }
 }
 
+/// Preview and mutation share the existing repository lock. These operations
+/// return their outcome directly; the client refreshes separately so refresh
+/// failure cannot be mistaken for permission to repeat a mutation.
+async fn reviewed_git_operation<T, F>(
+    state: &ServerState,
+    repository_id: &str,
+    operation: F,
+) -> Result<T, ProtocolError>
+where
+    T: Send + 'static,
+    F: FnOnce(&str) -> Result<T, GitError> + Send + 'static,
+{
+    validate_repository_id(repository_id)?;
+    let repository = state
+        .repository(repository_id)
+        .await
+        .ok_or_else(|| repository_not_configured_error(repository_id))?;
+    let lock = state.git_mutation_lock(repository_id).await;
+    let _guard = lock.lock().await;
+    spawn_blocking(move || operation(&repository.operation_path))
+        .await
+        .map_err(|_| git_failure_error("Git worker failed"))?
+        .map_err(git_operation_error)
+}
+
+async fn git_working_tree(
+    request_id: String,
+    method: &str,
+    params: Value,
+    state: &ServerState,
+) -> ResponseEnvelope {
+    use gitgui_core::git::working_tree;
+    // Canonical input validation remains at the protocol boundary; core also
+    // checks filesystem ancestry before reading or modifying a path.
+    let result: Result<Value, ProtocolError> = async {
+        match method {
+            METHOD_GIT_HUNK_PREVIEW => {
+                let p = parse_params::<GitHunkPreviewParams>(params, method)?;
+                validate_relative_file_path(&p.file_path)?;
+                reviewed_git_operation(state, &p.repository_id, move |root| {
+                    working_tree::preview_hunks(root, &p.file_path, p.staged)
+                })
+                .await
+                .and_then(serialize_workflow_result)
+            }
+            METHOD_GIT_APPLY_HUNKS => {
+                let p = parse_params::<GitApplyHunksParams>(params, method)?;
+                validate_relative_file_path(&p.file_path)?;
+                validate_revision(&p.revision)?;
+                if p.hunk_ids.is_empty() || p.hunk_ids.len() > 4096 {
+                    return Err(ProtocolError::new(
+                        error_codes::INVALID_PARAMS,
+                        "Select between 1 and 4096 hunks",
+                    ));
+                }
+                reviewed_git_operation(state, &p.repository_id, move |root| {
+                    working_tree::apply_hunks(
+                        root,
+                        &p.file_path,
+                        p.staged,
+                        &p.revision,
+                        &p.hunk_ids,
+                    )
+                })
+                .await?;
+                Ok(json!({}))
+            }
+            METHOD_GIT_DISCARD_PREVIEW => {
+                let p = parse_params::<GitPathsParams>(params, method)?;
+                validate_git_paths(&p.paths)?;
+                reviewed_git_operation(state, &p.repository_id, move |root| {
+                    working_tree::preview_discard(root, &p.paths)
+                })
+                .await
+                .and_then(serialize_workflow_result)
+            }
+            METHOD_GIT_DISCARD => {
+                let p = parse_params::<GitDiscardParams>(params, method)?;
+                validate_git_paths(&p.files.iter().map(|f| f.path.clone()).collect::<Vec<_>>())?;
+                for f in &p.files {
+                    validate_revision(&f.revision)?;
+                }
+                let files = p
+                    .files
+                    .into_iter()
+                    .map(|f| working_tree::DiscardFile {
+                        path: f.path,
+                        revision: f.revision,
+                        untracked: f.untracked,
+                    })
+                    .collect::<Vec<_>>();
+                reviewed_git_operation(state, &p.repository_id, move |root| {
+                    working_tree::discard(root, &files, p.delete_untracked)
+                })
+                .await
+                .and_then(serialize_workflow_result)
+            }
+            METHOD_GIT_AMEND_INFO => {
+                let p = parse_params::<GitRepositoryParams>(params, method)?;
+                reviewed_git_operation(state, &p.repository_id, working_tree::amend_info)
+                    .await
+                    .and_then(serialize_workflow_result)
+            }
+            METHOD_GIT_AMEND => {
+                let p = parse_params::<GitAmendParams>(params, method)?;
+                validate_commit_text(&p.summary, "summary", 4096)?;
+                validate_optional_text(
+                    p.description.as_deref().unwrap_or(""),
+                    "description",
+                    64 * 1024,
+                )?;
+                if !matches!(p.expected_head.len(), 40 | 64)
+                    || !p.expected_head.bytes().all(|b| b.is_ascii_hexdigit())
+                {
+                    return Err(ProtocolError::new(
+                        error_codes::INVALID_PARAMS,
+                        "expectedHead must be a commit object ID",
+                    ));
+                }
+                let message = build_commit_message(&p.summary, p.description.as_deref());
+                reviewed_git_operation(state, &p.repository_id, move |root| {
+                    working_tree::amend(root, &p.expected_head, &message)
+                })
+                .await?;
+                Ok(json!({}))
+            }
+            _ => Err(ProtocolError::new(
+                error_codes::METHOD_NOT_FOUND,
+                "Unknown working-tree method",
+            )),
+        }
+    }
+    .await;
+    match result {
+        Ok(value) => response_success(request_id, value),
+        Err(error) => ResponseEnvelope::error(request_id, error),
+    }
+}
+
+fn validate_revision(revision: &str) -> Result<(), ProtocolError> {
+    if revision.len() != 64 || !revision.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(ProtocolError::new(
+            error_codes::INVALID_PARAMS,
+            "revision must be a diff fingerprint",
+        ));
+    }
+    Ok(())
+}
+
+fn serialize_workflow_result<T: Serialize>(value: T) -> Result<Value, ProtocolError> {
+    serde_json::to_value(value)
+        .map_err(|_| ProtocolError::new(error_codes::INTERNAL, "Could not serialize Git outcome"))
+}
+
+fn applied_refresh_error(mut error: ProtocolError) -> ProtocolError {
+    error.details = Some(json!({ "mutationSucceeded": true }));
+    error
+}
+
 async fn git_stage(request_id: String, params: Value, state: &ServerState) -> ResponseEnvelope {
     let params = match parse_params::<GitPathsParams>(params, "git.stage") {
         Ok(params) => params,
@@ -1650,14 +1827,16 @@ where
         .map_err(|error| {
             warn!(error = %error, "repository refresh worker failed");
             git_failure_error("repository snapshot refresh failed")
-        })?
+        })
+        .map_err(applied_refresh_error)?
         .map_err(|error| match error {
             RepositoryLoadError::NotFound => repository_not_found_error(),
             RepositoryLoadError::Git(error) => {
                 warn!(error = %error.message, "Git snapshot refresh failed");
                 git_failure_error("repository snapshot could not be refreshed")
             }
-        })?;
+        })
+        .map_err(applied_refresh_error)?;
     Ok((repository.summary, snapshot, value))
 }
 
@@ -2936,6 +3115,9 @@ fn implemented_capabilities() -> Vec<String> {
         CAPABILITY_GIT_WORKING_TREE_FILE_DIFF,
         CAPABILITY_GIT_PREFETCH_COMMIT_FILES,
         CAPABILITY_GIT_PREFETCH_COMMIT_DIFFS,
+        CAPABILITY_GIT_HUNKS,
+        CAPABILITY_GIT_DISCARD,
+        CAPABILITY_GIT_AMEND,
         CAPABILITY_GIT_STAGE,
         CAPABILITY_GIT_UNSTAGE,
         CAPABILITY_GIT_COMMIT,
@@ -3437,6 +3619,41 @@ async fn shutdown_signal(state: Arc<ServerState>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reviewed_working_tree_methods_require_explicit_scopes() {
+        for method in [METHOD_GIT_APPLY_HUNKS, METHOD_GIT_DISCARD, METHOD_GIT_AMEND] {
+            assert_eq!(
+                required_scope_for_method(method),
+                Some(SCOPE_REPOSITORY_OPERATE)
+            );
+        }
+        for method in [
+            METHOD_GIT_HUNK_PREVIEW,
+            METHOD_GIT_DISCARD_PREVIEW,
+            METHOD_GIT_AMEND_INFO,
+        ] {
+            assert_eq!(
+                required_scope_for_method(method),
+                Some(SCOPE_REPOSITORY_READ)
+            );
+        }
+    }
+
+    #[test]
+    fn refresh_failure_records_that_mutation_succeeded() {
+        let error = applied_refresh_error(repository_not_found_error());
+        assert_eq!(error.details.unwrap()["mutationSucceeded"], true);
+    }
+
+    #[test]
+    fn reviewed_mutations_validate_revisions_and_literal_paths() {
+        assert!(validate_revision(&"a".repeat(64)).is_ok());
+        assert!(validate_revision("arbitrary patch").is_err());
+        assert!(validate_relative_file_path("file [1].txt").is_ok());
+        assert!(validate_relative_file_path("../outside").is_err());
+        assert!(validate_relative_file_path(".git/config").is_err());
+    }
 
     #[test]
     fn environment_identity_is_a_persisted_uuid() {
