@@ -1,6 +1,6 @@
 <script lang="ts">
   import { FileTree, type GitStatus, type GitStatusEntry } from "@pierre/trees";
-  import { Minus, Plus } from "@lucide/svelte";
+  import { Minus, Plus, Trash2 } from "@lucide/svelte";
   import { onMount } from "svelte";
   import type { ChangedFile } from "@gitgui/contracts";
   import type { CommitFile } from "$lib/types/repository";
@@ -13,6 +13,7 @@
     onSelectFile: (file: CommitFile, selectedFiles: ChangedFile[]) => void;
     onSelectionChange: (files: ChangedFile[]) => void;
     onAction: (file: ChangedFile) => void;
+    onDiscard?: (file: ChangedFile) => void;
     disabled?: boolean;
   };
 
@@ -29,6 +30,7 @@
     onSelectFile,
     onSelectionChange,
     onAction,
+    onDiscard,
     disabled = false,
   }: Props = $props();
 
@@ -383,10 +385,16 @@
 </script>
 
 <div class="relative h-full min-h-0 w-full overflow-hidden" role="group" aria-label={`${actionLabel} files`}>
-  <div bind:this={host} class="h-full min-h-0 w-full overflow-hidden" style={`--gitgui-tree-row-margin-right: ${13 + (treeHasOverflow ? scrollbarGutter : 0)}px; --trees-bg-override: var(--app-theme-sidebar); --trees-fg-override: var(--app-theme-sidebar-foreground); --trees-fg-muted-override: var(--app-theme-sidebar-muted-foreground); --trees-border-color-override: var(--app-theme-sidebar-border); --trees-selected-bg-override: var(--app-theme-sidebar-row-selected); --trees-selected-fg-override: var(--app-theme-accent-surface-foreground); --trees-accent-override: var(--app-theme-accent); --trees-focus-ring-color-override: var(--app-theme-focus); --trees-status-added-override: #2f9e6f; --trees-status-deleted-override: #e5484d; --trees-status-modified-override: #d09a2e; --trees-status-renamed-override: #8b5cf6; --trees-status-untracked-override: #2f9e6f; --trees-status-ignored-override: var(--app-theme-text-subtle); --trees-border-radius-override: 4px; --trees-font-family-override: inherit; --trees-font-size-override: 13px; --trees-padding-inline-override: 3px; --trees-item-padding-x-override: 3px; --trees-item-row-gap-override: 6px; --trees-level-gap-override: 0px; --trees-icon-width-override: 18px; --trees-item-height: 28px;`}></div>
+  <div bind:this={host} class="h-full min-h-0 w-full overflow-hidden" style={`--gitgui-tree-row-margin-right: ${(onDiscard ? 41 : 13) + (treeHasOverflow ? scrollbarGutter : 0)}px; --trees-bg-override: var(--app-theme-sidebar); --trees-fg-override: var(--app-theme-sidebar-foreground); --trees-fg-muted-override: var(--app-theme-sidebar-muted-foreground); --trees-border-color-override: var(--app-theme-sidebar-border); --trees-selected-bg-override: var(--app-theme-sidebar-row-selected); --trees-selected-fg-override: var(--app-theme-accent-surface-foreground); --trees-accent-override: var(--app-theme-accent); --trees-focus-ring-color-override: var(--app-theme-focus); --trees-status-added-override: #2f9e6f; --trees-status-deleted-override: #e5484d; --trees-status-modified-override: #d09a2e; --trees-status-renamed-override: #8b5cf6; --trees-status-untracked-override: #2f9e6f; --trees-status-ignored-override: var(--app-theme-text-subtle); --trees-border-radius-override: 4px; --trees-font-family-override: inherit; --trees-font-size-override: 13px; --trees-padding-inline-override: 3px; --trees-item-padding-x-override: 3px; --trees-item-row-gap-override: 6px; --trees-level-gap-override: 0px; --trees-icon-width-override: 18px; --trees-item-height: 28px;`}></div>
 
   <div class="pointer-events-none absolute inset-0 overflow-hidden">
     {#each treeFiles as entry, index (entry.path)}
+      {#if onDiscard}
+        <button aria-label={`Discard ${entry.file.path}`} title={`Discard ${entry.file.path}`} type="button"
+          class="pointer-events-auto absolute inline-flex h-7 w-7 items-center justify-center rounded bg-[var(--app-theme-sidebar)] text-[var(--app-theme-text-muted)] hover:text-[var(--app-theme-error-foreground)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus)] disabled:opacity-40"
+          disabled={disabled} style={`top: ${index * 28 - scrollTop}px; right: ${28 + (treeHasOverflow ? scrollbarGutter : 0)}px`}
+          onclick={() => onDiscard?.(entry.file)}><Trash2 aria-hidden="true" size={14} /></button>
+      {/if}
       <button
         aria-label={`${actionLabel} ${entry.file.path}`}
         class="pointer-events-auto absolute inline-flex h-7 w-7 items-center justify-center rounded bg-[var(--app-theme-sidebar)] text-[var(--app-theme-text-muted)] transition-colors hover:bg-[var(--app-theme-sidebar-row-hover)] hover:text-[var(--app-theme-accent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus)] disabled:cursor-not-allowed disabled:opacity-40"

@@ -2,6 +2,7 @@
   import { X } from "@lucide/svelte";
   import { onMount } from "svelte";
   import type { CodeView, FileContents, FileDiffMetadata } from "@pierre/diffs";
+  import type { GitHunkPreview, GitApplyHunksParams } from "@gitgui/contracts";
   import type { GitGuiClient } from "@gitgui/client-runtime";
   import { DIFF_VIEW_UNSAFE_CSS, resolveDiffThemeName } from "$lib/theme/diffTheme";
   import { themeStore } from "$lib/theme/useTheme";
@@ -30,13 +31,18 @@
     selectedCommit: CommitInfo | null;
     selectedFile: CommitFile;
     onClose: () => void;
+    onApplyHunks?: (params: GitApplyHunksParams) => void;
+    pending?: boolean;
   };
 
-  let { client, repositoryId, snapshot, diffSource, selectedCommit, selectedFile, onClose }: Props = $props();
+  let { client, repositoryId, snapshot, diffSource, selectedCommit, selectedFile, onClose, onApplyHunks, pending = false }: Props = $props();
   let viewerContainer: HTMLDivElement;
   let renderer = $state.raw<{ library: Diffs; viewer: CodeView } | null>(null);
   let parsedDiff: { source: CommitFileDiff; metadata: FileDiffMetadata } | null = null;
   let diff = $state<CommitFileDiff | null>(null);
+  let hunkPreview = $state<GitHunkPreview | null>(null);
+  let hunkError = $state("");
+  let selectedHunks = $state<number[]>([]);
   let loading = $state(false);
   let error = $state("");
   let renderError = $state("");
@@ -56,12 +62,13 @@
   $effect(() => {
     const requestKey = diffRequestKey;
 
-    if (requestKey === activeDiffRequestKey) {
+    const currentSnapshot = snapshot;
+    if (diffSource === "commit" && requestKey === activeDiffRequestKey) {
       return;
     }
 
     activeDiffRequestKey = requestKey;
-    void loadDiff(repositoryId, diffSource, selectedCommit, selectedFile);
+    void loadDiff(repositoryId, diffSource, selectedCommit, selectedFile, currentSnapshot);
   });
 
   $effect(() => {
@@ -107,6 +114,7 @@
     source: DiffSource,
     commit: CommitInfo | null,
     file: CommitFile,
+    currentSnapshot: RepositorySnapshot = snapshot,
   ) {
     if (destroyed) {
       return;
@@ -114,13 +122,16 @@
 
     const request = ++activeRequest;
     diff = null;
+    hunkPreview = null;
+    hunkError = "";
+    selectedHunks = [];
     error = "";
     loading = true;
 
     try {
       const commitHash = commit?.hash;
       const parentHash = commit?.parents[0] ?? null;
-      const headHash = snapshot.status.headOid ?? null;
+      const headHash = currentSnapshot.status.headOid ?? null;
 
       if (source === "commit" && !commitHash) {
         throw new Error("No commit is selected.");
@@ -141,7 +152,15 @@
               staged: source === "staged",
             });
 
+      let preview: GitHunkPreview | null = null;
+      let previewError = "";
+      if (source !== "commit") {
+        try { preview = await client.getHunkPreview({ repositoryId, filePath: file.path, staged: source === "staged" }); }
+        catch (caught) { previewError = formatError(caught); }
+      }
       if (!destroyed && request === activeRequest) {
+        hunkPreview = preview;
+        hunkError = previewError;
         diff = result.diff;
       }
     } catch (caught) {
@@ -207,6 +226,7 @@
         disableFileHeader: true,
         diffStyle: mode === "split" ? "split" : "unified",
         expandUnchanged: mode !== "hunks",
+        loadDiffFiles: async () => ({ oldFile: { name: currentDiff.originalPath ?? currentDiff.modifiedPath, contents: currentDiff.originalContent }, newFile: { name: currentDiff.modifiedPath, contents: currentDiff.modifiedContent } }),
         collapsedContextThreshold: 8,
         expansionLineCount: 20,
         hunkSeparators: "line-info",
@@ -249,7 +269,9 @@
           : { name: currentDiff.originalPath, contents: currentDiff.originalContent };
         parsedDiff = {
           source: currentDiff,
-          metadata: library.parseDiffFromFile(originalFile, modifiedFile, { context: 3 }, true),
+          metadata: hunkPreview && !hunkPreview.unavailableReason && hunkPreview.patch
+            ? library.parsePatchFiles(hunkPreview.patch, hunkPreview.revision, true)[0].files[0]
+            : library.parseDiffFromFile(originalFile, modifiedFile, { context: 3 }, true),
         };
       }
 
@@ -257,6 +279,24 @@
     } catch (caught) {
       renderError = formatError(caught);
     }
+  }
+
+  function toggleHunk(id: number) {
+    selectedHunks = selectedHunks.includes(id) ? selectedHunks.filter((selected) => selected !== id) : [...selectedHunks, id];
+  }
+
+  function showHunk(id: number) {
+    const hunk = parsedDiff?.metadata.hunks[id];
+    if (!hunk || !renderer) return;
+    contentViewMode = "diff";
+    renderer.viewer.scrollTo({ type: "line", id: "diff", lineNumber: Math.max(1, hunk.additionCount ? hunk.additionStart : hunk.deletionStart), side: hunk.additionCount ? "additions" : "deletions", align: "start" });
+  }
+
+  function submitHunks() {
+    if (!hunkPreview || pending || loading || !selectedHunks.length) return;
+    const ids = [...selectedHunks];
+    selectedHunks = [];
+    onApplyHunks?.({ repositoryId, filePath: selectedFile.path, staged: diffSource === "staged", revision: hunkPreview.revision, hunkIds: ids });
   }
 
   function formatError(caught: unknown) {
@@ -343,6 +383,32 @@
       <X aria-hidden="true" size={16} />
     </button>
   </header>
+
+  {#if diffSource !== "commit" && !loading && diff}
+    <div class="hunk-controls" aria-label="Hunk selection">
+      {#if hunkError || hunkPreview?.unavailableReason}
+        <p class="text-xs text-[var(--app-theme-text-muted)]">{hunkError || hunkPreview?.unavailableReason}</p>
+      {:else if hunkPreview}
+        <div class="flex items-center justify-between gap-3">
+          <span class="text-xs text-[var(--app-theme-text-muted)]">Select whole hunks ({selectedHunks.length}/{hunkPreview.hunks.length})</span>
+          <button type="button" class="state-action !mt-0" disabled={pending || loading || !renderer || Boolean(renderError) || !selectedHunks.length || !onApplyHunks} onclick={submitHunks}>
+            {diffSource === "staged" ? "Unstage selected hunks" : "Stage selected hunks"}
+          </button>
+        </div>
+        <div class="mt-2 flex flex-wrap gap-2">
+          {#each hunkPreview.hunks as hunk (hunk.id)}
+            <div class="inline-flex items-center gap-1 rounded border border-[var(--app-theme-border)] px-2 py-1 text-xs" class:selected-hunk={selectedHunks.includes(hunk.id)}>
+              <label class="inline-flex cursor-pointer items-center gap-2">
+                <input type="checkbox" checked={selectedHunks.includes(hunk.id)} disabled={pending || contentViewMode !== "diff"} onchange={() => toggleHunk(hunk.id)} aria-label={`Select hunk ${hunk.id + 1}`} />
+                Hunk {hunk.id + 1}
+              </label>
+              <button type="button" class="max-w-48 truncate font-mono text-[var(--app-theme-text-muted)] hover:underline" title={`Show hunk ${hunk.id + 1}: ${hunk.header}`} onclick={() => showHunk(hunk.id)}>{hunk.header}</button>
+            </div>
+          {/each}
+        </div>
+      {/if}
+    </div>
+  {/if}
 
   <div class="diff-body">
     <!-- svelte-ignore a11y_no_noninteractive_tabindex (Keyboard focus enables scrolling and line selection in this code region.) -->
@@ -542,6 +608,17 @@
     outline: 2px solid var(--app-theme-focus);
     outline-offset: 2px;
   }
+
+  .hunk-controls {
+    flex-shrink: 0;
+    max-height: 180px;
+    overflow: auto;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--app-theme-toolbar-border);
+    background: var(--app-theme-toolbar);
+  }
+  .selected-hunk { background: var(--app-theme-accent-surface); }
+  button:disabled { cursor: not-allowed; opacity: 0.45; }
 
   .diff-body {
     position: relative;

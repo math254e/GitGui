@@ -1,17 +1,33 @@
 <script lang="ts">
   import { Check, ChevronRight, LoaderCircle } from "@lucide/svelte";
+  import type { GitAmendInfo } from "@gitgui/contracts";
   import type { ChangedFile, CommitFile, RepositorySnapshot } from "$lib/types/repository";
   import WorkingTreeFileList from "$lib/components/WorkingTreeFileList.svelte";
 
   export type CommitMessageDraft = {
     summary: string;
     description: string;
+    amend?: boolean;
+    expectedHead?: string;
+  };
+
+  export type WorkingTreeDraftState = {
+    normal: CommitMessageDraft;
+    amend: CommitMessageDraft;
+    amendMode: boolean;
+    amendHead: string | null;
   };
 
   export type WorkingTreeDiffSource = "workingTree" | "staged";
 
   export type WorkingTreePanelProps = {
     snapshot: RepositorySnapshot;
+    draft: WorkingTreeDraftState;
+    amendInfo: GitAmendInfo | null;
+    amendLoading?: boolean;
+    onDraftChange: (draft: WorkingTreeDraftState) => void;
+    onAmendToggle: (enabled: boolean) => void;
+    onDiscardPaths: (paths: string[]) => void;
     selectedPaths: string[];
     selectedPathsSource: WorkingTreeDiffSource | null;
     onSelectionPathsChange: (paths: string[], source: WorkingTreeDiffSource) => void;
@@ -33,6 +49,7 @@
 
   let {
     snapshot,
+    draft, amendInfo, amendLoading = false, onDraftChange, onAmendToggle, onDiscardPaths,
     selectedPaths,
     selectedPathsSource,
     onSelectionPathsChange,
@@ -52,8 +69,9 @@
     disabled = false,
   }: WorkingTreePanelProps = $props();
 
-  let summary = $state("");
-  let description = $state("");
+  const currentDraft = $derived(draft.amendMode ? draft.amend : draft.normal);
+  const amendBlockedReason = $derived(amendInfo?.blockedReason ?? (!amendInfo ? "Loading amend availability…" : ""));
+  const staleAmend = $derived(draft.amendMode && draft.amendHead !== snapshot.status.headOid);
   let fileSectionsOpen = $state({ unstaged: true, staged: true });
   const initialSelectedPathsSource = readInitialSelectedPathsSource();
   const initialSelectedPaths = readInitialSelectedPaths();
@@ -76,10 +94,10 @@
   const selectedStagedFiles = $derived(
     stagedFiles.filter((file) => stagedSelectedPaths.includes(file.path)),
   );
-  const unstagedActionLabel = $derived(selectedUnstagedFiles.length > 1 ? "Stage selected" : "Stage all");
-  const stagedActionLabel = $derived(selectedStagedFiles.length > 1 ? "Unstage selected" : "Unstage all");
+  const unstagedActionLabel = $derived(selectedUnstagedFiles.length > 0 ? "Stage selected" : "Stage all");
+  const stagedActionLabel = $derived(selectedStagedFiles.length > 0 ? "Unstage selected" : "Unstage all");
   const commitInputsDisabled = $derived(disabled || commitPending);
-  const commitDisabled = $derived(disabled || pending || !stagedFiles.length || !summary.trim());
+  const commitDisabled = $derived(disabled || pending || (!draft.amendMode && !stagedFiles.length) || !currentDraft.summary.trim() || (draft.amendMode && (amendLoading || Boolean(amendBlockedReason) || staleAmend)));
   const stageControlsDisabled = $derived(disabled || stageActionRunning || stageQueueWaiting);
 
   function hasStagedChanges(file: ChangedFile) {
@@ -137,7 +155,7 @@
   }
 
   function stageUnstaged() {
-    if (selectedUnstagedFiles.length > 1) {
+    if (selectedUnstagedFiles.length > 0) {
       const paths = selectedUnstagedFiles.map((file) => file.path);
       clearSelection();
       onStagePaths(paths);
@@ -149,7 +167,7 @@
   }
 
   function unstageStaged() {
-    if (selectedStagedFiles.length > 1) {
+    if (selectedStagedFiles.length > 0) {
       const paths = selectedStagedFiles.map((file) => file.path);
       clearSelection();
       onUnstagePaths(paths);
@@ -182,9 +200,20 @@
     }
 
     onCommit({
-      summary: summary.trim(),
-      description: description.trim(),
+      summary: currentDraft.summary.trim(),
+      description: currentDraft.description.trim(),
+      amend: draft.amendMode,
+      ...(draft.amendHead ? { expectedHead: draft.amendHead } : {}),
     });
+  }
+
+  function editMessage(field: "summary" | "description", value: string) {
+    const mode = draft.amendMode ? "amend" : "normal";
+    onDraftChange({ ...draft, [mode]: { ...currentDraft, [field]: value } });
+  }
+
+  function discardUnstaged() {
+    onDiscardPaths((selectedUnstagedFiles.length ? selectedUnstagedFiles : unstagedFiles).map((file) => file.path));
   }
 
   function toggleFileSection(section: "unstaged" | "staged") {
@@ -244,6 +273,13 @@
           </button>
         </div>
 
+        <div class="mb-2 flex shrink-0 justify-end px-1">
+          <button type="button" class="text-xs font-medium text-[var(--app-theme-error-foreground)] hover:underline disabled:opacity-45"
+            disabled={pending || disabled || !unstagedFiles.length} onclick={discardUnstaged}>
+            {selectedUnstagedFiles.length ? "Discard selected" : "Discard all unstaged"}
+          </button>
+        </div>
+
         {#if fileSectionsOpen.unstaged}
           <div id="unstaged-files-list" class="min-h-0 flex-1 overflow-hidden">
             {#if unstagedFiles.length}
@@ -255,6 +291,7 @@
                 onSelectFile={selectUnstagedFile}
                 onSelectionChange={handleUnstagedSelection}
                 onAction={stageSingleFile}
+                onDiscard={(file) => onDiscardPaths([file.path])}
                 disabled={stageControlsDisabled}
               />
             {:else}
@@ -342,13 +379,27 @@
         {/if}
       </div>
 
+      <label class="mb-2 flex items-center gap-2 text-xs" title={amendBlockedReason}>
+        <input type="checkbox" checked={draft.amendMode} disabled={commitInputsDisabled || amendLoading || (!draft.amendMode && Boolean(amendBlockedReason))}
+          onchange={(event) => onAmendToggle(event.currentTarget.checked)} />
+        Amend last commit
+      </label>
+      {#if draft.amendMode}
+        <p class="mb-2 text-xs text-[var(--app-theme-text-muted)]" role="status">
+          {staleAmend ? "HEAD changed. Turn amend off and on to review the new commit." : amendBlockedReason || "Replaces the current commit, including if it was published. Only staged changes are included."}
+        </p>
+      {:else if amendInfo?.blockedReason}
+        <p class="mb-2 text-xs text-[var(--app-theme-text-muted)]">{amendInfo.blockedReason}</p>
+      {/if}
+
       <input
         id="commit-summary"
         class="mb-2 h-9 w-full rounded-md border border-[var(--app-theme-input)] bg-[var(--app-theme-canvas)] px-3 text-sm text-[var(--app-theme-text)] outline-none placeholder:text-[var(--app-theme-placeholder)] focus:border-[var(--app-theme-focus)] focus:ring-2 focus:ring-[var(--app-theme-focus-ring)] disabled:cursor-not-allowed disabled:opacity-50"
         disabled={commitInputsDisabled}
         placeholder="Summary"
         type="text"
-        bind:value={summary}
+        value={currentDraft.summary}
+        oninput={(event) => editMessage("summary", event.currentTarget.value)}
       />
       <textarea
         id="commit-description"
@@ -356,7 +407,8 @@
         aria-label="Commit description"
         disabled={commitInputsDisabled}
         placeholder="Description (optional)"
-        bind:value={description}
+        value={currentDraft.description}
+        oninput={(event) => editMessage("description", event.currentTarget.value)}
       ></textarea>
       <button
         class="mt-3 inline-flex h-10 w-full items-center justify-center gap-2 rounded-md border border-[var(--app-theme-accent)] bg-[var(--app-theme-accent-surface)] px-3 text-sm font-semibold text-[var(--app-theme-accent-surface-foreground)] transition-colors hover:bg-[var(--app-theme-sidebar-row-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus)] disabled:cursor-not-allowed disabled:opacity-45"
@@ -368,7 +420,7 @@
           Committing...
         {:else}
           <Check aria-hidden="true" size={16} strokeWidth={2.25} />
-          Commit staged files
+          {draft.amendMode ? "Amend last commit" : "Commit staged files"}
         {/if}
       </button>
     </form>

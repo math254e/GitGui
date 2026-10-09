@@ -15,6 +15,7 @@
   import EmptyDetailsPanel from "$lib/components/EmptyDetailsPanel.svelte";
   import GitActionStatusBar from "$lib/components/GitActionStatusBar.svelte";
   import GitGraph from "$lib/components/GitGraph.svelte";
+  import DiscardChangesDialog from "$lib/components/DiscardChangesDialog.svelte";
   import GitNameDialog from "$lib/components/GitNameDialog.svelte";
   import HistoryToolbar from "$lib/components/HistoryToolbar.svelte";
   import ResizablePaneGroup, { type ResizablePane } from "$lib/components/ResizablePaneGroup.svelte";
@@ -26,9 +27,10 @@
   import TopMenu, { type RepoTab } from "$lib/components/TopMenu.svelte";
   import WorkingTreePanel, {
     type CommitMessageDraft,
+    type WorkingTreeDraftState,
     type WorkingTreeDiffSource,
   } from "$lib/components/WorkingTreePanel.svelte";
-  import type { ChangedFile, RepositorySummary } from "@gitgui/contracts";
+  import type { ChangedFile, RepositorySummary, GitAmendInfo, GitDiscardFile, GitApplyHunksParams } from "@gitgui/contracts";
   import type { CommitFile, CommitInfo, CommitRef, RepositorySnapshot } from "$lib/types/repository";
   import { graphRefKey, isCurrentBranchRef } from "$lib/types/branch-visibility";
   import { readBranchSwitchMergePreference, resolveProjectsLocation } from "$lib/preferences";
@@ -71,6 +73,8 @@
     | "stage"
     | "unstage"
     | "commit"
+    | "amend"
+    | "discard"
     | "fetch"
     | "pull"
     | "push"
@@ -84,6 +88,7 @@
     action: (repositoryId: string) => Promise<unknown>;
     successMessage?: string;
     notifySuccess?: boolean;
+    onApplied?: () => void;
   };
   type PendingGitAction = GitActionRequest & {
     repositoryId: string;
@@ -107,6 +112,12 @@
   let bootstrapping = $state(false);
   let operationPending = $state(false);
   let gitAction = $state<{ repositoryId: string; kind: GitActionKind; label: string } | null>(null);
+  let commitDrafts = $state<Record<string, WorkingTreeDraftState>>({});
+  let amendInfo = $state<GitAmendInfo | null>(null);
+  let amendLoading = $state(false);
+  let amendRequest = 0;
+  let discardDialog = $state<{ repositoryId: string; environmentId: string; files: GitDiscardFile[]; loading: boolean; error: string; client: GitGuiClient } | null>(null);
+  const emptyDraft = (): WorkingTreeDraftState => ({ normal: { summary: "", description: "" }, amend: { summary: "", description: "" }, amendMode: false, amendHead: null });
   let queuedGitActions = $state<PendingGitAction[]>([]);
   let scrollToCommit = $state<{ id: number; repositoryId: string; hash: string } | null>(null);
   let largeScreen = $state(false);
@@ -148,7 +159,7 @@
   const activeWorkingTreeAction = $derived(
     gitAction?.repositoryId === activeRepoId ? gitAction : null,
   );
-  const commitPending = $derived(activeWorkingTreeAction?.kind === "commit");
+  const commitPending = $derived(activeWorkingTreeAction?.kind === "commit" || activeWorkingTreeAction?.kind === "amend");
   const stageActionRunning = $derived(
     activeWorkingTreeAction?.kind === "stage" || activeWorkingTreeAction?.kind === "unstage",
   );
@@ -164,6 +175,30 @@
   const sidebarStateKey = $derived(
     workspaceState?.environmentId && activeRepoId ? `${workspaceState.environmentId}:${activeRepoId}` : null,
   );
+  const activeCommitDraft = $derived(commitDrafts[sidebarStateKey ?? ""] ?? emptyDraft());
+
+  $effect(() => {
+    const client = gitClient;
+    const repositoryId = activeRepoId;
+    const currentSnapshot = snapshot;
+    const key = sidebarStateKey;
+    const request = ++amendRequest;
+    amendInfo = null;
+    amendLoading = Boolean(client && repositoryId && currentSnapshot && key);
+    if (!client || !repositoryId || !currentSnapshot || !key) return;
+    void client.getAmendInfo(repositoryId).then((info) => {
+      if (request === amendRequest) amendInfo = info;
+    }).catch((error) => {
+      if (request === amendRequest) amendInfo = { headOid: null, summary: "", description: "", blockedReason: summarizeGitError(error) };
+    }).finally(() => { if (request === amendRequest) amendLoading = false; });
+  });
+
+  $effect(() => {
+    if (discardDialog && (discardDialog.repositoryId !== activeRepoId || discardDialog.environmentId !== workspaceState?.environmentId)) {
+      discardDialog = null;
+    }
+  });
+
   const graphVisibilityReady = $derived(
     !activeRepoId || (sidebarStateKey !== null && loadedBranchVisibilityKey === sidebarStateKey),
   );
@@ -886,7 +921,7 @@
     if (reason.includes("not a git repository")) {
       return "This is not a Git repository.";
     }
-    return "Git could not complete the operation.";
+    return formatError(caught) || "Git could not complete the operation.";
   }
 
   function hasUnmergedFiles(repositoryId: string, state: ClientWorkspaceState) {
@@ -1108,20 +1143,30 @@
       label: request.label,
     };
 
+    let applied = false;
     try {
       await request.action(request.repositoryId);
-      const refreshedState = await workspace.refreshRepository(request.repositoryId);
+      applied = true;
+      request.onApplied?.();
+      const refreshedState = await refreshAfterMutation(workspace, request.repositoryId);
       if (request.kind === "switchBranch" && hasUnmergedFiles(request.repositoryId, refreshedState)) {
         toast.warning("Switched with conflicts", { description: "Resolve the highlighted conflicts." });
       } else if (request.notifySuccess !== false && request.successMessage) {
         toast.success(request.successMessage);
       }
     } catch (caught) {
-      // Pull and stash-pop can leave conflict markers or partial changes even
-      // when Git exits non-zero, so make the visible working tree authoritative
-      // before surfacing the error.
-      await workspace.refreshRepository(request.repositoryId).catch(() => undefined);
-      toast.error(`${request.label} failed`, { description: summarizeGitError(caught) });
+      const details = typeof caught === "object" && caught && "details" in caught ? caught.details : null;
+      const serverApplied = typeof details === "object" && details && "mutationSucceeded" in details && details.mutationSucceeded === true;
+      if (applied || serverApplied) {
+        if (!applied) request.onApplied?.();
+        toast.warning("Changes applied; refresh failed", {
+          description: summarizeGitError(caught),
+          action: { label: "Retry refresh", onClick: () => { void refreshAfterMutation(workspace, request.repositoryId).catch((error) => toast.error("Refresh failed", { description: summarizeGitError(error) })); } },
+        });
+      } else {
+        await workspace.refreshRepository(request.repositoryId).catch(() => undefined);
+        toast.error(`${request.label} failed`, { description: summarizeGitError(caught) });
+      }
     } finally {
       gitAction = null;
       const nextAction = queuedGitActions[0];
@@ -1130,6 +1175,73 @@
         void runGitAction(nextAction);
       }
     }
+  }
+
+  async function refreshAfterMutation(workspace: ClientWorkspace, repositoryId: string) {
+    const state = await workspace.refreshRepository(repositoryId);
+    const repository = state.repositories[repositoryId];
+    if (repository?.error) throw new Error(repository.error.message);
+    return state;
+  }
+
+  function changeCommitDraft(draft: WorkingTreeDraftState) {
+    if (sidebarStateKey) commitDrafts[sidebarStateKey] = draft;
+  }
+
+  function toggleAmend(enabled: boolean) {
+    const key = sidebarStateKey;
+    if (!key) return;
+    const draft = commitDrafts[key] ?? emptyDraft();
+    if (!enabled) { commitDrafts[key] = { ...draft, amendMode: false }; return; }
+    if (!amendInfo?.headOid || amendInfo.blockedReason || amendLoading) return;
+    commitDrafts[key] = { ...draft, amendMode: true, amendHead: amendInfo.headOid,
+      amend: draft.amendHead === amendInfo.headOid ? draft.amend : { summary: amendInfo.summary, description: amendInfo.description } };
+  }
+
+  async function openDiscard(paths: string[]) {
+    const client = gitClient;
+    const repositoryId = activeRepoId;
+    const environmentId = workspaceState?.environmentId;
+    if (!client || !repositoryId || !environmentId || gitActionPending || !paths.length) return;
+    const dialog = { repositoryId, environmentId, client, files: [] as GitDiscardFile[], loading: true, error: "" };
+    discardDialog = dialog;
+    try {
+      const files = await client.previewDiscard(repositoryId, paths);
+      if (discardDialog?.repositoryId === repositoryId && discardDialog.environmentId === environmentId) {
+        discardDialog = { ...dialog, files, loading: false };
+      }
+    } catch (caught) {
+      if (discardDialog?.repositoryId === repositoryId && discardDialog.environmentId === environmentId) {
+        discardDialog = { ...dialog, loading: false, error: summarizeGitError(caught) };
+      }
+    }
+  }
+
+  function confirmDiscard(files: GitDiscardFile[], deleteUntracked: boolean) {
+    const dialog = discardDialog;
+    if (!dialog || gitActionPending || !files.length) return;
+    discardDialog = { ...dialog, loading: true, error: "" };
+    requestGitAction({ kind: "discard", label: "Discarding", notifySuccess: false,
+      action: async (repositoryId) => {
+        try {
+          const outcome = await dialog.client.discard({ repositoryId, files, deleteUntracked });
+          discardDialog = null;
+          if (outcome.error) toast.error("Discard stopped", { description: `${outcome.error}\nChanged: ${outcome.completedPaths.join(", ") || "none"}\nRemaining: ${outcome.remainingPaths.join(", ")}` });
+          else toast.success(`Discarded changes in ${outcome.completedPaths.length} files`);
+        } catch (caught) {
+          if (discardDialog?.repositoryId === repositoryId && discardDialog.environmentId === dialog.environmentId) discardDialog = { ...dialog, loading: false, error: `${summarizeGitError(caught)} Close this dialog and review the updated changes.` };
+          throw caught;
+        }
+      },
+    });
+  }
+
+  function applySelectedHunks(params: GitApplyHunksParams) {
+    const client = gitClient;
+    if (!client || gitActionPending) return;
+    requestGitAction({ kind: params.staged ? "unstage" : "stage", label: params.staged ? "Unstaging hunks" : "Staging hunks", notifySuccess: false,
+      action: () => client.applyHunks(params),
+    });
   }
 
   function stageFile(file: ChangedFile) {
@@ -1213,15 +1325,22 @@
   }
 
   function commitChanges(draft: CommitMessageDraft) {
+    const client = gitClient;
+    const key = sidebarStateKey;
+    if (!client || !key) return;
     requestGitAction({
-      kind: "commit",
-      label: "Committing",
-      successMessage: "Changes committed",
-      action: (repositoryId) => gitClient!.commit({
-        repositoryId,
-        summary: draft.summary,
-        ...(draft.description ? { description: draft.description } : {}),
-      }),
+      kind: draft.amend ? "amend" : "commit",
+      label: draft.amend ? "Amending" : "Committing",
+      successMessage: draft.amend ? "Last commit amended" : "Changes committed",
+      action: (repositoryId) => draft.amend
+        ? client.amend({ repositoryId, expectedHead: draft.expectedHead ?? "", summary: draft.summary, ...(draft.description ? { description: draft.description } : {}) })
+        : client.commit({ repositoryId, summary: draft.summary, ...(draft.description ? { description: draft.description } : {}) }),
+      onApplied: () => {
+        const state = commitDrafts[key] ?? emptyDraft();
+        commitDrafts[key] = draft.amend
+          ? { ...state, amendMode: false, amendHead: null, amend: { summary: "", description: "" } }
+          : { ...state, normal: { summary: "", description: "" } };
+      },
     });
   }
 
@@ -1472,6 +1591,8 @@
               selectedCommit={selectedCommit}
               {selectedFile}
               onClose={closeDiff}
+              onApplyHunks={applySelectedHunks}
+              pending={gitActionPending}
             />
           </div>
         {:else}
@@ -1527,6 +1648,13 @@
             onStageAll={stageAll}
             onUnstageAll={unstageAll}
             onCommit={commitChanges}
+            draft={activeCommitDraft}
+            {amendInfo}
+            {amendLoading}
+            onDraftChange={changeCommitDraft}
+            onAmendToggle={toggleAmend}
+            onDiscardPaths={openDiscard}
+            disabled={gitActionPending}
             pending={gitActionPending}
             commitPending={commitPending}
             stageActionRunning={stageActionRunning}
@@ -1561,6 +1689,8 @@
                 selectedCommit={selectedCommit}
                 selectedFile={selectedFile!}
                 onClose={closeDiff}
+              onApplyHunks={applySelectedHunks}
+              pending={gitActionPending}
               />
             {:else}
               <Sidebar
@@ -1626,6 +1756,13 @@
                 onStageAll={stageAll}
                 onUnstageAll={unstageAll}
                 onCommit={commitChanges}
+            draft={activeCommitDraft}
+            {amendInfo}
+            {amendLoading}
+            onDraftChange={changeCommitDraft}
+            onAmendToggle={toggleAmend}
+            onDiscardPaths={openDiscard}
+            disabled={gitActionPending}
                 pending={gitActionPending}
                 commitPending={commitPending}
                 stageActionRunning={stageActionRunning}
@@ -1656,6 +1793,10 @@
     <GitActionStatusBar label={activeWorkingTreeAction?.label ?? null} />
   {/if}
 </main>
+
+<DiscardChangesDialog open={discardDialog !== null} files={discardDialog?.files ?? []}
+  loading={discardDialog?.loading ?? false} error={discardDialog?.error ?? ""}
+  onConfirm={confirmDiscard} onCancel={() => { discardDialog = null; }} />
 
 <RepositoryPathDialog
   open={repositoryPathDialogOpen}
