@@ -113,7 +113,10 @@ model.
 - The desktop shell creates the primary bootstrap credential and keeps it in
   the operating system's protected credential store.
 - The client exchanges a bootstrap or pairing credential for a scoped bearer
-  session through `POST /oauth/token`.
+  session through `POST /oauth/token`, retaining the server's credential grant.
+  Bootstrap sessions include repository catalog management so the desktop can
+  open/create/remove repositories; ordinary pairing sessions remain limited to
+  reading and operating on repositories already available on the host.
 - The client asks for a short-lived, single-use WebSocket ticket through
   `POST /api/auth/websocket-ticket` and puts it in the socket URL.
 - Every RPC method is authorized against explicit GitGui scopes by the server.
@@ -192,6 +195,13 @@ HTTP error bodies are validated before classification. Empty or nonstandard
 deadline covers the complete request, success/error body read, and JSON/schema
 decoding. A peer that sends headers and stalls its body cannot block discovery
 polls indefinitely; timeout interrupts and aborts the body read.
+
+The server's CORS allowlist includes Effect's default `b3` and `traceparent`
+request headers, following T3 Code's `apps/server/src/httpCors.ts`. Both the
+Electron renderer and hosted browser client enforce preflight checks, including
+for discovery. Only configured client origins are allowed. Node-based live
+tests do not enforce browser CORS; the server regression test exercises renderer
+preflights for discovery, token exchange, and WebSocket tickets.
 
 SSH authentication cancellation/rejection and host-trust cancellation/rejection
 are blocked failures requiring external action. The platform recognizes the SSH

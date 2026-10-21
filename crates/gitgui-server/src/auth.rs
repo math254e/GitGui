@@ -272,11 +272,28 @@ mod tests {
     async fn pairing_and_websocket_tickets_are_single_use() {
         let store = AuthStore::new("environment".to_string(), Some("bootstrap".to_string()));
         let admin = store.exchange("bootstrap", None).await.unwrap();
+        assert_eq!(
+            admin.scope.split_whitespace().collect::<Vec<_>>(),
+            ADMIN_SCOPES
+        );
         let pairing = store
             .issue_pairing_credential(&admin.access_token)
             .await
             .unwrap();
         let client = store.exchange(&pairing.credential, None).await.unwrap();
+        assert_eq!(
+            client.scope.split_whitespace().collect::<Vec<_>>(),
+            CLIENT_SCOPES
+        );
+        assert!(matches!(
+            store
+                .require_scopes(
+                    &client.access_token,
+                    &[gitgui_protocol::SCOPE_REPOSITORY_MANAGE]
+                )
+                .await,
+            Err(AuthError::Forbidden)
+        ));
         assert!(store.exchange(&pairing.credential, None).await.is_err());
 
         let ticket = store

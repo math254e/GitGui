@@ -98,6 +98,10 @@ it.skipIf(process.env["GITGUI_IT"] !== "1")("reconnects after a crash, an explic
     await runtime.start();
     await vi.waitFor(() => expect(runtime!.state.client).not.toBeNull(), { timeout: 10_000 });
     const environmentId = runtime.state.client!.serverWelcome.environment_id;
+    // Opening paths requires the bootstrap grant's catalog-management scope,
+    // beyond the read/operate scopes sufficient for status and discovery.
+    const opened = await runtime.state.client!.openRepository(repository);
+    expect(opened.repository.id).toBeTruthy();
     const firstUrl = current!.prepared.httpUrl;
     const firstToken = credentials.get(environmentId)!.token;
 

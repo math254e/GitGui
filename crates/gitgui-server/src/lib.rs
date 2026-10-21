@@ -530,7 +530,14 @@ fn cors_layer(allowed_origins: &[String]) -> CorsLayer {
     CorsLayer::new()
         .allow_origin(AllowOrigin::list(origins))
         .allow_methods([Method::GET, Method::POST])
-        .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE])
+        // Effect's HTTP client propagates both trace formats by default, as in
+        // T3 Code. Renderers preflight even descriptor requests with these headers.
+        .allow_headers([
+            header::AUTHORIZATION,
+            header::CONTENT_TYPE,
+            header::HeaderName::from_static("b3"),
+            header::HeaderName::from_static("traceparent"),
+        ])
 }
 
 fn bearer_token(headers: &HeaderMap) -> Option<&str> {

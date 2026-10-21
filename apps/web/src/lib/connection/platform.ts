@@ -467,8 +467,10 @@ export const authorizeConnectionCredential = (
     }
     return new BearerConnectionCredential({ token: credential.token, expiresAt: session.expiresAtUnixMs });
   }
+  // The server grants bootstrap catalog management and limits pairing grants.
+  // Downscoping both to Git operations prevents the desktop from opening repos.
   const exchanged = yield* bootstrapRemoteBearerSession({
-    httpBaseUrl: httpUrl, credential: credential.token, scopes: ["repository:read", "repository:operate"],
+    httpBaseUrl: httpUrl, credential: credential.token,
   }).pipe(Effect.mapError(mapRemoteEnvironmentError));
   return new BearerConnectionCredential({ token: exchanged.access_token, expiresAt: Date.now() + exchanged.expires_in * 1_000 });
 });

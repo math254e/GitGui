@@ -205,6 +205,19 @@ describe("web connection platform", () => {
     expect(exchanges).toBe(0);
   });
 
+  it.each(["bootstrap", "pairing"])("preserves the server's %s grant instead of restricting catalog access", async (kind) => {
+    let requestedScope: string | null | undefined;
+    const fetchFn: typeof fetch = async (input, init) => {
+      const request = new Request(input, init);
+      requestedScope = new URLSearchParams(await request.text()).get("scope");
+      return options.fetchFn(input, init);
+    };
+    await Effect.runPromise(authorizeConnectionCredential("http://127.0.0.1:3774", environmentId, { kind, token: "test-grant" })
+      .pipe(Effect.provide(layerRemoteHttpClient(fetchFn))));
+    expect(requestedScope).toBeNull();
+    expect(exchanges).toBe(1);
+  });
+
   it("exchanges an SSH bootstrap once and reuses the saved bearer on later preparations", async () => {
     options = { ...options, desktop: { listConnectionRegistrations: async () => [], ensureSshConnection: async () => ({ httpUrl: "http://127.0.0.1:3774", descriptor, credential: { kind: "bootstrap", token: "ssh-bootstrap" } }) } as unknown as DesktopBridge };
     await Effect.runPromise(Effect.gen(function* () {

@@ -211,6 +211,11 @@ These adapters have no vendored counterpart. Browser primary discovery retains
 its fragment credential in the lifetime of the application layer after stripping
 history, so registration and authentication share it. Bearer inputs are
 validated through `/api/auth/session`; bootstrap and pairing inputs are exchanged.
+As with T3's onboarding exchange, the adapter leaves the requested scope unset
+so the server decides the grant. GitGui's bootstrap grant includes repository
+catalog management, while its ordinary pairing grant only permits repository
+reads and Git operations; requesting the latter for bootstrap would prevent
+opening repositories in Electron.
 SSH restoration checks environment identity before using credentials, reuses a
 valid saved bearer, and exchanges a supplied bootstrap only if needed. Permission
 and transient failures do not trigger another exchange. Cached primary sessions
