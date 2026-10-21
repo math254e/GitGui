@@ -96,3 +96,15 @@ The server owns the host repository catalog and shared repository state. Each cl
 ## ADR-014 — Git graph rendering remains GitGui-specific
 
 T3 Code is not the reference for Git graph behavior. Graph extraction, lane assignment, rendering, performance, and interaction follow GitGui's graph design and appropriate Git GUI references.
+
+## ADR-015 — The URL owns what is on screen
+
+The SvelteKit client owns its routes. The URL selects what is displayed; the client workspace owns which repositories are open and remembers the last active repository so a cold start can resume into it.
+
+The route vocabulary is written down once, in `apps/web/src/lib/workspace/routes.ts`, and the agreement between the URL and the workspace is a pure function in `apps/web/src/lib/workspace/repository-routing.ts` so it can be tested without a browser.
+
+Routes use the path, not the fragment, in every shell. The Rust server, the Electron protocol handler, and the development server all answer an unknown path with the application shell, so no shell needs to understand the route. SvelteKit's `kit.router.type: 'hash'` remains available if the desktop shell ever stops serving the application files itself.
+
+The environment is not part of the URL. A repository identifier is issued by the backend and already names one environment, and the environment remains a client setting under Settings → Connections.
+
+The application workspace state lives in `apps/web/src/lib/workspace/`. It is mounted once at the application root, next to the connection runtime, and routes read it and call its actions. Routes never own sockets, retries, credentials, or Git mutations.

@@ -88,6 +88,44 @@ The client owns presentation and client-local workspace state:
 
 It reaches Git and repository state only through the shared client runtime. Components and routes do not own sockets, retries, credentials, or SSH behavior. Desktop-only settings consume only the narrow typed preload capabilities.
 
+#### Routing
+
+The client is a SvelteKit single-page application. The URL selects what is on
+screen and the client workspace owns which repositories are open.
+
+```text
+/                          Repositories home: the server catalog
+/repo/[repositoryId]       One repository workspace
+/new                       Create a repository
+/settings                  Redirects to /settings/general
+/settings/general          General preferences
+/settings/appearance       Themes
+/settings/connections      Environments, Git, and SSH
+```
+
+The repository identifier is the backend-issued id. The environment is not part
+of the URL; it stays a client setting under Settings → Connections.
+
+Every shell answers an unknown path with the application shell, so no shell has
+to understand a route:
+
+- the Rust server falls back from `ServeDir` to `index.html`;
+- the Electron `gitgui://` handler falls back to `index.html` for any path
+  that is not a static asset, and the window opens the scheme root;
+- the development server serves the shell.
+
+`apps/web/src/lib/workspace/` owns the client workspace: open tabs, the active
+selection, pending Git actions, commit drafts, dialog state, and layout
+preferences. The store is mounted once at the application root, next to the
+connection runtime, and routes read it and call its actions. The route
+vocabulary lives in `apps/web/src/lib/workspace/routes.ts` and the agreement
+between the URL and the workspace is a pure function in
+`apps/web/src/lib/workspace/repository-routing.ts`.
+
+The desktop shell forwards a `gitgui://` deep link to the renderer.
+`gitgui://repo/<repositoryId>` opens a repository and `gitgui://settings` opens
+the settings; `apps/web/src/lib/workspace/deep-links.ts` resolves them.
+
 The file viewer uses `@pierre/diffs` for syntax-highlighted file contents and
 virtualized diffs. Rust supplies the original and modified contents through the
 existing file-diff RPCs; the viewer computes display hunks from those contents.

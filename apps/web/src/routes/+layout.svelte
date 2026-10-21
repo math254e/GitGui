@@ -2,12 +2,46 @@
   import { onDestroy, onMount } from "svelte";
   import { Toaster } from "svelte-sonner";
   import { provideWebApplicationRuntime } from "$lib/connection/runtime";
+  import { provideWorkspaceStore } from "$lib/workspace";
+  import {
+    isSettingsRouteId,
+    NEW_REPOSITORY_ROUTE_ID,
+    REPOSITORY_ROUTE_ID,
+  } from "$lib/workspace/routes";
+  import DiscardChangesDialog from "$lib/components/DiscardChangesDialog.svelte";
+  import GitActionStatusBar from "$lib/components/GitActionStatusBar.svelte";
+  import GitNameDialog from "$lib/components/GitNameDialog.svelte";
+  import RepositoryPathDialog from "$lib/components/RepositoryPathDialog.svelte";
+  import TopMenu from "$lib/components/TopMenu.svelte";
 
   let { children } = $props();
   const runtime = provideWebApplicationRuntime();
+  const store = provideWorkspaceStore(runtime);
 
-  onMount(() => { void runtime.start(); });
-  onDestroy(() => { void runtime.stop(); });
+  onMount(() => {
+    void runtime.start();
+    store.start();
+  });
+
+  onDestroy(() => {
+    void runtime.stop();
+    store.dispose();
+  });
+
+  // The route decides what the chrome shows. The store only supplies the
+  // repository tabs and the current Git action. A repository route without a
+  // repository is the repositories view, exactly as before.
+  const activeView = $derived<"start" | "repo" | "settings" | "create">(
+    store.currentRouteId === REPOSITORY_ROUTE_ID
+      ? store.activeRepository
+        ? "repo"
+        : "start"
+      : isSettingsRouteId(store.currentRouteId)
+        ? "settings"
+        : store.currentRouteId === NEW_REPOSITORY_ROUTE_ID
+          ? "create"
+          : "start",
+  );
 
   const toastOptions = {
     unstyled: true,
@@ -26,4 +60,58 @@
 
 <Toaster position="bottom-left" offset={{ bottom: "40px", left: "24px" }} closeButton toastOptions={toastOptions} />
 
-{@render children()}
+<main class="grid h-screen min-h-0 grid-rows-[auto_minmax(0,1fr)_auto] bg-[var(--app-theme-canvas)] text-[var(--app-theme-text)]">
+  <TopMenu
+    {activeView}
+    activeRepoId={store.activeRepositoryId}
+    tabs={store.repoTabs}
+    onShowStart={() => void store.showStartView()}
+    onShowSettings={() => void store.showSettingsView()}
+    onSelectRepo={(repositoryId) => void store.selectRepository(repositoryId)}
+    onCloseRepo={(repositoryId) => void store.closeRepository(repositoryId)}
+  />
+
+  <section class="min-h-0 overflow-hidden">
+    {@render children()}
+  </section>
+
+  {#if activeView === "repo" && store.activeRepository}
+    <GitActionStatusBar label={store.activeWorkingTreeAction?.label ?? null} />
+  {/if}
+</main>
+
+<DiscardChangesDialog
+  open={store.discardDialog !== null}
+  files={store.discardDialog?.files ?? []}
+  loading={store.discardDialog?.loading ?? false}
+  error={store.discardDialog?.error ?? ""}
+  onConfirm={(files, deleteUntracked) => store.confirmDiscard(files, deleteUntracked)}
+  onCancel={() => { store.discardDialog = null; }}
+/>
+
+<RepositoryPathDialog
+  open={store.repositoryPathDialogOpen}
+  value={store.repositoryPathValue}
+  error={store.repositoryPathError}
+  loading={store.operationPending}
+  onValueChange={(value) => {
+    store.repositoryPathValue = value;
+    store.repositoryPathError = "";
+  }}
+  onSubmit={() => void store.submitRepositoryPath()}
+  onCancel={() => store.closeRepositoryPathDialog()}
+/>
+
+<GitNameDialog
+  open={store.gitNameDialogKind !== null}
+  kind={store.gitNameDialogKind ?? "branch"}
+  value={store.gitNameDialogValue}
+  loading={store.gitActionPending}
+  error={store.gitNameDialogError}
+  onValueChange={(value) => {
+    store.gitNameDialogValue = value;
+    store.gitNameDialogError = "";
+  }}
+  onSubmit={() => store.submitGitNameDialog()}
+  onCancel={() => store.closeGitNameDialog()}
+/>

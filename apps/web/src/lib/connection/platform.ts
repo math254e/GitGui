@@ -341,11 +341,49 @@ const sshFailure = (cause: unknown): ConnectionAttemptError => {
   return desktopFailure(cause);
 };
 
+/**
+ * The browser's primary endpoint and bootstrap grant.
+ *
+ * These are read once, when the connection layer is created. The client's
+ * routes own the address bar afterwards, so the endpoint must not depend on
+ * the path that happens to be open.
+ */
+interface BrowserPrimaryHint {
+  readonly endpoint: string;
+  readonly credential?: DesktopCredential;
+}
+
+const readBrowserPrimaryHint = (): BrowserPrimaryHint => {
+  const page = new URL(window.location.href);
+  const endpoint = page.searchParams.get("server")?.trim() || page.origin;
+  const fragment = new URLSearchParams(page.hash.replace(/^#/, ""));
+  const token = fragment.get("token") ?? fragment.get("bootstrap") ?? fragment.get("session_token");
+  const credential: DesktopCredential | undefined =
+    token === null
+      ? undefined
+      : { kind: fragment.has("session_token") ? "bearer" : "pairing", token };
+  return credential === undefined ? { endpoint } : { endpoint, credential };
+};
+
+/**
+ * Remove the bootstrap grant from the address bar.
+ *
+ * The grant is read before the client renders, but the fragment is removed
+ * once the router owns the history, so the two never race.
+ */
+const clearBrowserPrimaryFragment = (): void => {
+  if (typeof window === "undefined") return;
+  const page = new URL(window.location.href);
+  if (!page.hash) return;
+  page.hash = "";
+  history.replaceState(history.state, "", page);
+};
+
 /** The primary environment: the desktop's own backend, or the page's origin. */
 const readPrimaryEnvironment = (
   options: WebConnectionOptions,
 ) => {
-  let browserCredential: DesktopCredential | undefined;
+  const hint = options.desktop ? undefined : readBrowserPrimaryHint();
   return Effect.gen(function* () {
     if (options.desktop) {
       const prepared: DesktopPreparedConnection = yield* Effect.tryPromise({
@@ -358,26 +396,17 @@ const readPrimaryEnvironment = (
         ...(prepared.credential === undefined ? {} : { credential: prepared.credential }),
       };
     }
-    const page = new URL(window.location.href);
-    const endpoint = page.searchParams.get("server")?.trim() || window.location.origin;
+    clearBrowserPrimaryFragment();
+    const endpoint = hint!.endpoint;
     yield* Effect.try({
       try: () => validateDirectEndpoint(endpoint, false),
       catch: () => new ConnectionBlockedError({ reason: "configuration", detail: "The primary environment endpoint is invalid." }),
     });
-    const fragment = new URLSearchParams(page.hash.replace(/^#/, ""));
-    const token = fragment.get("token") ?? fragment.get("bootstrap") ?? fragment.get("session_token");
-    if (token !== null) {
-      browserCredential = { kind: fragment.has("session_token") ? "bearer" : "pairing", token };
-    }
-    if (page.hash) {
-      page.hash = "";
-      history.replaceState(history.state, "", page);
-    }
     const descriptor = yield* fetchDescriptor(endpoint, options.fetchFn);
     return {
       httpUrl: endpoint,
       descriptor,
-      ...(browserCredential === undefined ? {} : { credential: browserCredential }),
+      ...(hint!.credential === undefined ? {} : { credential: hint!.credential }),
     };
   });
 };

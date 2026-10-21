@@ -46,6 +46,11 @@ development command is now `npm run dev`.
 - History rows are virtualized, canvas edges use a viewport index, and refreshes
   preserve history identity and commit scroll anchors. See
   [repository watching and history scale](repository-watching.md).
+- The client owns its routes. The URL selects what is on screen, the
+  repositories home, the repository workspace, the create form, and the
+  settings pages each have a route, and the desktop shell can open a
+  repository through a `gitgui://` deep link. See
+  [architecture](architecture.md#routing).
 
 ## Next product work
 
