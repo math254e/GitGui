@@ -412,7 +412,6 @@
     }
     bootstrapping = state.loading;
     connectionError = state.connection?.phase === "blocked"
-      || state.connection?.phase === "waiting"
       || state.connection?.phase === "offline";
     startError = state.error;
     if (connectionError) activeView = "start";

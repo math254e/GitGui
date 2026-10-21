@@ -49,9 +49,27 @@ The framework-independent TypeScript runtime owns environments, credentials, con
 
 There is exactly one retry owner: `EnvironmentSupervisor`. A session factory performs one attempt. This avoids nested retries and inconsistent UI state.
 
-## ADR-008 — Use plain TypeScript runtime primitives initially
+## ADR-008 — The client runtime uses Effect, vendored from T3 Code
 
-GitGui copies T3 Code's runtime interfaces, state machine, lifecycle, and test cases without adopting Effect as an initial requirement. Use `AbortController`, explicit disposables, serialized async work, and observable stores. Revisit the implementation library only if concrete complexity justifies it.
+GitGui's client runtime uses Effect, the same library and the same version T3
+Code uses. T3 Code's client runtime is vendored file by file, so a later T3
+Code release can be copied over and keep working.
+
+The reason is maintenance, not style. The connection runtime is the part of
+GitGui that has to keep working against servers, networks, and operating
+systems that change underneath it. Copying T3 Code's implementation, its
+lifecycle rules, and its failure tests keeps that behavior identical to a
+system that is used in production, and it makes an upstream change a merge
+instead of a rewrite.
+
+The vendored files, the recorded divergences, and the re-sync procedure live
+in `docs/t3code-vendoring.md`. The runtime as it exists in GitGui is
+described in `docs/connection-runtime.md`.
+
+Where GitGui's domain differs from T3 Code's, the divergence is recorded in
+the vendored file's header and in the vendoring document. The GitGui server
+is Rust and speaks the GitGui envelope, so the RPC session multiplexes the
+envelope over `effect/socket` instead of using `effect/rpc`.
 
 ## ADR-009 — Authentication uses exchangeable sessions and WebSocket tickets
 

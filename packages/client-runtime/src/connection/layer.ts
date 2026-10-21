@@ -1,0 +1,46 @@
+/**
+ * Vendored from T3 Code (`packages/client-runtime/src/connection/layer.ts`).
+ *
+ * Upstream: t3code @ 1688f965682d331da16a8c39f049592361f69c8d
+ * (`v0.1.2-nightly.20261021.3473`).
+ *
+ * Divergences from upstream:
+ * - The relay discovery watcher is gone: GitGui has no relay.
+ * - The onboarding layer is gone: GitGui's desktop shell installs the primary
+ *   environment, so there is no in-app onboarding flow.
+ */
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Stream from "effect/Stream";
+
+import * as ConnectionResolver from "./resolver.ts";
+import * as ConnectionDriver from "./driver.ts";
+import * as EnvironmentRegistry from "./registry.ts";
+import * as PlatformConnectionSource from "../platform/source.ts";
+import * as RemoteEnvironmentAuthorization from "../authorization/service.ts";
+import * as RpcSession from "../rpc/session.ts";
+
+export function layerWithOptions(options: RpcSession.RpcSessionOptions) {
+  const layerDriver = ConnectionDriver.layer.pipe(
+    Layer.provide(Layer.mergeAll(ConnectionResolver.layer, RpcSession.layer(options))),
+  );
+  const layerRegistry = EnvironmentRegistry.layer.pipe(Layer.provide(layerDriver));
+  const layerConnectionServices = Layer.mergeAll(layerRegistry, ConnectionResolver.layer);
+  const layerConnectionStartup = Layer.effectDiscard(
+    Effect.gen(function* () {
+      const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+      const platformSource = yield* PlatformConnectionSource.PlatformConnectionSource;
+      yield* registry.start;
+      yield* platformSource.registrations.pipe(
+        Stream.runForEach(registry.reconcilePlatform),
+        Effect.forkScoped,
+      );
+    }).pipe(Effect.withSpan("clientRuntime.connection.application.start")),
+  );
+  return layerConnectionStartup.pipe(
+    Layer.provideMerge(layerConnectionServices),
+    Layer.provideMerge(RemoteEnvironmentAuthorization.layer),
+  );
+}
+
+export const layer = layerWithOptions({});

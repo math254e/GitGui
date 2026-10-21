@@ -5,6 +5,10 @@
   "type": "module",
   "exports": {
     ".": "./src/protocol.ts",
-    "./desktop": "./src/desktop.ts"
+    "./desktop": "./src/desktop.ts",
+    "./environment": "./src/environment.ts"
+  },
+  "dependencies": {
+    "effect": "4.0.5"
   }
 }

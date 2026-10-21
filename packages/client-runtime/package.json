@@ -6,15 +6,39 @@
   "exports": {
     ".": "./src/index.ts",
     "./connection": "./src/connection/index.ts",
-    "./rpc": "./src/rpc/index.ts"
+    "./connection/catalog": "./src/connection/catalog.ts",
+    "./connection/connectivity": "./src/connection/connectivity.ts",
+    "./connection/layer": "./src/connection/layer.ts",
+    "./connection/model": "./src/connection/model.ts",
+    "./connection/wakeups": "./src/connection/wakeups.ts",
+    "./rpc": "./src/rpc/index.ts",
+    "./rpc/http": "./src/rpc/http.ts",
+    "./platform/capabilities": "./src/platform/capabilities.ts",
+    "./platform/catalog": "./src/platform/catalog.ts",
+    "./platform/persistence": "./src/platform/persistence.ts",
+    "./platform/records": "./src/platform/records.ts",
+    "./platform/source": "./src/platform/source.ts",
+    "./authorization/remote": "./src/authorization/remote.ts",
+    "./connection/credentialStore": "./src/connection/credentialStore.ts",
+    "./connection/profileStore": "./src/connection/profileStore.ts",
+    "./connection/errors": "./src/connection/errors.ts",
+    "./connection/registry": "./src/connection/registry.ts",
+    "./connection/supervisor": "./src/connection/supervisor.ts",
+    "./rpc/session": "./src/rpc/session.ts",
+    "./environment/descriptor": "./src/environment/descriptor.ts"
   },
-  "dependencies": { "@gitgui/contracts": "0.1.0" },
+  "dependencies": {
+    "@gitgui/contracts": "0.1.0",
+    "@gitgui/shared": "0.1.0",
+    "effect": "4.0.5"
+  },
   "scripts": {
     "check": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run"
   },
   "devDependencies": {
+    "@effect/vitest": "4.0.5",
     "typescript": "~5.6.2",
-    "vitest": "^3.2.4"
+    "vitest": "5.0.5"
   }
 }

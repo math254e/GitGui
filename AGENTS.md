@@ -140,10 +140,21 @@ store/context adapter is mounted once at the application root. Routes and
 components must not own sockets, retries, credentials, Electron detection, or
 SSH behavior.
 
-Use plain TypeScript lifecycle primitives initially: `AbortController`, explicit
-disposables, serialized async operations, and observable stores. Do not add
-Effect solely to match T3's implementation library; copy the boundaries,
-semantics, and applicable tests.
+The runtime uses Effect, the same library and the same version T3 Code uses
+(`effect@4.0.5`). T3 Code's client runtime is vendored file by file so that a
+later T3 Code release can be copied over and keep working. See
+`docs/t3code-vendoring.md` for the vendored files, the recorded divergences,
+and the re-sync procedure, and `docs/connection-runtime.md` for the runtime as
+it exists here.
+
+When changing the runtime:
+
+- Prefer a change in the vendored file over a new local implementation, so
+  the next upstream snapshot still applies.
+- Record every divergence in the vendored file's header and in
+  `docs/t3code-vendoring.md`.
+- Keep the Effect version, the `@effect/vitest` version, and the vendored
+  snapshot aligned with T3 Code.
 
 ## Authentication and transport
 

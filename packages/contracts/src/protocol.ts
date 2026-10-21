@@ -5,6 +5,42 @@
 /** Any JSON value accepted by the GitGui wire protocol. */
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 
+/// Every method the WebSocket RPC surface accepts.
+export const WS_METHOD_NAMES = [
+  "server.get_info",
+  "server.get_status",
+  "repositories.list",
+  "repositories.open",
+  "repositories.create",
+  "repositories.remove",
+  "repositories.get_snapshot",
+  "repositories.get_graph",
+  "repositories.refresh",
+  "git.status",
+  "git.commit_files",
+  "git.commit_file_diff",
+  "git.working_tree_file_diff",
+  "git.prefetch_commit_files",
+  "git.prefetch_commit_diffs",
+  "git.stage",
+  "git.unstage",
+  "git.commit",
+  "git.hunk_preview",
+  "git.apply_hunks",
+  "git.discard_preview",
+  "git.discard",
+  "git.amend_info",
+  "git.amend",
+  "git.fetch",
+  "git.pull",
+  "git.push",
+  "git.branch.list",
+  "git.branch.create",
+  "git.branch.switch",
+  "git.stash.push",
+  "git.stash.pop",
+] as const;
+
 export type RequestEnvelope = {
 /**
  * Client-chosen identifier echoed by the response.

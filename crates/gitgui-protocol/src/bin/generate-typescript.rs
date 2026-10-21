@@ -144,6 +144,15 @@ fn main() -> io::Result<()> {
     ];
 
     let mut output = String::from(HEADER);
+    output.push_str("/// Every method the WebSocket RPC surface accepts.\n");
+    output.push_str("export const WS_METHOD_NAMES = [\n");
+    for method in gitgui_protocol::WS_METHOD_NAMES {
+        output.push_str("  \"");
+        output.push_str(method);
+        output.push_str("\",\n");
+    }
+    output.push_str("] as const;\n");
+    output.push('\n');
     for declaration in declarations {
         for line in export_declaration(&declaration).lines() {
             output.push_str(line.trim_end());

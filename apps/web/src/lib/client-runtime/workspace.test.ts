@@ -116,6 +116,23 @@ describe("repository invalidations", () => {
     f.workspace.dispose();
   });
 
+  it("does not recreate removed metadata when a pending load finishes after disposal", async () => {
+    let finishLoad!: (value: null) => void;
+    const metadata = {
+      load: vi.fn(() => new Promise<null>((resolve) => { finishLoad = resolve; })),
+      save: vi.fn(async () => undefined),
+      remove: vi.fn(async () => undefined),
+    };
+    const workspace = new ClientWorkspace({ client: {} as GitGuiClient, identity: { environmentId: "removed" }, metadataAdapter: metadata });
+    const pending = workspace.removeRecentRepository("repo");
+    await vi.waitFor(() => expect(metadata.load).toHaveBeenCalledOnce());
+    workspace.dispose();
+    await metadata.remove();
+    finishLoad(null);
+    await pending;
+    expect(metadata.save).not.toHaveBeenCalled();
+  });
+
   it("keeps the previous polling cadence for servers without watch support", async () => {
     const f = await fixture("legacy", false);
     await vi.advanceTimersByTimeAsync(30_100);

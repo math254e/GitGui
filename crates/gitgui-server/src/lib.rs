@@ -3701,9 +3701,44 @@ mod tests {
         fs::remove_dir_all(data_dir).expect("remove isolated test state");
     }
 
+    #[tokio::test]
+    async fn every_registered_method_is_dispatched() {
+        let data_dir = env::temp_dir().join(format!(
+            "gitgui-method-registry-test-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let mut config = ServerConfig::default();
+        config.data_dir = Some(data_dir.clone());
+        let startup = load_startup_state(&config).expect("startup state");
+        let state = Arc::new(ServerState::new(
+            &config,
+            "127.0.0.1:0".parse().expect("test address"),
+            startup.repositories,
+        ));
+
+        for method in gitgui_protocol::WS_METHOD_NAMES {
+            let request = RequestEnvelope {
+                id: "registry-probe".to_string(),
+                method: (*method).to_string(),
+                params: serde_json::json!({}),
+            };
+            let response = dispatch(request, &state).await;
+            let is_unknown_method = match &response {
+                ResponseEnvelope::Error(error) => error.error.code == error_codes::METHOD_NOT_FOUND,
+                ResponseEnvelope::Success(_) => false,
+            };
+            assert!(
+                !is_unknown_method,
+                "{method} is registered but the server does not dispatch it"
+            );
+        }
+
+        let _ = fs::remove_dir_all(data_dir);
+    }
+
     #[test]
-    fn creates_and_loads_empty_repository() {
-        let parent = env::temp_dir().join(format!(
+    fn creates_and_loads_empty_repository() {        let parent = env::temp_dir().join(format!(
             "gitgui-create-test-{}-{}",
             std::process::id(),
             SystemTime::now()

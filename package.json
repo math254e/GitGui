@@ -4,7 +4,10 @@
   "private": true,
   "description": "GitGui Electron, SvelteKit, TypeScript, and Rust workspace",
   "type": "module",
-  "workspaces": ["apps/*", "packages/*"],
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
   "scripts": {
     "dev": "node scripts/dev-electron.mjs",
     "dev:desktop": "node scripts/dev-electron.mjs",
@@ -15,9 +18,10 @@
     "server:prepare": "node scripts/prepare-gitgui-server.mjs",
     "web:serve": "npm run build && cargo run -p gitgui-server -- --bind 127.0.0.1 --port 3774 --repository . --web-dir apps/web/build",
     "protocol:generate": "cargo run -p gitgui-protocol --bin generate-typescript --quiet",
+    "vendor:sync": "node scripts/vendor-t3code.mjs",
     "preview": "npm run preview -w @gitgui/web",
     "check": "npm run protocol:generate && npm run check --workspaces --if-present",
-    "test": "npm run test --workspaces --if-present && cargo test --workspace",
+    "test": "node --test scripts/vendor-t3code.test.mjs && npm run test --workspaces --if-present && cargo test --workspace",
     "electron:package": "npm run server:prepare -- --release && npm run build && npm run desktop:build && electron-builder --config apps/desktop/electron-builder.yml"
   },
   "license": "MIT",

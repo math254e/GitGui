@@ -593,7 +593,9 @@ export class ClientWorkspace {
 
   private async persist(): Promise<void> {
     this.metadataWrite = this.metadataWrite.catch(() => undefined).then(async () => {
+      if (this.disposed) return;
       await this.loadMetadata();
+      if (this.disposed) return;
       const metadata = stateToMetadata(this._state);
       await this.metadataAdapter.save(this.identity, metadata);
       this.metadata = metadata;

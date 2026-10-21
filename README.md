@@ -43,6 +43,11 @@ T3-shaped frontend/backend/desktop boundaries: the standalone Rust
 TypeScript connection runtime, and Electron supervises the local server and
 owns SSH/native capabilities.
 
+The shared connection runtime is T3 Code's connection runtime, adapted to Git
+and vendored file by file with Effect, so a later T3 Code release can be copied
+over. See [the vendoring record](docs/t3code-vendoring.md) and
+[the connection runtime](docs/connection-runtime.md).
+
 The previous desktop shell and root-level SvelteKit layout have been removed. Local,
 direct/Tailscale, and Electron-managed SSH environments all enter the same
 HTTP/WebSocket client session model.

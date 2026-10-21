@@ -1,0 +1,236 @@
+{
+  "$comment": "Files vendored from T3 Code into GitGui. Run `npm run vendor:sync` to compare the vendored files with the upstream checkout.",
+  "upstream": {
+    "repository": "t3code",
+    "commit": "1688f965682d331da16a8c39f049592361f69c8d",
+    "tag": "v0.1.2-nightly.20261021.3473",
+    "defaultCheckout": "/data/references/t3code"
+  },
+  "files": [
+    {
+      "upstream": "packages/client-runtime/src/connection/wakeups.ts",
+      "target": "packages/client-runtime/src/connection/wakeups.ts",
+      "mode": "verbatim",
+      "replacements": [
+        "@t3tools/client-runtime"
+      ]
+    },
+    {
+      "upstream": "packages/client-runtime/src/connection/connectivity.ts",
+      "target": "packages/client-runtime/src/connection/connectivity.ts",
+      "mode": "verbatim",
+      "replacements": [
+        "@t3tools/client-runtime"
+      ]
+    },
+    {
+      "upstream": "packages/client-runtime/src/connection/profileStore.ts",
+      "target": "packages/client-runtime/src/connection/profileStore.ts",
+      "mode": "verbatim",
+      "replacements": [
+        "@t3tools/client-runtime"
+      ]
+    },
+    {
+      "upstream": "packages/client-runtime/src/connection/credentialStore.ts",
+      "target": "packages/client-runtime/src/connection/credentialStore.ts",
+      "mode": "verbatim",
+      "replacements": [
+        "@t3tools/client-runtime"
+      ]
+    },
+    {
+      "upstream": "packages/client-runtime/src/platform/source.ts",
+      "target": "packages/client-runtime/src/platform/source.ts",
+      "mode": "verbatim",
+      "replacements": [
+        "@t3tools/client-runtime"
+      ]
+    },
+    {
+      "upstream": "packages/client-runtime/src/errors/errorTrace.ts",
+      "target": "packages/client-runtime/src/errors/errorTrace.ts",
+      "mode": "verbatim",
+      "replacements": [
+        "@t3tools/client-runtime"
+      ]
+    },
+    {
+      "upstream": "packages/client-runtime/src/errors/safeLog.ts",
+      "target": "packages/client-runtime/src/errors/safeLog.ts",
+      "mode": "verbatim",
+      "replacements": [
+        "@t3tools/client-runtime"
+      ]
+    },
+    {
+      "upstream": "packages/client-runtime/src/connection/model.ts",
+      "target": "packages/client-runtime/src/connection/model.ts",
+      "mode": "adapted",
+      "upstreamSha256": "ad14fb39a1487dc31fdcfe2ced2fbadce51e69785199d0a4fd55ee2eb20ad510",
+      "targetSha256": "8a9336ff7db500f3356b8d2b70c7e3f9010800020aa9afe72dbed18277e34a5b"
+    },
+    {
+      "upstream": "packages/client-runtime/src/connection/catalog.ts",
+      "target": "packages/client-runtime/src/connection/catalog.ts",
+      "mode": "adapted",
+      "upstreamSha256": "14f80aef06e289f5600c2b56d811e56842eb2a4c2c037635b8c3b20399f5a7dc",
+      "targetSha256": "729da4d11ab9ce3c998b8f53f32153632042a964c80eaa6c3672a9595fd91728"
+    },
+    {
+      "upstream": "packages/client-runtime/src/connection/routes.ts",
+      "target": "packages/client-runtime/src/connection/routes.ts",
+      "mode": "adapted",
+      "upstreamSha256": "3441cf52c1a090720ca2717fe24f73422d95e4eaebdcf414280e0e7d9e64386d",
+      "targetSha256": "16146214fe47f2eb170a3ba9f39c7374e0eb3d65ef7f8fd42836b474a0cb5948"
+    },
+    {
+      "upstream": "packages/client-runtime/src/connection/errors.ts",
+      "target": "packages/client-runtime/src/connection/errors.ts",
+      "mode": "adapted",
+      "upstreamSha256": "525169726e93c560ea5bef3ec6769c62e9807c4b3e2d8b923ab4ed5cfd905b96",
+      "targetSha256": "5dc0e3cee922a57c64ec247ae62caf14e5c2b83619415c6673ff81bdc8c469d0"
+    },
+    {
+      "upstream": "packages/client-runtime/src/connection/compatibility.ts",
+      "target": "packages/client-runtime/src/connection/compatibility.ts",
+      "mode": "adapted",
+      "upstreamSha256": "5b18d0193d73be62e22bbc7da46395c8f54b2e49bed47f01bd8cd62524dad65a",
+      "targetSha256": "52dc354c389c506459abbd00477d9ccdf9f84a525ad57b51aebbae890e5a5872"
+    },
+    {
+      "upstream": "packages/client-runtime/src/connection/resolver.ts",
+      "target": "packages/client-runtime/src/connection/resolver.ts",
+      "mode": "adapted",
+      "upstreamSha256": "97ed45571050907fe188d946da8e0610b6f314081d232c5649b02d49dffb7e6b",
+      "targetSha256": "01f4be0cde94639c62165a88493301e26d69c248ce496fdd415dda8d5fcbd96e"
+    },
+    {
+      "upstream": "packages/client-runtime/src/connection/driver.ts",
+      "target": "packages/client-runtime/src/connection/driver.ts",
+      "mode": "adapted",
+      "upstreamSha256": "c20b1311a55e7ee1a8cf3f0e268b0a6b6c2ceb06966c42c949e5586b16c80591",
+      "targetSha256": "e2db410642c20869e147dbeadb1f895a18010f75a80f091b70cee31776a50079"
+    },
+    {
+      "upstream": "packages/client-runtime/src/connection/supervisor.ts",
+      "target": "packages/client-runtime/src/connection/supervisor.ts",
+      "mode": "adapted",
+      "upstreamSha256": "6233ee9430216cca06b92f4bdc77df3e240a9db1602ffae440674a7a90c6c697",
+      "targetSha256": "f7e8eed1f5100aaae7b8d4cae7d30ec057a85ab23e434096d678f8348ed25544"
+    },
+    {
+      "upstream": "packages/client-runtime/src/connection/registry.ts",
+      "target": "packages/client-runtime/src/connection/registry.ts",
+      "mode": "adapted",
+      "upstreamSha256": "3f04106c0b98736bcf448c8c2310bc8ea3938617d89da0f41fbafb82caae1a48",
+      "targetSha256": "75e97da6468c39939eee738c7948fa65abbe7a2c820191dcd539e0bed4796c37"
+    },
+    {
+      "upstream": "packages/client-runtime/src/connection/layer.ts",
+      "target": "packages/client-runtime/src/connection/layer.ts",
+      "mode": "adapted",
+      "upstreamSha256": "07a4ed7be3bfc6d771e168dab1a835f7cf04e3896772c0dfe98fab72fa0236ac",
+      "targetSha256": "a36541216fed86cbb075cfeb7a3049d0db26eb5e7a1778258e7db29ce2aa3980"
+    },
+    {
+      "upstream": "packages/client-runtime/src/rpc/protocol.ts",
+      "target": "packages/client-runtime/src/rpc/protocol.ts",
+      "mode": "adapted",
+      "upstreamSha256": "8ad7ff83e20ae6e0d98367da9fdb100b35e7be75cb082957f47009e305c5a4c2",
+      "targetSha256": "5ab6fe4b564188bcf7bf4694fd9c2bdcd32585310b422985310cb3c3b9491b6e"
+    },
+    {
+      "upstream": "packages/client-runtime/src/rpc/session.ts",
+      "target": "packages/client-runtime/src/rpc/session.ts",
+      "mode": "adapted",
+      "upstreamSha256": "e4ae1f02896adf7458ac19e7cd243979985da757b923d765656bc228ce0e9808",
+      "targetSha256": "22c29aa3d0046266282df26814318197010a226227080a3a03ae7a004a9c3363"
+    },
+    {
+      "upstream": "packages/client-runtime/src/rpc/client.ts",
+      "target": "packages/client-runtime/src/rpc/client.ts",
+      "mode": "adapted",
+      "upstreamSha256": "fa7e606065b06f6f8d933bd3a561c1ee91fb7b93030777e9e0aa15f27358d1f7",
+      "targetSha256": "c978f7b293d0531bf6a5904d9b3729af0d61ed87bc586d51dfe4744cf25fec78"
+    },
+    {
+      "upstream": "packages/client-runtime/src/rpc/http.ts",
+      "target": "packages/client-runtime/src/rpc/http.ts",
+      "mode": "adapted",
+      "upstreamSha256": "baf59a014b26f3ccc1b9e81622029a70acc1c660f819165241832a52d4594d0b",
+      "targetSha256": "eb8a9bb85b5d1572f6dbf43021eaa8daceac19df22f82e8cd343584c9c660963"
+    },
+    {
+      "upstream": "packages/client-runtime/src/environment/descriptor.ts",
+      "target": "packages/client-runtime/src/environment/descriptor.ts",
+      "mode": "adapted",
+      "upstreamSha256": "2e88105b65c4e3bcdd21fed4b0d683ece07805954030dc403370a04ecc425d77",
+      "targetSha256": "99c172c32b5d2e409f74a5c9735251de400f582b32b46af5555e4cfdee4a1d4a"
+    },
+    {
+      "upstream": "packages/client-runtime/src/environment/endpoint.ts",
+      "target": "packages/client-runtime/src/environment/endpoint.ts",
+      "mode": "adapted",
+      "upstreamSha256": "f87003b4275659d5be7f9647284cc4ba8f95350d2570c1591f9bf5469f9d04c9",
+      "targetSha256": "8ad6691a23a279f8cab0338511bd24020ccec23c8b1c50dd905ce8223d36119f"
+    },
+    {
+      "upstream": "packages/client-runtime/src/errors/network.ts",
+      "target": "packages/client-runtime/src/errors/network.ts",
+      "mode": "adapted",
+      "upstreamSha256": "e34a85a940fcb5ff7812bad4c2c5ef3d40555ee7150d55619ad8c5bb0f0ecbd5",
+      "targetSha256": "5fe74afd4f053533b7ec55036e984979ff182e625e9deb69a04c2dcc5478c16b"
+    },
+    {
+      "upstream": "packages/client-runtime/src/errors/transport.ts",
+      "target": "packages/client-runtime/src/errors/transport.ts",
+      "mode": "adapted",
+      "upstreamSha256": "cd4a014bb3441bdfd274d7baf559075cb1dee0225855a49a8cde6f33f9c7650c",
+      "targetSha256": "c4e3b27d34a975627933235e22ecdf7086a600464d9cc711ecfb78160a4b4be0"
+    },
+    {
+      "upstream": "packages/client-runtime/src/authorization/remote.ts",
+      "target": "packages/client-runtime/src/authorization/remote.ts",
+      "mode": "adapted",
+      "upstreamSha256": "b609043e0e2486cc29bc9980f2abc403e16082b483034ab7130ca1cc88da37e4",
+      "targetSha256": "5e433eb732d17a63f78180006c876dbf70621bb03e9b074299efd36f2f68703c"
+    },
+    {
+      "upstream": "packages/client-runtime/src/authorization/service.ts",
+      "target": "packages/client-runtime/src/authorization/service.ts",
+      "mode": "adapted",
+      "upstreamSha256": "685346c75408619107f4960d0fce78758490d547a5f1c10885796079b788d2a5",
+      "targetSha256": "9a0816e47ada7c8f2fc5e281d5f38d13faf12eb9432342e65b6ff17a91c49127"
+    },
+    {
+      "upstream": "packages/client-runtime/src/platform/capabilities.ts",
+      "target": "packages/client-runtime/src/platform/capabilities.ts",
+      "mode": "adapted",
+      "upstreamSha256": "8640318eccf203dda63717e4eec87c8556a92360a47499b4a82987a8ce01dd43",
+      "targetSha256": "d8bac57a715bdc47a9f494d1e60f415d409f9362ceb70b7d2817a1f30caf94da"
+    },
+    {
+      "upstream": "packages/client-runtime/src/platform/persistence.ts",
+      "target": "packages/client-runtime/src/platform/persistence.ts",
+      "mode": "adapted",
+      "upstreamSha256": "430344ddf397990710cf672455766e82e55b5e49fe6932bfc547a7fca9e72db1",
+      "targetSha256": "ea21a0d94b4b191447357fda98295810c49f906ce72c9f073fee83995b4e7f9b"
+    },
+    {
+      "upstream": "packages/shared/src/hostClassification.ts",
+      "target": "packages/shared/src/hostClassification.ts",
+      "mode": "verbatim",
+      "replacements": [
+        "@t3tools/client-runtime"
+      ]
+    }
+  ],
+  "replacements": [
+    {
+      "$comment": "The service keys name the package that owns them, so a vendored file names GitGui.",
+      "from": "@t3tools/client-runtime",
+      "to": "@gitgui/client-runtime"
+    }
+  ]
+}

@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { safeStorage } from "electron";
 import type {
@@ -82,12 +82,19 @@ export class DesktopStateStore {
 
   private async mutate(operation: (state: PersistedState) => void) {
     const run = this.queue.then(async () => {
-      const state = await this.load();
-      operation(state);
+      const next = structuredClone(await this.load());
+      operation(next);
       await mkdir(dirname(this.path), { recursive: true });
       const temporary = `${this.path}.tmp-${process.pid}`;
-      await writeFile(temporary, JSON.stringify(state, null, 2), { encoding: "utf8", mode: 0o600 });
-      await rename(temporary, this.path);
+      try {
+        await writeFile(temporary, JSON.stringify(next, null, 2), { encoding: "utf8", mode: 0o600 });
+        await rename(temporary, this.path);
+        // Readers must observe only committed state. A rejected write leaves
+        // both the cached registrations and protected credentials untouched.
+        this.state = next;
+      } finally {
+        await rm(temporary, { force: true }).catch(() => undefined);
+      }
     });
     this.queue = run.catch(() => undefined);
     return run;
@@ -104,8 +111,9 @@ function parseRegistration(value: unknown): DesktopConnectionRegistration {
   const displayName = typeof value.displayName === "string" && value.displayName.trim()
     ? value.displayName.trim().slice(0, 512)
     : environmentId;
-  if (!isRecord(value.target)) throw new TypeError("Invalid desktop connection target");
-  const target = parseTarget(value.target);
+  if (typeof value.record !== "string" || value.record.length > 1_000_000) {
+    throw new TypeError("Invalid desktop connection record");
+  }
   const capabilities = Array.isArray(value.capabilities)
     ? value.capabilities.filter((item): item is string => typeof item === "string" && item.length <= 256)
     : [];
@@ -115,36 +123,13 @@ function parseRegistration(value: unknown): DesktopConnectionRegistration {
   return {
     environmentId,
     displayName,
-    target,
+    record: value.record,
     capabilities,
     protocolVersion: Number(value.protocolVersion),
     ...(typeof value.lastConnectedAt === "number" && Number.isFinite(value.lastConnectedAt)
       ? { lastConnectedAt: value.lastConnectedAt }
       : {}),
   };
-}
-
-function parseTarget(value: Record<string, unknown>): Record<string, unknown> {
-  if (value.kind === "primary") return { kind: "primary" };
-  if (value.kind === "bearer" && typeof value.httpUrl === "string") {
-    const url = new URL(value.httpUrl);
-    if ((url.protocol !== "http:" && url.protocol !== "https:") || url.username || url.password || url.search || url.hash) {
-      throw new TypeError("Invalid bearer connection URL");
-    }
-    return { kind: "bearer", httpUrl: url.toString().replace(/\/$/, "") };
-  }
-  if (value.kind === "ssh" && typeof value.host === "string" && value.host.trim()) {
-    return {
-      kind: "ssh",
-      host: value.host.trim().slice(0, 512),
-      ...(typeof value.user === "string" && value.user.trim() ? { user: value.user.trim().slice(0, 512) } : {}),
-      ...(Number.isInteger(value.port) && Number(value.port) > 0 && Number(value.port) <= 65535 ? { port: Number(value.port) } : {}),
-      ...(typeof value.identityFile === "string" && value.identityFile.trim()
-        ? { identityFile: value.identityFile.trim().slice(0, 4096) }
-        : {}),
-    };
-  }
-  throw new TypeError("Unsupported desktop connection target");
 }
 
 function parseCredential(value: unknown): DesktopCredential {

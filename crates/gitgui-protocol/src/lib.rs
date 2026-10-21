@@ -40,8 +40,7 @@ pub const CLIENT_SCOPES: &[&str] = &[SCOPE_REPOSITORY_READ, SCOPE_REPOSITORY_OPE
 /// Canonical method for retrieving immutable server metadata.
 pub const METHOD_SERVER_GET_INFO: &str = "server.get_info";
 /// Canonical method for retrieving current server lifecycle status.
-pub const METHOD_SERVER_GET_STATUS: &str = "server.get_status";
-/// Canonical method for repository catalog reads.
+pub const METHOD_SERVER_GET_STATUS: &str = "server.get_status";/// Canonical method for repository catalog reads.
 pub const METHOD_REPOSITORIES_LIST: &str = "repositories.list";
 /// Canonical host-admin method for registering and loading a repository.
 pub const METHOD_REPOSITORIES_OPEN: &str = "repositories.open";
@@ -95,6 +94,46 @@ pub const METHOD_GIT_BRANCH_SWITCH: &str = "git.branch.switch";
 pub const METHOD_GIT_STASH_PUSH: &str = "git.stash.push";
 /// Canonical method for applying and removing the latest stash.
 pub const METHOD_GIT_STASH_POP: &str = "git.stash.pop";
+
+/// Every method the WebSocket RPC surface accepts, in a stable order.
+///
+/// The client runtime types its RPC calls against this registry, and the
+/// TypeScript contract is generated from it, so a method that the server
+/// accepts is never missing from the client.
+pub const WS_METHOD_NAMES: &[&str] = &[
+    METHOD_SERVER_GET_INFO,
+    METHOD_SERVER_GET_STATUS,
+    METHOD_REPOSITORIES_LIST,
+    METHOD_REPOSITORIES_OPEN,
+    METHOD_REPOSITORIES_CREATE,
+    METHOD_REPOSITORIES_REMOVE,
+    METHOD_REPOSITORIES_GET_SNAPSHOT,
+    METHOD_REPOSITORIES_GET_GRAPH,
+    METHOD_REPOSITORIES_REFRESH,
+    METHOD_GIT_STATUS,
+    METHOD_GIT_COMMIT_FILES,
+    METHOD_GIT_COMMIT_FILE_DIFF,
+    METHOD_GIT_WORKING_TREE_FILE_DIFF,
+    METHOD_GIT_PREFETCH_COMMIT_FILES,
+    METHOD_GIT_PREFETCH_COMMIT_DIFFS,
+    METHOD_GIT_STAGE,
+    METHOD_GIT_UNSTAGE,
+    METHOD_GIT_COMMIT,
+    METHOD_GIT_HUNK_PREVIEW,
+    METHOD_GIT_APPLY_HUNKS,
+    METHOD_GIT_DISCARD_PREVIEW,
+    METHOD_GIT_DISCARD,
+    METHOD_GIT_AMEND_INFO,
+    METHOD_GIT_AMEND,
+    METHOD_GIT_FETCH,
+    METHOD_GIT_PULL,
+    METHOD_GIT_PUSH,
+    METHOD_GIT_BRANCH_LIST,
+    METHOD_GIT_BRANCH_CREATE,
+    METHOD_GIT_BRANCH_SWITCH,
+    METHOD_GIT_STASH_PUSH,
+    METHOD_GIT_STASH_POP,
+];
 
 /// Maximum number of commit hashes accepted by one commit-file prefetch hint.
 pub const MAX_PREFETCH_COMMIT_HASHES: usize = 256;

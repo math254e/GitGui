@@ -15,7 +15,13 @@ export interface DesktopPreparedConnection {
 export interface DesktopConnectionRegistration {
   environmentId: string;
   displayName: string;
-  target: Record<string, unknown>;
+  /**
+   * The client-owned registration record, stored verbatim.
+   *
+   * The desktop shell owns credential protection and persistence, not the
+   * shape of the client's connection catalog.
+   */
+  record: string;
   capabilities: string[];
   protocolVersion: number;
   lastConnectedAt?: number;

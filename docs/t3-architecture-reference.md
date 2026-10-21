@@ -163,7 +163,7 @@ T3 mounts its connection runtime once and injects platform capabilities. GitGui 
 - keep transport, retry, credential, and environment reconciliation out of routes and components;
 - scope repository workspace/query state by `EnvironmentId`.
 
-The core runtime should remain framework-independent. Matching T3's architecture does not require Effect immediately; plain TypeScript may implement the same interfaces and lifecycle using explicit cancellation and disposal. Tests should copy applicable T3 scenarios even when implementation primitives differ.
+The core runtime remains framework-independent. GitGui's runtime uses Effect, the same library and the same version T3 Code uses, and its client runtime is vendored from T3 Code file by file. See `docs/t3code-vendoring.md` for the vendored files and the recorded divergences, and `docs/connection-runtime.md` for the runtime as it exists here. The Svelte adapter in `apps/web/src/lib/connection` is the only framework-aware part.
 
 ## Electron pattern
 

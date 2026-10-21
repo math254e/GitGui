@@ -587,7 +587,7 @@
                         {:else}
                           <span class="px-2 text-xs font-semibold text-[var(--app-theme-accent)]">Active</span>
                         {/if}
-                        {#if entry.connection.phase === "blocked" || entry.connection.phase === "waiting" || entry.connection.phase === "offline"}
+                        {#if entry.connection.phase === "blocked" || entry.connection.phase === "offline"}
                           <button type="button" disabled={connectionBusy} onclick={() => applicationRuntime.registry.retry(entry.registration.environmentId)} class="inline-flex h-8 items-center rounded-md border border-[var(--app-theme-border)] bg-[var(--app-theme-surface-raised)] px-3 text-xs font-semibold text-[var(--app-theme-text-muted)] disabled:opacity-50">Retry</button>
                         {/if}
                         {#if entry.registration.target.kind !== "primary"}
