@@ -196,6 +196,13 @@ compatibility, and verification. Electron remains outside this traffic.
 
 Loopback is not authentication. The local and remote protocols use the same authenticated session model.
 
+A backend that was started without a bootstrap credential does not require
+authentication. It advertises `development-anonymous` in its environment
+descriptor and answers a client that presents no credential with an anonymous
+session. The browser client uses that path when it has no credential and the
+environment says authentication is not required; every other environment needs
+a bootstrap or pairing grant.
+
 Recommended bootstrap flow, adapted from T3 Code:
 
 1. Electron creates an unguessable bootstrap credential.

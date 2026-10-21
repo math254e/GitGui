@@ -15,6 +15,8 @@ import * as Layer from "effect/Layer";
 import * as TestClock from "effect/testing/TestClock";
 import * as Stream from "effect/Stream";
 import { layerRemoteHttpClient } from "@gitgui/client-runtime/rpc/http";
+import { resolveRemoteWebSocketConnectionUrl } from "@gitgui/client-runtime/authorization/remote";
+import * as HttpClient from "effect/http/HttpClient";
 import { LocalStorageWorkspaceMetadataAdapter, createEmptyWorkspaceMetadata } from "../client-runtime/metadata";
 import { authorizeConnectionCredential, createCatalogBackend, webConnectionLayer, writeSelectedEnvironmentId, readSelectedEnvironmentId, type WebConnectionOptions } from "./platform";
 
@@ -79,6 +81,60 @@ describe("web connection platform", () => {
     }).pipe(Effect.provide(webConnectionLayer(options))));
     expect(Option.getOrUndefined(token)).toBe("test-session");
     expect(exchanges).toBe(1);
+  });
+
+  it("reaches an environment that does not require authentication without a credential", async () => {
+    // A development backend that was started without a bootstrap credential
+    // answers with its anonymous session. The client presents no credential.
+    const openDescriptor = { ...descriptor, auth: { bootstrapMethods: [], sessionMethods: ["development-anonymous"], required: false } };
+    const window = Object.assign(new EventTarget(), { location: { href: "http://localhost:1420/?server=http://127.0.0.1:3774" } });
+    vi.stubGlobal("window", window);
+    vi.stubGlobal("history", { state: null, replaceState: () => undefined });
+    const authorizations: (string | null)[] = [];
+    options = { ...options, fetchFn: vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = new URL(input instanceof Request ? input.url : input.toString()).pathname;
+      if (path === "/.well-known/gitgui/environment") return json(openDescriptor);
+      if (path === "/api/auth/websocket-ticket") {
+        authorizations.push(new Headers(input instanceof Request ? input.headers : init?.headers).get("authorization"));
+        return json({ ticket: "development-ticket", expiresIn: 300 });
+      }
+      throw new Error(`Unexpected request path: ${path}`);
+    }) };
+    const socketUrl = await Effect.runPromise(Effect.gen(function* () {
+      const auth = yield* PrimaryEnvironmentAuth;
+      const token = yield* auth.bearerToken;
+      expect(Option.getOrUndefined(token)).toBe("");
+      return yield* resolveRemoteWebSocketConnectionUrl({
+        httpBaseUrl: "http://127.0.0.1:3774",
+        wsBaseUrl: "ws://127.0.0.1:3774",
+        bearerToken: Option.getOrThrow(token),
+      });
+    }).pipe(Effect.provide(webConnectionLayer(options))));
+    expect(exchanges).toBe(0);
+    expect(authorizations).toEqual([null]);
+    expect(socketUrl).toContain("wsTicket=development-ticket");
+  });
+
+  it("falls back to the anonymous session when a stale credential is rejected", async () => {
+    // The environment stopped requiring authentication. A credential the
+    // client cached earlier must not block the anonymous session.
+    const openDescriptor = { ...descriptor, auth: { bootstrapMethods: [], sessionMethods: ["development-anonymous"], required: false } };
+    const backend = createCatalogBackend(options);
+    await backend.writeCredential(environmentId, new BearerConnectionCredential({ token: "stale-session", expiresAt: Date.now() + 86400_000 }));
+    const window = Object.assign(new EventTarget(), { location: { href: "http://localhost:1420/?server=http://127.0.0.1:3774" } });
+    vi.stubGlobal("window", window);
+    vi.stubGlobal("history", { state: null, replaceState: () => undefined });
+    options = { ...options, fetchFn: vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = new URL(input instanceof Request ? input.url : input.toString()).pathname;
+      if (path === "/.well-known/gitgui/environment") return json(openDescriptor);
+      if (path === "/api/auth/session") return new Response(null, { status: 401 });
+      throw new Error(`Unexpected request path: ${path}`);
+    }) };
+    const token = await Effect.runPromise(Effect.gen(function* () {
+      const auth = yield* PrimaryEnvironmentAuth;
+      return yield* auth.bearerToken;
+    }).pipe(Effect.provide(webConnectionLayer(options))));
+    expect(Option.getOrUndefined(token)).toBe("");
   });
 
   it.each([401, 403, 500])("validates cached primary credentials and recovers only from HTTP %s authentication rejection", async (status) => {

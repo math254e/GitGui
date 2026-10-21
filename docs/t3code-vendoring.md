@@ -222,6 +222,16 @@ and transient failures do not trigger another exchange. Cached primary sessions
 are likewise validated before reuse, recovering rejected sessions through the
 current primary grant after a Rust server restart.
 
+A development environment that was started without a bootstrap credential does
+not require authentication. The browser client reaches it with no credential at
+all: the primary environment auth yields an empty bearer, and
+`authorization/remote.ts` leaves the `Authorization` header off for an empty
+bearer instead of sending an empty `Bearer`. The server answers with its
+anonymous session. T3 Code always has a credential for its primary
+environment, so it has no equivalent case. A credential the client cached
+earlier does not block that path: when the environment no longer requires
+authentication, a rejected credential falls back to the anonymous session.
+
 The platform catalog polls every three seconds, as T3's platform source does,
 and also refreshes on foreground/online signals. GitGui reads the primary
 through its desktop bridge or browser descriptor; typed discovery failures

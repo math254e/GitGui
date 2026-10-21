@@ -11,6 +11,9 @@
  *   remaining client presentation parameters are kept.
  * - The GitGui server exchanges a credential with a form-encoded `POST
  *   /oauth/token` request instead of an `HttpApi` group call.
+ * - An empty bearer means "no credential". The Authorization header is left
+ *   off instead of sending an empty `Bearer`, so an environment that does not
+ *   require authentication can answer with its anonymous session.
  */
 import {
   AuthSession,
@@ -32,6 +35,16 @@ export { RemoteEnvironmentAuthUndeclaredStatusError } from "../rpc/http.ts";
 export type RemoteEnvironmentAuthError = RemoteEnvironmentRequestError;
 
 const DEFAULT_REMOTE_REQUEST_TIMEOUT_MS = 10_000;
+
+/**
+ * The Authorization header for a bearer token.
+ *
+ * An empty token means the client presents no credential, so the header is
+ * left off. An environment that does not require authentication answers with
+ * its anonymous session.
+ */
+const bearerHeaders = (bearerToken: string): Record<string, string> =>
+  bearerToken ? { authorization: `Bearer ${bearerToken}` } : {};
 
 /** How the client presents itself to an environment. */
 export interface ClientPresentationMetadata {
@@ -105,7 +118,7 @@ export const fetchRemoteSessionState = Effect.fn(
     makeEnvironmentHttpRequest({
       method: "GET",
       url: environmentEndpointUrl(input.httpBaseUrl, "/api/auth/session"),
-      headers: { authorization: `Bearer ${input.bearerToken}` },
+      headers: bearerHeaders(input.bearerToken),
     }),
   );
   return yield* executeEnvironmentHttpRequest(
@@ -127,7 +140,7 @@ export const issueRemoteWebSocketTicket = Effect.fn(
     makeEnvironmentHttpRequest({
       method: "POST",
       url: environmentEndpointUrl(input.httpBaseUrl, "/api/auth/websocket-ticket"),
-      headers: { authorization: `Bearer ${input.bearerToken}` },
+      headers: bearerHeaders(input.bearerToken),
     }),
   );
   return yield* executeEnvironmentHttpRequest(

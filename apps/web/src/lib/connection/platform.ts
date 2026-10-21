@@ -422,7 +422,14 @@ const makePrimarySource = (readPrimary: Effect.Effect<PrimaryEnvironment, Connec
  *
  * The desktop shell owns the bootstrap credential; the client exchanges it for
  * a scoped bearer session and keeps that session until it expires.
+ *
+ * A development environment that does not require authentication accepts a
+ * client that presents no credential at all and answers with its anonymous
+ * session. The empty bearer is how that request is expressed: the
+ * Authorization header is left off entirely.
  */
+const ANONYMOUS_BEARER = "";
+
 const makePrimaryEnvironmentAuth = (readPrimary: Effect.Effect<PrimaryEnvironment, ConnectionAttemptError>) =>
   Effect.gen(function* () {
     const credentials = yield* ConnectionCredentialStore;
@@ -433,13 +440,25 @@ const makePrimaryEnvironmentAuth = (readPrimary: Effect.Effect<PrimaryEnvironmen
       const cached = Option.getOrUndefined(yield* credentials.get(environmentId));
       const saved = cached === undefined ? undefined : { kind: "bearer", token: cached.token };
       const grant = primary.credential;
-      if (saved === undefined && grant === undefined) return Option.none<string>();
+      if (saved === undefined && grant === undefined) {
+        // Without a credential the client can still reach an environment that
+        // does not require authentication. It presents no bearer and receives
+        // the anonymous session.
+        if (primary.descriptor.auth.required) return Option.none<string>();
+        return Option.some(ANONYMOUS_BEARER);
+      }
       const credential = yield* authorizeConnectionCredential(primary.httpUrl, environmentId, saved ?? grant).pipe(
         Effect.catch((error) => {
           // Rust's in-memory sessions can disappear before their expiry when
           // the server restarts. Only rejection authorizes using a fresh grant;
           // permission and transient failures stay with the supervisor.
-          if (saved === undefined || grant === undefined || error.reason !== "authentication") return Effect.fail(error);
+          if (error.reason !== "authentication") return Effect.fail(error);
+          if (!primary.descriptor.auth.required) {
+            // The environment no longer requires authentication, so a stale
+            // credential must not block its anonymous session.
+            return Effect.succeed(new BearerConnectionCredential({ token: ANONYMOUS_BEARER }));
+          }
+          if (saved === undefined || grant === undefined) return Effect.fail(error);
           return authorizeConnectionCredential(primary.httpUrl, environmentId, grant);
         }),
         Effect.provideService(HttpClient.HttpClient, httpClient),
