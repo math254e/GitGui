@@ -39,7 +39,7 @@
   let { client, repositoryId, snapshot, diffSource, selectedCommit, selectedFile, onClose, onApplyHunks, pending = false }: Props = $props();
   let viewerContainer: HTMLDivElement;
   let renderer = $state.raw<{ library: Diffs; viewer: CodeView<HunkAnnotation> } | null>(null);
-  let parsedDiff: { source: CommitFileDiff; metadata: FileDiffMetadata } | null = null;
+  let parsedDiff: { source: CommitFileDiff; preview: GitHunkPreview | null; metadata: FileDiffMetadata } | null = null;
   let diff = $state<CommitFileDiff | null>(null);
   let hunkPreview = $state<GitHunkPreview | null>(null);
   let hunkError = $state("");
@@ -52,6 +52,9 @@
   let wordWrap = $state(false);
   let appearance = $state<ThemeAppearance>(themeStore.getSnapshot().resolvedAppearance);
   let activeRequest = 0;
+  // CodeView ignores new payloads with an unchanged item version, including
+  // hunk annotations arriving after the file contents.
+  let renderVersion = 0;
   let activeDiffRequestKey = "";
   let destroyed = false;
   const diffRequestKey = $derived(buildDiffRequestKey(repositoryId, snapshot, diffSource, selectedCommit, selectedFile));
@@ -69,7 +72,7 @@
     }
 
     activeDiffRequestKey = requestKey;
-    void loadDiff(repositoryId, diffSource, selectedCommit, selectedFile, currentSnapshot);
+    untrack(() => { void loadDiff(repositoryId, diffSource, selectedCommit, selectedFile, currentSnapshot); });
   });
 
   $effect(() => {
@@ -153,30 +156,28 @@
         throw new Error("No commit is selected.");
       }
 
-      const result =
+      const resultPromise =
         source === "commit"
-          ? await client.getCommitFileDiff({
+          ? client.getCommitFileDiff({
               repositoryId,
               commitHash: commitHash ?? "",
               ...(parentHash ? { parentHash } : {}),
               filePath: file.path,
             })
-          : await client.getWorkingTreeFileDiff({
+          : client.getWorkingTreeFileDiff({
               repositoryId,
               ...(headHash ? { headHash } : {}),
               filePath: file.path,
               staged: source === "staged",
             });
 
-      let preview: GitHunkPreview | null = null;
-      let previewError = "";
+      // Hunk actions are supplementary. A slow preview must not keep already
+      // loaded file contents behind the loading overlay after a mutation.
       if (source !== "commit") {
-        try { preview = await client.getHunkPreview({ repositoryId, filePath: file.path, staged: source === "staged" }); }
-        catch (caught) { previewError = formatError(caught); }
+        void loadHunkPreview(request, repositoryId, source, file.path);
       }
+      const result = await resultPromise;
       if (!destroyed && request === activeRequest) {
-        hunkPreview = preview;
-        hunkError = previewError;
         diff = result.diff;
       }
     } catch (caught) {
@@ -187,6 +188,15 @@
       if (!destroyed && request === activeRequest) {
         loading = false;
       }
+    }
+  }
+
+  async function loadHunkPreview(request: number, repositoryId: string, source: DiffSource, filePath: string) {
+    try {
+      const preview = await client.getHunkPreview({ repositoryId, filePath, staged: source === "staged" });
+      if (!destroyed && request === activeRequest) hunkPreview = preview;
+    } catch (caught) {
+      if (!destroyed && request === activeRequest) hunkError = formatError(caught);
     }
   }
 
@@ -275,17 +285,18 @@
         const file = view === "file" && showingDeletedFile
           ? { name: currentDiff.originalPath ?? currentDiff.modifiedPath, contents: currentDiff.originalContent }
           : modifiedFile;
-        viewer.setItems(file.contents === "" ? [] : [{ id: "file", type: "file", file, version: activeRequest }]);
+        viewer.setItems(file.contents === "" ? [] : [{ id: "file", type: "file", file, version: ++renderVersion }]);
         return;
       }
 
       // Reuse the parsed diff when changing layout or wrapping a large file.
-      if (parsedDiff?.source !== currentDiff) {
+      if (parsedDiff?.source !== currentDiff || parsedDiff.preview !== hunkPreview) {
         const originalFile: FileContents | null = currentDiff.originalPath === null
           ? null
           : { name: currentDiff.originalPath, contents: currentDiff.originalContent };
         parsedDiff = {
           source: currentDiff,
+          preview: hunkPreview,
           metadata: hunkPreview && !hunkPreview.unavailableReason && hunkPreview.patch
             ? library.parsePatchFiles(hunkPreview.patch, hunkPreview.revision, true)[0].files[0]
             : library.parseDiffFromFile(originalFile, modifiedFile, { context: 3 }, true),
@@ -304,7 +315,7 @@
             metadata: { id: preview.hunks[id].id, header: preview.hunks[id].header, request: activeRequest, revision: preview.revision },
           }))
         : [];
-      viewer.setItems([{ id: "diff", type: "diff", fileDiff: parsedDiff.metadata, annotations, version: activeRequest }]);
+      viewer.setItems([{ id: "diff", type: "diff", fileDiff: parsedDiff.metadata, annotations, version: ++renderVersion }]);
     } catch (caught) {
       renderError = formatError(caught);
     }

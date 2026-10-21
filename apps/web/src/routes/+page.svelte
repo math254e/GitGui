@@ -34,6 +34,7 @@
   import type { CommitFile, CommitInfo, CommitRef, RepositorySnapshot } from "$lib/types/repository";
   import { graphRefKey, isCurrentBranchRef } from "$lib/types/branch-visibility";
   import { readBranchSwitchMergePreference, resolveProjectsLocation } from "$lib/preferences";
+  import { reconcileWorkingTreeFile } from "$lib/client-runtime/file-selection";
 
   type ActiveView = "start" | "repo" | "settings" | "create";
   type SelectedGraphItem = { type: "changes" } | { type: "commit"; commit: CommitInfo };
@@ -670,7 +671,12 @@
         ? reconcileSelection(previousRepo?.selectedGraphItem ?? null, snapshot)
         : previousRepo?.selectedGraphItem ?? null;
       const selectedFile = snapshot
-        ? reconcileSelectedFile(previousRepo?.selectedFile ?? null, snapshot)
+        ? selectedGraphItem?.type === "changes"
+          ? reconcileWorkingTreeFile(previousRepo?.selectedFile ?? null, previousRepo?.selectedFileSource ?? "workingTree", snapshot)
+          : selectedGraphItem?.type === "commit" && previousRepo?.selectedGraphItem?.type === "commit"
+              && selectedGraphItem.commit.hash === previousRepo.selectedGraphItem.commit.hash
+            ? previousRepo.selectedFile
+            : null
         : previousRepo?.selectedFile ?? null;
 
       return [{
@@ -843,20 +849,6 @@
     }
 
     return initialGraphSelection(nextSnapshot);
-  }
-
-  function reconcileSelectedFile(currentFile: CommitFile | null, nextSnapshot: RepositorySnapshot) {
-    if (!currentFile) {
-      return null;
-    }
-
-    const nextChangedFile = nextSnapshot.status.changedFiles.find((file) => file.path === currentFile.path);
-
-    if (!nextChangedFile) {
-      return null;
-    }
-
-    return currentFile;
   }
 
   function formatError(caught: unknown) {

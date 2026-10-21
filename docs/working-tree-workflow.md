@@ -8,6 +8,11 @@ Behavior decisions were confirmed by Mathies. Implementation is complete on
 - Keep existing whole-file staging and unstaging, and add selection of whole
   diff hunks in both the unstaged and staged views. Individual-line selection
   is deferred.
+- Staging a hunk in an open unstaged diff keeps that file open while unstaged
+  changes remain, and removes the staged hunk from the displayed diff. Staging
+  its last unstaged hunk closes the file view and returns to the graph, even
+  though the path remains in the staged list. Unstaging follows the same rule
+  for the staged side.
 - Discard is available on unstaged changes and requires confirmation. For a
   partially staged file, restore the working tree to the indexed version and
   preserve staged changes. Staged changes must first be unstaged to discard
@@ -119,6 +124,19 @@ unsupported hunk operations. Before the first commit, whole-file unstaging
 removes only indexed entries and preserves later working-tree edits.
 
 ## Verification results
+
+Open-file reconciliation checks the selected index/worktree side and updates
+its status metadata after refresh. File contents load independently of hunk
+previews, so a delayed preview cannot keep the file behind a loading overlay.
+Preview completion updates parsed hunks and advances Pierre's item version so
+new annotations replace the earlier content-only rendering. Late responses
+remain guarded by the current file request generation.
+
+Regression coverage includes source-aware file selection and a browser fixture
+with the actual Svelte route/viewer and mocked RPC responses. The browser check
+stages three hunks in sequence, including a refresh where status stays `MM`,
+checks that the last hunk closes the diff, and deliberately blocks hunk previews
+to verify that contents remain readable and controls appear after completion.
 
 - `npm test`: desktop, client-runtime, SSH, and Rust workspace tests pass.
   Focused Git tests cover stage/unstage with unselected hunks, additions and
