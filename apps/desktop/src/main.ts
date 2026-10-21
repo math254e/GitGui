@@ -128,7 +128,10 @@ async function createMainWindow(): Promise<void> {
   window.webContents.on("will-navigate", (event, url) => {
     if (!isAllowedRendererUrl(url)) event.preventDefault();
   });
-  await window.loadURL(app.isPackaged ? `${APPLICATION_ORIGIN}/index.html` : DEVELOPMENT_ORIGIN);
+  // The application origin is the root of the scheme. The path belongs to
+  // the client router, and the protocol handler serves the app shell for
+  // every path that is not a static asset.
+  await window.loadURL(app.isPackaged ? `${APPLICATION_ORIGIN}/` : DEVELOPMENT_ORIGIN);
 }
 
 function registerApplicationProtocol(): void {

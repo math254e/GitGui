@@ -24,6 +24,9 @@ Electron main process
 
 The Rust server is the application backend. Electron is a thin desktop host, not a second backend and not a proxy for ordinary repository traffic. The Svelte client never runs Git commands or accesses repositories directly.
 
+The desktop shell opens the application at the root of its `gitgui://` scheme.
+The path belongs to the client router.
+
 This is the implemented repository architecture. Electron is the only desktop
 shell; the Rust server remains independently runnable and the browser client
 uses the same connection runtime without Electron.
