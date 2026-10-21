@@ -3,6 +3,7 @@ import type {
   RepositoryRefreshItem,
   RepositorySnapshot,
   RepositorySummary,
+  RepositoryChangeKind,
 } from "@gitgui/contracts";
 import { assertRepositoryId, GitGuiClient } from "@gitgui/client-runtime";
 import {
@@ -65,6 +66,12 @@ export class ClientWorkspace {
   private stateOperation: Promise<void> = Promise.resolve();
   private lifecycleGeneration = 0;
   private nextRequestGeneration = 0;
+  private readonly pendingChanges = new Map<string, RepositoryChangeKind>();
+  private updateSubscriptions: Unsubscribe[] = [];
+  private updateTimer?: ReturnType<typeof setTimeout>;
+  private recoveryTimer?: ReturnType<typeof setInterval>;
+  private applyingChanges = false;
+  private disposed = false;
   private _state: ClientWorkspaceState;
 
   constructor(options: ClientWorkspaceOptions) {
@@ -95,6 +102,96 @@ export class ClientWorkspace {
     this.listeners.add(listener);
     listener(this.state);
     return () => this.listeners.delete(listener);
+  }
+
+  /** Session-scoped invalidations share the same serialization as tab changes. */
+  startUpdates(): void {
+    if (this.updateSubscriptions.length || this.disposed) return;
+    this.updateSubscriptions = [
+      this.client.on("repository.changed", ({ payload }) => {
+        if (!payload || typeof payload !== "object" || Array.isArray(payload)) return;
+        const { repositoryId, kind } = payload;
+        if (typeof repositoryId === "string" && (kind === "status" || kind === "snapshot")) {
+          this.invalidate(repositoryId, kind);
+        }
+      }),
+      this.client.onSequenceGap(() => this.revalidate()),
+    ];
+    const watching = this.client.serverWelcome?.capabilities.includes("repositories.watch");
+    // Recovery for missed OS notifications; older servers retain their polling cadence.
+    this.recoveryTimer = setInterval(() => this.revalidate(), watching ? 120_000 : 30_000);
+  }
+
+  revalidate(): void {
+    if (!this.updateSubscriptions.length) return;
+    for (const id of this._state.openRepositoryIds) this.invalidate(id, "snapshot");
+  }
+
+  dispose(): void {
+    this.disposed = true;
+    this.stopUpdates();
+    this.listeners.clear();
+  }
+
+  stopUpdates(): void {
+    this.lifecycleGeneration += 1;
+    for (const unsubscribe of this.updateSubscriptions) unsubscribe();
+    this.updateSubscriptions = [];
+    clearTimeout(this.updateTimer);
+    this.updateTimer = undefined;
+    clearInterval(this.recoveryTimer);
+    this.pendingChanges.clear();
+  }
+
+  private invalidate(repositoryId: string, kind: RepositoryChangeKind): void {
+    if (this.disposed || !this.updateSubscriptions.length || !this._state.openRepositoryIds.includes(repositoryId)) return;
+    this.pendingChanges.set(repositoryId, this.pendingChanges.get(repositoryId) === "snapshot" ? "snapshot" : kind);
+    this.scheduleChanges();
+  }
+
+  private scheduleChanges(): void {
+    if (this.disposed || this.applyingChanges || this.updateTimer || !this.pendingChanges.size) return;
+    this.updateTimer = setTimeout(() => {
+      this.updateTimer = undefined;
+      this.applyingChanges = true;
+      void this.serializeStateOperation(async () => {
+        if (this.disposed) return;
+        const changes = new Map(this.pendingChanges);
+        this.pendingChanges.clear();
+        for (const [id, kind] of changes) {
+          if (!this._state.openRepositoryIds.includes(id)) continue;
+          if (kind === "snapshot" || !this._state.repositories[id]?.snapshot) {
+            await this.refreshRepositories([id], { persist: false });
+          } else {
+            await this.refreshStatus(id);
+          }
+        }
+      }).catch(() => undefined).finally(() => {
+        this.applyingChanges = false;
+        this.scheduleChanges();
+      });
+    }, 75);
+  }
+
+  private async refreshStatus(id: string): Promise<void> {
+    const lifecycle = this.lifecycleGeneration;
+    const generation = this.beginRequest(id);
+    try {
+      const result = await this.client.getGitStatus(id);
+      if (!this.isCurrentRequest(id, generation, lifecycle)) return;
+      const snapshot = this._state.repositories[id]?.snapshot;
+      if (!snapshot || snapshot.status.headOid !== result.status.headOid || snapshot.status.currentBranch !== result.status.currentBranch) {
+        await this.refreshRepositories([id], { persist: false });
+        return;
+      }
+      // Replace the snapshot to invalidate mutable file/hunk previews even when
+      // Git's status letters remain identical. History objects keep their identity.
+      this.updateRepository(id, (repository) => ({
+        ...repository, repository: result.repository, snapshot: { ...snapshot, status: result.status }, error: undefined,
+      }));
+    } catch (error) {
+      if (this.isCurrentRequest(id, generation, lifecycle)) this.setRepositoryError(id, toWorkspaceError(error));
+    }
   }
 
   restore(): Promise<ClientWorkspaceState> {

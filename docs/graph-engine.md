@@ -136,7 +136,8 @@ The canvas:
 
 - is sized to the scroll viewport rather than the full repository history;
 - is repositioned and redrawn as the history container scrolls;
-- skips edges and nodes outside the viewport with a small overscan;
+- uses a reusable interval index to query edge spans crossing the viewport;
+- slices visible nodes and virtualizes DOM rows with a small overscan;
 - renders normal edges primarily in the child lane and merge edges primarily in
   the parent lane;
 - uses the active theme's nine `graphLane` roles as the strongest visual signal,
@@ -198,6 +199,9 @@ also cover scrolling, selection, a dirty working tree, and at least one merge.
   is excluded from the returned graph while shared ancestors remain visible.
 - Canvas hit testing is unnecessary because each commit already has a full-width
   DOM row for pointer and keyboard interaction.
-- The current renderer redraws the visible graph on scroll. If histories become
-  large enough to require row virtualization, preserve the same backend graph
-  contract and virtualize the DOM rows independently.
+- DOM rows are virtualized independently of the backend graph contract. Scroll
+  anchors use commit identity and pixel offsets, including when the synthetic
+  working-tree row changes. Keyboard navigation and jump commands resolve
+  offscreen rows from graph data.
+- Status-only invalidations preserve history and render-index identity. Full
+  snapshot loads still transfer all history; pagination remains future work.

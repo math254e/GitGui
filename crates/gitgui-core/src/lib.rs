@@ -4,5 +4,6 @@ pub mod git {
     pub mod graph;
     pub mod operations;
     pub mod repository;
+    pub mod watch;
     pub mod working_tree;
 }

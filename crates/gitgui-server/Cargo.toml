@@ -7,6 +7,7 @@ description = "Standalone HTTP/WebSocket server for GitGui"
 [dependencies]
 axum = { version = "0.8", features = ["ws"] }
 futures-util = "0.3"
+notify = "8.2"
 gitgui-core = { path = "../gitgui-core" }
 gitgui-protocol = { path = "../gitgui-protocol" }
 rand = "0.9"
@@ -17,6 +18,10 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 tower-http = { version = "0.6", features = ["cors", "fs"] }
 uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+tempfile = "3"
+tokio-tungstenite = "0.29"
 
 [[bin]]
 name = "gitgui-server"

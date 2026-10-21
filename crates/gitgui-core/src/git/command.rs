@@ -123,6 +123,9 @@ pub fn git_command() -> Command {
     // Remote operations must fail cleanly instead of hanging on a terminal
     // credential prompt that the desktop client cannot display or answer.
     command.env("GIT_TERMINAL_PROMPT", "0");
+    // Read operations must not rewrite the index and trigger another watch
+    // invalidation. Required locks for mutations are unaffected.
+    command.env("GIT_OPTIONAL_LOCKS", "0");
 
     command
 }

@@ -121,6 +121,26 @@ pub const CAPABILITY_REPOSITORIES_GET_SNAPSHOT: &str = "repositories.get_snapsho
 pub const CAPABILITY_REPOSITORIES_GET_GRAPH: &str = "repositories.get_graph";
 /// Capability advertised when batch repository refresh is available.
 pub const CAPABILITY_REPOSITORIES_REFRESH: &str = "repositories.refresh";
+/// Ordered repository invalidations are delivered to read-authorized sessions.
+pub const CAPABILITY_REPOSITORIES_WATCH: &str = "repositories.watch";
+pub const EVENT_REPOSITORY_CHANGED: &str = "repository.changed";
+
+/// The smallest repository view invalidated by a filesystem change.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum RepositoryChangeKind {
+    /// Reload status and working-tree diffs; preserve the loaded history.
+    Status,
+    /// Refs, HEAD, stashes, or worktree metadata may have changed.
+    Snapshot,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RepositoryChanged {
+    pub repository_id: String,
+    pub kind: RepositoryChangeKind,
+}
 /// Capability advertised when Git status is available.
 pub const CAPABILITY_GIT_STATUS: &str = "git.status";
 /// Capability advertised when commit file listing is available.

@@ -38,15 +38,24 @@ development command is now `npm run dev`.
 - SSH lifecycle tests cover persisted managed ownership/reuse contracts, and
   desktop tests cover deep-link and secure update-feed validation.
 
+## Recent product work
+
+- Working-tree hunk stage/unstage, reviewed discard, and commit amendment are
+  complete; see [working-tree workflow](working-tree-workflow.md).
+- Native repository watching now sends scoped status/snapshot invalidations.
+- History rows are virtualized, canvas edges use a viewport index, and refreshes
+  preserve history identity and commit scroll anchors. See
+  [repository watching and history scale](repository-watching.md).
+
 ## Next product work
 
 Continue GitGui-owned Git product development independently of the T3-shaped
 transport architecture:
 
 - complete repository mutations with confirmation and progress behavior;
-- improve graph scale, lane stability, virtualization, and interaction;
+- continue graph interaction improvements and measure history loading/transfer
+  before introducing pagination;
 - expand branch, tag, remote, stash, worktree, submodule, and conflict flows;
-- add repository watching and targeted refresh events;
 - harden unusual paths, malformed Git output, large repositories, and partial
   failures.
 

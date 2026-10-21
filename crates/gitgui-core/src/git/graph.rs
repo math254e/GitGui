@@ -436,6 +436,42 @@ mod tests {
     }
 
     #[test]
+    fn deep_history_preserves_lanes_when_a_new_head_is_added() {
+        let count = 50_000;
+        let commits = (0..count)
+            .map(|index| {
+                let parents = if index + 1 < count {
+                    vec![(index + 1).to_string()]
+                } else {
+                    vec![]
+                };
+                CommitInfo {
+                    hash: index.to_string(),
+                    parents,
+                    author: "Test".into(),
+                    timestamp: (count - index) as i64,
+                    message: "Commit".into(),
+                }
+            })
+            .collect::<Vec<_>>();
+        let sorted = sort_commits(commits.clone());
+        let before = build_commit_graph(&sorted, Some("0"));
+        let mut next = vec![commit("new", &["0"], count as i64 + 1)];
+        next.extend(commits);
+        let next = sort_commits(next);
+        let after = build_commit_graph(&next, Some("new"));
+        assert_eq!(before.width, 1);
+        assert_eq!(after.width, 1);
+        assert_eq!(after.commits.len(), count + 1);
+        assert_eq!(after.edges.len(), count);
+        for (old, next) in before.commits.iter().zip(after.commits.iter().skip(1)) {
+            assert_eq!(old.hash, next.hash);
+            assert_eq!(old.lane, next.lane);
+            assert_eq!(old.row + 1, next.row);
+        }
+    }
+
+    #[test]
     fn keeps_linear_history_in_lane_zero() {
         let commits = sort_commits(vec![
             commit("a", &[], 1),

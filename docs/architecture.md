@@ -184,6 +184,14 @@ Required behavior:
 
 No route or component implements its own retry loop.
 
+Repository filesystem watching lives in the Rust server. Read-authorized
+sessions receive ordered `repository.changed` invalidations. The session-scoped
+client workspace reloads status for working-tree edits and a snapshot for Git
+metadata changes, retaining history identity for status-only updates. It also
+owns recovery refreshes and subscription disposal. See
+[repository watching](repository-watching.md) for batching, failure recovery,
+compatibility, and verification. Electron remains outside this traffic.
+
 ## Authentication and transport
 
 Loopback is not authentication. The local and remote protocols use the same authenticated session model.

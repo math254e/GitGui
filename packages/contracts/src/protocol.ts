@@ -129,6 +129,10 @@ event: string,
  */
 payload: JsonValue, };
 
+export type RepositoryChangeKind = "status" | "snapshot";
+
+export type RepositoryChanged = { repositoryId: string, kind: RepositoryChangeKind, };
+
 export type ServerLifecycle = "starting" | "ready" | "stopping" | "stopped" | "failed";
 
 export type ServerInfo = {

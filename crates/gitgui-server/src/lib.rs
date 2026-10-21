@@ -5,6 +5,7 @@
 //! operations; repository paths never cross the wire after catalog lookup.
 
 mod auth;
+mod watching;
 
 use auth::{AuthError, AuthStore};
 use axum::{
@@ -102,7 +103,7 @@ use std::{
 };
 use tokio::{
     net::TcpListener,
-    sync::{oneshot, Mutex, RwLock},
+    sync::{broadcast, oneshot, Mutex, RwLock},
     task::{spawn_blocking, JoinHandle},
 };
 use tower_http::{
@@ -416,6 +417,7 @@ pub async fn start(config: ServerConfig) -> Result<ServerHandle, ServerError> {
     let listener = TcpListener::bind(config.bind_addr).await?;
     let local_addr = listener.local_addr()?;
     let state = Arc::new(ServerState::new(&config, local_addr, startup.repositories));
+    let watcher = tokio::spawn(watching::run(Arc::downgrade(&state)));
     let router = router(state.clone(), web_dir);
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
     let shutdown_state = state.clone();
@@ -429,6 +431,7 @@ pub async fn start(config: ServerConfig) -> Result<ServerHandle, ServerError> {
             })
             .await;
         state.set_lifecycle(ServerLifecycle::Stopped).await;
+        watcher.abort();
         result
     });
 
@@ -453,16 +456,18 @@ pub async fn run(config: ServerConfig) -> Result<(), ServerError> {
     let listener = TcpListener::bind(config.bind_addr).await?;
     let local_addr = listener.local_addr()?;
     let state = Arc::new(ServerState::new(&config, local_addr, startup.repositories));
+    let watcher = tokio::spawn(watching::run(Arc::downgrade(&state)));
     let router = router(state.clone(), web_dir);
 
     log_bind_address(local_addr, &config);
     emit_ready_line(local_addr);
-    axum::serve(listener, router)
+    let result = axum::serve(listener, router)
         .with_graceful_shutdown(shutdown_signal(state.clone()))
         .await
-        .map_err(ServerError::Io)?;
+        .map_err(ServerError::Io);
+    watcher.abort();
     state.set_lifecycle(ServerLifecycle::Stopped).await;
-    Ok(())
+    result
 }
 
 fn router(state: Arc<ServerState>, web_dir: Option<PathBuf>) -> Router {
@@ -675,6 +680,7 @@ struct WebSocketQuery {
 }
 
 async fn handle_socket(mut socket: WebSocket, state: Arc<ServerState>, session: AuthSession) {
+    let mut events = watching::can_read(&session).then(|| state.repository_events.subscribe());
     let welcome = WelcomeMessage::for_environment(
         state.info.environment_id.clone(),
         state.info.protocol_version,
@@ -684,7 +690,24 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<ServerState>, session: 
         return;
     }
 
-    while let Some(frame) = socket.next().await {
+    loop {
+        let frame = tokio::select! {
+            frame = socket.next() => match frame { Some(frame) => frame, None => break },
+            event = async {
+                match events.as_mut() {
+                    Some(events) => events.recv().await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                match event {
+                    Ok(event) => { if send_json(&mut socket, &event).await.is_err() { break; } }
+                    // A slow client must rehydrate through its existing session
+                    // supervisor rather than keep silently stale repository state.
+                    Err(_) => { let _ = socket.close().await; break; }
+                }
+                continue;
+            }
+        };
         match frame {
             Ok(Message::Text(text)) => {
                 if process_text_frame(&mut socket, &state, &session, text.as_str())
@@ -2380,6 +2403,7 @@ struct ServerState {
     repositories: RwLock<Vec<ConfiguredRepository>>,
     catalog_mutation: Mutex<()>,
     git_mutation_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
+    repository_events: broadcast::Sender<gitgui_protocol::OrderedEventEnvelope>,
     data_dir: Option<PathBuf>,
     cache: SharedCommitFilesCache,
     auth: AuthStore,
@@ -2456,6 +2480,7 @@ impl ServerState {
             repositories: RwLock::new(repositories),
             catalog_mutation: Mutex::new(()),
             git_mutation_locks: Mutex::new(HashMap::new()),
+            repository_events: broadcast::channel(256).0,
             data_dir: config.data_dir.clone(),
             cache: SharedCommitFilesCache::default(),
             auth: AuthStore::new(config.server_id.clone(), config.bootstrap_token.clone()),
@@ -3108,6 +3133,7 @@ fn implemented_capabilities() -> Vec<String> {
         CAPABILITY_REPOSITORIES_GET_SNAPSHOT,
         CAPABILITY_REPOSITORIES_GET_GRAPH,
         CAPABILITY_REPOSITORIES_REFRESH,
+        gitgui_protocol::CAPABILITY_REPOSITORIES_WATCH,
         CAPABILITY_REPOSITORIES_REMOVE,
         CAPABILITY_GIT_STATUS,
         CAPABILITY_GIT_COMMIT_FILES,

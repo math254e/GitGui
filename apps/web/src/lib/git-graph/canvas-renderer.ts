@@ -1,8 +1,10 @@
 import type { CommitGraph, CommitInfo } from "$lib/types/repository";
+import type { GraphRenderIndex } from "./viewport";
 
 export type GitGraphCanvasOptions = {
   graph: CommitGraph;
   commits: CommitInfo[];
+  index: GraphRenderIndex;
   headHash: string | null;
   hasWorkingTreeRow: boolean;
   stashHashes: ReadonlySet<string>;
@@ -48,8 +50,7 @@ export function drawGitGraphCanvas(canvas: HTMLCanvasElement, options: GitGraphC
   context.setTransform(dpr, 0, 0, dpr, 0, 0);
   context.clearRect(0, 0, width, height);
 
-  const positions = new Map(options.graph.commits.map((commit) => [commit.hash, commit]));
-  const commits = new Map(options.commits.map((commit) => [commit.hash, commit]));
+  const { positions, commits } = options.index;
   const top = options.scrollTop - options.rowHeight * viewportOverscan;
   const bottom = options.scrollTop + height + options.rowHeight * viewportOverscan;
 
@@ -57,13 +58,10 @@ export function drawGitGraphCanvas(canvas: HTMLCanvasElement, options: GitGraphC
   context.lineJoin = "round";
   context.lineWidth = options.lineWidth;
 
-  for (const edge of options.graph.edges) {
-    const from = positions.get(edge.from);
-    const to = positions.get(edge.to);
-
-    if (!from || !to) {
-      continue;
-    }
+  const offset = Number(options.hasWorkingTreeRow);
+  const firstRow = Math.max(1, Math.floor(top / options.rowHeight) - offset + 1);
+  const lastRow = Math.ceil(bottom / options.rowHeight) - offset + 1;
+  for (const { edge, from, to } of options.index.visibleEdges(firstRow, lastRow)) {
 
     const fromY = yForRow(from.row, options);
     const toY = yForRow(to.row, options);
@@ -111,7 +109,7 @@ export function drawGitGraphCanvas(canvas: HTMLCanvasElement, options: GitGraphC
     Math.ceil(bottom / options.rowHeight) - Number(options.hasWorkingTreeRow) + 1,
   );
 
-  for (const position of options.graph.commits) {
+  for (const position of options.index.rows.slice(Math.max(0, firstVisibleRow - 1), lastVisibleRow)) {
     if (position.row < firstVisibleRow || position.row > lastVisibleRow) {
       continue;
     }

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { Cloud, Monitor } from "@lucide/svelte";
-  import { onDestroy, tick } from "svelte";
+  import { onDestroy, tick, untrack } from "svelte";
+  import { GraphRenderIndex, visibleRowRange, captureHistoryAnchor, restoreHistoryAnchor } from "$lib/git-graph/viewport";
   import { drawGitGraphCanvas } from "$lib/git-graph/canvas-renderer";
   import { APP_THEME_VARIABLES, GRAPH_THEME_COLOR_ROLES } from "$lib/theme/types";
   import type { CommitInfo, CommitRef, GraphCommit, RepositorySnapshot, StashInfo } from "$lib/types/repository";
@@ -69,8 +70,11 @@
   let graphViewportHeight = $state(0);
   let graphDevicePixelRatio = $state(1);
   let graphThemeRevision = $state(0);
-  let lastGraphSignature = "";
-  let lastGraphRepository = "";
+  let previousRows: GraphCommit[] = [];
+  let previousHasChanges = false;
+  let previousRepositoryId: string | null = null;
+  let anchorGeneration = 0;
+  let previousHistory: RepositorySnapshot | null = null;
   let lastHandledScrollCommandId: number | null = null;
 
   $effect(() => {
@@ -145,8 +149,12 @@
       }
     };
 
-    viewport.addEventListener("scroll", captureScrollTop, { passive: true });
-    const scrollObserver = window.setInterval(captureScrollTop, 50);
+    let scrollFrame = 0;
+    const scheduleScroll = () => {
+      if (!scrollFrame) scrollFrame = requestAnimationFrame(() => { scrollFrame = 0; captureScrollTop(); });
+    };
+    viewport.addEventListener("scroll", scheduleScroll, { passive: true });
+
     restoreScrollTop(initialRepositoryId);
 
     return {
@@ -157,8 +165,8 @@
       },
       destroy: () => {
         restoreGeneration += 1;
-        window.clearInterval(scrollObserver);
-        viewport.removeEventListener("scroll", captureScrollTop);
+        cancelAnimationFrame(scrollFrame);
+        viewport.removeEventListener("scroll", scheduleScroll);
       },
     };
   }
@@ -196,8 +204,13 @@
 
   const hasChanges = $derived(Boolean(snapshot?.status.changedFiles.length));
   const visibleColumns = $derived(columns.filter((column) => column.visible));
-  const graphRows = $derived(buildGraphRows(snapshot));
-  const graphCommitByHash = $derived(new Map((snapshot?.graph.commits ?? []).map((commit) => [commit.hash, commit])));
+  // Status-only snapshots retain history identity so file edits do not rebuild labels/layout indexes.
+  const historySnapshot = $derived(stableHistory(snapshot));
+  const graphRows = $derived(buildGraphRows(historySnapshot));
+  const renderIndex = $derived(new GraphRenderIndex(historySnapshot?.graph ?? { commits: [], edges: [], width: 1, headLane: null }, historySnapshot?.commits ?? []));
+  const rowRange = $derived(visibleRowRange(graphRows.length, graphScrollTop, graphViewportHeight, rowHeight, hasChanges));
+  const visibleRows = $derived(graphRows.slice(rowRange.start, rowRange.end));
+  const graphCommitByHash = $derived(new Map((historySnapshot?.graph.commits ?? []).map((commit) => [commit.hash, commit])));
   const graphRequiredWidth = $derived(
     Math.max(90, graphPadding * 2 + Math.max(0, (snapshot?.graph.width ?? 1) - 1) * laneGap + dotRadius * 2),
   );
@@ -214,78 +227,38 @@
   const totalGridWidth = $derived(
     visibleColumns.reduce((total, column) => total + renderedColumnWidth(column), 0),
   );
-  const refsByTarget = $derived(groupRefsByTarget(snapshot?.refs ?? []));
-  const branchRefByFirstParentCommit = $derived(groupBranchRefByFirstParentCommit(snapshot));
-  const branchRefByLineCommit = $derived(groupBranchRefByLineCommit(snapshot));
-  const branchRefByLaneCommit = $derived(groupBranchRefByLaneCommit(snapshot, graphCommitByHash, refsByTarget));
+  const refsByTarget = $derived(groupRefsByTarget(historySnapshot?.refs ?? []));
+  const branchRefByFirstParentCommit = $derived(groupBranchRefByFirstParentCommit(historySnapshot));
+  const branchRefByLineCommit = $derived(groupBranchRefByLineCommit(historySnapshot));
+  const branchRefByLaneCommit = $derived(groupBranchRefByLaneCommit(historySnapshot, graphCommitByHash, refsByTarget));
   const branchRefByMergeTargetCommit = $derived(
-    groupBranchRefByMergeTargetCommit(snapshot, branchRefByFirstParentCommit, branchRefByLaneCommit),
+    groupBranchRefByMergeTargetCommit(historySnapshot, branchRefByFirstParentCommit, branchRefByLaneCommit),
   );
-  const branchRefByNearestDescendantCommit = $derived(
-    groupBranchRefByNearestDescendantCommit(snapshot, graphCommitByHash, refsByTarget),
-  );
+  const nearestDescendantRefs = $derived.by(() => {
+    const hashes = [hoveredRowHash, selectedCommit?.hash].filter((hash): hash is string => Boolean(hash) && !branchRefByLineCommit.has(hash!));
+    return groupBranchRefByNearestDescendantCommit(historySnapshot, graphCommitByHash, refsByTarget, hashes);
+  });
+  const commitInfoByHash = $derived(new Map((historySnapshot?.commits ?? []).map((commit) => [commit.hash, commit])));
   const stashHashes = $derived(
-    new Set((snapshot?.stashes ?? []).map((stash) => stash.hash)),
+    new Set((historySnapshot?.stashes ?? []).map((stash) => stash.hash)),
   );
 
-  $effect(() => {
+  $effect.pre(() => {
     const viewport = graphViewport;
-    const currentSnapshot = snapshot;
-
-    if (!viewport || !currentSnapshot) {
-      lastGraphSignature = "";
-      lastGraphRepository = "";
-      return;
+    const nextRows = renderIndex.rows;
+    const nextHasChanges = hasChanges;
+    const nextRepositoryId = repositoryId;
+    const generation = ++anchorGeneration;
+    if (viewport && nextRepositoryId === previousRepositoryId && (nextRows !== previousRows || nextHasChanges !== previousHasChanges)) {
+      const anchor = captureHistoryAnchor(previousRows, untrack(() => viewport.scrollTop), rowHeight, previousHasChanges);
+      const nextTop = anchor ? restoreHistoryAnchor(anchor, nextRows, rowHeight, nextHasChanges) : null;
+      if (nextTop !== null) void tick().then(() => {
+        if (generation === anchorGeneration && graphViewport === viewport && repositoryId === nextRepositoryId) setViewportScrollTop(viewport, nextTop);
+      });
     }
-
-    const repositoryRoot = currentSnapshot.info.root;
-    const graphSignature = [
-      repositoryRoot,
-      ...currentSnapshot.graph.commits.map((commit) => commit.hash),
-    ].join("\0");
-    const repositoryChanged = Boolean(lastGraphRepository && lastGraphRepository !== repositoryRoot);
-    lastGraphRepository = repositoryRoot;
-
-    if (!lastGraphSignature || repositoryChanged) {
-      lastGraphSignature = graphSignature;
-      return;
-    }
-
-    if (graphSignature === lastGraphSignature) {
-      return;
-    }
-
-    const viewportRect = viewport.getBoundingClientRect();
-    const graphRowsInDom = [...viewport.querySelectorAll<HTMLElement>("[data-commit-hash]")];
-    const anchorRow =
-      graphRowsInDom.find((row) => row.getBoundingClientRect().bottom > viewportRect.top) ??
-      graphRowsInDom.at(-1);
-    const anchorHash = anchorRow?.dataset.commitHash;
-    const anchorTop = anchorRow?.getBoundingClientRect().top;
-    lastGraphSignature = graphSignature;
-
-    if (!anchorHash || anchorTop === undefined) {
-      return;
-    }
-
-    void tick().then(() => {
-      if (graphViewport !== viewport) {
-        return;
-      }
-
-      const nextAnchorRow = [...viewport.querySelectorAll<HTMLElement>("[data-commit-hash]")].find(
-        (row) => row.dataset.commitHash === anchorHash,
-      );
-
-      if (!nextAnchorRow) {
-        return;
-      }
-
-      setViewportScrollTop(
-        viewport,
-        viewport.scrollTop + nextAnchorRow.getBoundingClientRect().top - anchorTop,
-      );
-    });
+    previousRows = nextRows;
+    previousHasChanges = nextHasChanges;
+    previousRepositoryId = nextRepositoryId;
   });
 
   $effect(() => {
@@ -318,20 +291,11 @@
         return;
       }
 
-      const targetRow = [...viewport.querySelectorAll<HTMLElement>("[data-commit-hash]")].find(
-        (row) => row.dataset.commitHash === targetHash,
-      );
-
-      if (!targetRow) {
-        return;
-      }
-
+      const targetIndex = graphRows.findIndex((row) => row.commit.hash === targetHash);
+      if (targetIndex < 0) return;
       lastHandledScrollCommandId = commandId;
-
-      const viewportRect = viewport.getBoundingClientRect();
-      const targetRect = targetRow.getBoundingClientRect();
-      const targetTop = targetRect.top - viewportRect.top + viewport.scrollTop;
-      const centeredTop = targetTop - (viewport.clientHeight - targetRow.offsetHeight) / 2;
+      const targetTop = (targetIndex + Number(hasChanges)) * rowHeight;
+      const centeredTop = targetTop - (viewport.clientHeight - rowHeight) / 2;
 
       setViewportScrollTop(viewport, centeredTop);
       onScrollCommandHandled(commandId);
@@ -359,8 +323,9 @@
     const graphColors = GRAPH_THEME_COLOR_ROLES.map((role) =>
       computedStyle.getPropertyValue(APP_THEME_VARIABLES[role]).trim(),
     ).filter(Boolean);
-    drawGitGraphCanvas(canvas, {
+    const frame = requestAnimationFrame(() => drawGitGraphCanvas(canvas, {
       graph: currentSnapshot.graph,
+      index: renderIndex,
       commits: currentSnapshot.commits,
       headHash: currentSnapshot.status.headOid,
       hasWorkingTreeRow: hasChanges,
@@ -378,7 +343,8 @@
       lineWidth,
       colors: graphColors,
       surfaceColor,
-    });
+    }));
+    return () => cancelAnimationFrame(frame);
   });
 
   function renderedColumnWidth(column: HistoryColumn | undefined) {
@@ -451,42 +417,35 @@
     return 2;
   }
 
+  function stableHistory(next: RepositorySnapshot | null) {
+    if (next && previousHistory && next.commits === previousHistory.commits && next.graph === previousHistory.graph && next.refs === previousHistory.refs && next.stashes === previousHistory.stashes && next.status.currentBranch === previousHistory.status.currentBranch) return previousHistory;
+    previousHistory = next;
+    return next;
+  }
+
   function groupBranchRefByFirstParentCommit(currentSnapshot: RepositorySnapshot | null) {
-    const candidates = new Map<string, CommitRef[]>();
-
-    if (!currentSnapshot) {
-      return new Map<string, CommitRef>();
-    }
-
-    const commitByHash = new Map(currentSnapshot.commits.map((commit) => [commit.hash, commit]));
-    const branchRefs = currentSnapshot.refs.filter((ref) => ref.refType !== "tag" && commitByHash.has(ref.target));
-
-    for (const ref of branchRefs) {
+    const grouped = new Map<string, CommitRef>();
+    if (!currentSnapshot) return grouped;
+    const commits = new Map(currentSnapshot.commits.map((commit) => [commit.hash, commit]));
+    const refs = currentSnapshot.refs.filter((ref) => ref.refType !== "tag").sort((a, b) => {
+      const current = currentSnapshot.status.currentBranch;
+      return Number(displayRefName(b) === current) - Number(displayRefName(a) === current)
+        || refRank(a) - refRank(b)
+        || (commits.get(b.target)?.timestamp ?? 0) - (commits.get(a.target)?.timestamp ?? 0)
+        || displayRefName(a).localeCompare(displayRefName(b));
+    });
+    for (const ref of refs) {
       let hash: string | undefined = ref.target;
-      const seen = new Set<string>();
-
-      while (hash && !seen.has(hash)) {
-        seen.add(hash);
-        const refsForCommit = candidates.get(hash) ?? [];
-        refsForCommit.push(ref);
-        candidates.set(hash, refsForCommit);
-
-        hash = commitByHash.get(hash)?.parents[0];
+      while (hash && commits.has(hash) && !grouped.has(hash)) {
+        grouped.set(hash, ref);
+        hash = commits.get(hash)?.parents[0];
       }
     }
-
-    const grouped = new Map<string, CommitRef>();
-
-    for (const [hash, refsForCommit] of candidates) {
-      const dedupedRefs = dedupeRemoteRefsWhenLocalExists(refsForCommit);
-      grouped.set(hash, bestBranchRef(dedupedRefs, currentSnapshot));
-    }
-
     return grouped;
   }
 
   function bestBranchRef(refs: CommitRef[], currentSnapshot: RepositorySnapshot) {
-    const commitByHash = new Map(currentSnapshot.commits.map((commit) => [commit.hash, commit]));
+    const commitByHash = commitInfoByHash;
     const currentBranch = currentSnapshot.status.currentBranch;
     const rankedRefs = [...refs].sort((first, second) => {
       if (currentBranch) {
@@ -514,7 +473,7 @@
   }
 
   function bestBranchNameRef(refs: CommitRef[], currentSnapshot: RepositorySnapshot) {
-    const commitByHash = new Map(currentSnapshot.commits.map((commit) => [commit.hash, commit]));
+    const commitByHash = commitInfoByHash;
 
     return [...refs].sort((first, second) => {
       const firstTime = commitByHash.get(first.target)?.timestamp ?? 0;
@@ -691,10 +650,11 @@
     currentSnapshot: RepositorySnapshot | null,
     graphCommits: Map<string, GraphCommit>,
     refsByCommit: Map<string, CommitRef[]>,
+    targetHashes: string[],
   ) {
     const grouped = new Map<string, CommitRef>();
 
-    if (!currentSnapshot) {
+    if (!currentSnapshot || !targetHashes.length) {
       return grouped;
     }
 
@@ -719,7 +679,9 @@
       });
     }
 
-    for (const commit of currentSnapshot.commits) {
+    for (const hash of targetHashes) {
+      const commit = commitByHash.get(hash);
+      if (!commit) continue;
       const startGraphCommit = graphCommits.get(commit.hash);
       const candidates: Array<{ ref: CommitRef; target: string; distance: number }> = [];
       const seen = new Set<string>([commit.hash]);
@@ -729,8 +691,8 @@
       }));
       let closestDistance: number | null = null;
 
-      while (queue.length) {
-        const item = queue.shift();
+      for (let cursor = 0; cursor < queue.length; cursor++) {
+        const item = queue[cursor];
 
         if (!item || seen.has(item.hash)) {
           continue;
@@ -846,7 +808,7 @@
 
     const commitByHash = new Map(currentSnapshot.commits.map((commit) => [commit.hash, commit]));
 
-    for (const mergeCommit of currentSnapshot.commits) {
+    for (const mergeCommit of [...currentSnapshot.commits].reverse()) {
       if (mergeCommit.parents.length < 2) {
         continue;
       }
@@ -861,12 +823,9 @@
         let hash: string | undefined = mergedParentHash;
         const seen = new Set<string>();
 
-        while (hash && !seen.has(hash)) {
+        while (hash && !seen.has(hash) && !firstParentRefs.has(hash) && !grouped.has(hash)) {
           seen.add(hash);
-
-          if (!firstParentRefs.has(hash)) {
-            grouped.set(hash, targetRef);
-          }
+          grouped.set(hash, targetRef);
 
           hash = commitByHash.get(hash)?.parents[0];
         }
@@ -957,6 +916,32 @@
     graphScrollTop = viewport.scrollTop;
   }
 
+  function navigateHistory(event: KeyboardEvent, hash: string | null) {
+    if (event.altKey || event.ctrlKey || event.metaKey || !graphViewport) return;
+    const count = graphRows.length + Number(hasChanges);
+    const current = hash === null ? 0 : graphRows.findIndex((row) => row.commit.hash === hash) + Number(hasChanges);
+    const page = Math.max(1, Math.floor(graphViewportHeight / rowHeight) - 1);
+    const next = event.key === "ArrowDown" ? current + 1 : event.key === "ArrowUp" ? current - 1
+      : event.key === "PageDown" ? current + page : event.key === "PageUp" ? current - page
+      : event.key === "Home" ? 0 : event.key === "End" ? count - 1 : null;
+    if (next === null || !count) return;
+    event.preventDefault();
+    const index = Math.max(0, Math.min(count - 1, next));
+    const row = graphRows[index - Number(hasChanges)];
+    if (row) onSelectCommit(row.commit); else onSelectChanges();
+    const viewport = graphViewport;
+    const top = index * rowHeight;
+    if (top < viewport.scrollTop) setViewportScrollTop(viewport, top);
+    else if (top + rowHeight > viewport.scrollTop + viewport.clientHeight) setViewportScrollTop(viewport, top + rowHeight - viewport.clientHeight);
+    void tick().then(() => {
+      if (graphViewport !== viewport) return;
+      const target = row
+        ? [...viewport.querySelectorAll<HTMLButtonElement>("[data-commit-hash]")].find((button) => button.dataset.commitHash === row.commit.hash)
+        : viewport.querySelector<HTMLButtonElement>("[data-working-tree]");
+      target?.focus({ preventScroll: true });
+    });
+  }
+
 </script>
 
 <section class="h-full min-h-0 bg-[var(--app-theme-surface)]">
@@ -992,14 +977,16 @@
           style={`left: ${graphColumnOffset}px; top: ${graphScrollTop}px; width: ${graphRequiredWidth}px; height: ${graphViewportHeight}px;`}
           aria-hidden="true"
         ></canvas>
-        <ol class="relative" style={`min-width: ${totalGridWidth}px;`}>
+        <ol aria-label="Commit history" class="relative" style={`min-width: ${totalGridWidth}px;`}>
           {#if hasChanges}
             <li>
               <button
+                data-working-tree
+                onkeydown={(event) => navigateHistory(event, null)}
                 class={`grid w-full items-center border-b border-[var(--app-theme-border)] text-left transition hover:bg-[var(--app-theme-sidebar-row-hover)] focus-visible:outline-2 focus-visible:outline-[var(--app-theme-focus)] ${
                   changesSelected ? "bg-[var(--app-theme-accent-surface)]" : "bg-[var(--app-theme-surface)]"
                 }`}
-                style={`grid-template-columns: ${gridTemplate}; min-height: ${rowHeight}px;`}
+                style={`grid-template-columns: ${gridTemplate}; height: ${rowHeight}px;`}
                 type="button"
                 onclick={onSelectChanges}
               >
@@ -1021,26 +1008,28 @@
             </li>
           {/if}
 
-          {#each graphRows as row (row.commit.hash)}
+          <li aria-hidden="true" style={`height: ${rowRange.before}px;`}></li>
+          {#each visibleRows as row, index (row.commit.hash)}
             {@const commit = row.commit}
             {@const stash = row.stash}
             {@const graphCommit = row.graphCommit}
             {@const commitRefs = refsByTarget.get(commit.hash) ?? []}
-            {@const ghostRef = branchRefByLineCommit.get(commit.hash) ?? branchRefByNearestDescendantCommit.get(commit.hash) ?? branchRefByMergeTargetCommit.get(commit.hash) ?? branchRefByLaneCommit.get(commit.hash) ?? branchRefByFirstParentCommit.get(commit.hash)}
-            <li>
+            {@const ghostRef = branchRefByLineCommit.get(commit.hash) ?? nearestDescendantRefs.get(commit.hash) ?? branchRefByMergeTargetCommit.get(commit.hash) ?? branchRefByLaneCommit.get(commit.hash) ?? branchRefByFirstParentCommit.get(commit.hash)}
+            <li aria-setsize={graphRows.length + Number(hasChanges)} aria-posinset={rowRange.start + index + Number(hasChanges) + 1}>
               <button
                 class={`grid w-full items-center border-b border-[var(--app-theme-border)] text-left transition hover:bg-[var(--app-theme-sidebar-row-hover)] focus-visible:outline-2 focus-visible:outline-[var(--app-theme-focus)] ${
                   selectedCommit?.hash === commit.hash ? "bg-[var(--app-theme-accent-surface)]" : "bg-[var(--app-theme-surface)]"
                 }`}
                 data-commit-hash={commit.hash}
-                style={`grid-template-columns: ${gridTemplate}; min-height: ${rowHeight}px;`}
+                onkeydown={(event) => navigateHistory(event, commit.hash)}
+                style={`grid-template-columns: ${gridTemplate}; height: ${rowHeight}px;`}
                 type="button"
                 onclick={() => onSelectCommit(commit)}
                 onpointerenter={() => (hoveredRowHash = commit.hash)}
                 onpointerleave={() => (hoveredRowHash = hoveredRowHash === commit.hash ? null : hoveredRowHash)}
               >
                 <span
-                  class={`relative flex min-w-0 flex-wrap items-center gap-0.5 overflow-visible px-0.5 ${
+                  class={`relative flex min-w-0 items-center gap-0.5 overflow-visible px-0.5 ${
                     hoveredRowHash === commit.hash || selectedCommit?.hash === commit.hash ? "z-[120]" : "z-[80]"
                   }`}
                 >
@@ -1091,6 +1080,7 @@
               </button>
             </li>
           {/each}
+          <li aria-hidden="true" style={`height: ${rowRange.after}px;`}></li>
         </ol>
       </div>
     </div>

@@ -63,6 +63,7 @@
     refs: CommitRef[];
     commits: RepositorySnapshot["commits"];
     graph: RepositorySnapshot["graph"];
+    sourceGraph: RepositorySnapshot["graph"];
   };
   type RepositoryListItem = {
     repositoryId: string;
@@ -96,7 +97,6 @@
 
   const layoutStorageKey = "gitgui.workspaceLayout.v1";
   const branchGraphVisibilityStoragePrefix = "gitgui.branchGraphVisibility.v1";
-  const autoRefreshMs = 30_000;
   const initialPrefetchCommitCount = 20;
   const sidebarLimits = { default: 230, min: 180, max: 420 };
   const detailsLimits = { default: 430, min: 300, max: 620 };
@@ -124,7 +124,6 @@
   let sidebarWidth = $state(sidebarLimits.default);
   let detailsWidth = $state(detailsLimits.default);
   let activeWorkspaceRequest = 0;
-  let autoRefreshTimer: ReturnType<typeof setInterval> | null = null;
   let largeScreenMediaQuery: MediaQueryList | null = null;
   const applicationRuntime = useWebApplicationRuntime();
   let unsubscribeApplicationRuntime: (() => void) | null = null;
@@ -147,6 +146,7 @@
   let hiddenGraphRefKeys = $state<Set<string>>(new Set());
   let filteredGraphViews = $state<Map<string, FilteredGraphView>>(new Map());
   let lastGraphRequestKey: string | null = null;
+  let lastGraphSource: RepositorySnapshot["graph"] | null = null;
   let graphRequestGeneration = 0;
   const graphScrollPositions = new Map<string, number>();
   let nextScrollCommandId = 0;
@@ -342,7 +342,7 @@
       return;
     }
 
-    if (filteredGraphView?.key === key) {
+    if (filteredGraphView?.key === key && filteredGraphView.sourceGraph === snapshot.graph) {
       lastGraphRequestKey = key;
       return;
     }
@@ -352,11 +352,13 @@
       return;
     }
 
-    if (key === lastGraphRequestKey) {
+    if (key === lastGraphRequestKey && lastGraphSource === snapshot.graph) {
       return;
     }
 
     lastGraphRequestKey = key;
+    lastGraphSource = snapshot.graph;
+    const sourceGraph = snapshot.graph;
     const generation = ++graphRequestGeneration;
     const targetRefs = [...visibleGraphRefs];
 
@@ -374,6 +376,7 @@
           refs: targetRefs,
           commits: result.commits,
           graph: result.graph,
+          sourceGraph,
         });
         filteredGraphViews = nextViews;
       })
@@ -387,21 +390,9 @@
     largeScreen = largeScreenMediaQuery.matches;
     largeScreenMediaQuery.addEventListener("change", updateLargeScreen);
     unsubscribeApplicationRuntime = applicationRuntime.subscribe(applyApplicationRuntimeState);
-    if (!autoRefreshTimer) {
-      autoRefreshTimer = setInterval(refreshOpenRepositories, autoRefreshMs);
-    }
-    window.addEventListener("focus", refreshOpenRepositories);
-    document.addEventListener("visibilitychange", refreshWhenVisible);
   });
 
   onDestroy(() => {
-    if (autoRefreshTimer) {
-      clearInterval(autoRefreshTimer);
-      autoRefreshTimer = null;
-    }
-
-    window.removeEventListener("focus", refreshOpenRepositories);
-    document.removeEventListener("visibilitychange", refreshWhenVisible);
     largeScreenMediaQuery?.removeEventListener("change", updateLargeScreen);
     unsubscribeApplicationRuntime?.();
     unsubscribeApplicationRuntime = null;
@@ -753,12 +744,6 @@
       void clientWorkspace.prefetchCommitFiles(repo.id, commitHashes).catch(() => {
         prefetchedInitialCommits.delete(repo.id);
       });
-    }
-  }
-
-  function refreshWhenVisible() {
-    if (document.visibilityState === "visible") {
-      void refreshOpenRepositories();
     }
   }
 
