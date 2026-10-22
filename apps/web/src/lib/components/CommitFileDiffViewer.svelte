@@ -54,6 +54,7 @@
   let wordWrap = $state(false);
   let appearance = $state<ThemeAppearance>(themeStore.getSnapshot().resolvedAppearance);
   let activeRequest = 0;
+  let selectionController: AbortController | undefined;
   // CodeView ignores new payloads with an unchanged item version, including
   // hunk annotations arriving after the file contents.
   let renderVersion = 0;
@@ -111,6 +112,7 @@
     return () => {
       destroyed = true;
       activeRequest += 1;
+      selectionController?.abort();
       unsubscribeTheme();
       renderer?.viewer.cleanUp();
       parsedDiff = null;
@@ -147,6 +149,9 @@
     }
 
     const request = ++activeRequest;
+    selectionController?.abort();
+    selectionController = new AbortController();
+    const signal = selectionController.signal;
     diff = null;
     hunkPreview = null;
     hunkError = "";
@@ -170,20 +175,20 @@
               commitHash: commitHash ?? "",
               ...(parentHash ? { parentHash } : {}),
               filePath: file.path,
-            })
+            }, signal)
           : source === "commitWorkingTree"
-          ? client.getCommitWorkingTreeFileDiff({ repositoryId, commitHash: commitHash ?? "", filePath: file.path })
+          ? client.getCommitWorkingTreeFileDiff({ repositoryId, commitHash: commitHash ?? "", filePath: file.path }, signal)
           : client.getWorkingTreeFileDiff({
               repositoryId,
               ...(headHash ? { headHash } : {}),
               filePath: file.path,
               staged: source === "staged",
-            });
+            }, signal);
 
       // Hunk actions are supplementary. A slow preview must not keep already
       // loaded file contents behind the loading overlay after a mutation.
       if (source === "workingTree" || source === "staged") {
-        void loadHunkPreview(request, repositoryId, source, file.path);
+        void loadHunkPreview(request, repositoryId, source, file.path, signal);
       }
       const result = await resultPromise;
       if (!destroyed && request === activeRequest) {
@@ -200,9 +205,9 @@
     }
   }
 
-  async function loadHunkPreview(request: number, repositoryId: string, source: DiffSource, filePath: string) {
+  async function loadHunkPreview(request: number, repositoryId: string, source: DiffSource, filePath: string, signal: AbortSignal) {
     try {
-      const preview = await client.getHunkPreview({ repositoryId, filePath, staged: source === "staged" });
+      const preview = await client.getHunkPreview({ repositoryId, filePath, staged: source === "staged" }, signal);
       if (!destroyed && request === activeRequest) hunkPreview = preview;
     } catch (caught) {
       if (!destroyed && request === activeRequest) hunkError = formatError(caught);

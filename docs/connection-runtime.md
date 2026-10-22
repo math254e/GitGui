@@ -5,6 +5,59 @@ document describes the runtime as it exists here. The vendoring rules, the
 upstream snapshot, and the per-file divergences live in
 [t3code-vendoring.md](./t3code-vendoring.md).
 
+## Concurrent request lifetime
+
+The session correlates responses by request ID; independent reads may finish
+out of order. Pending registration and cleanup are protected from interruption.
+Timeouts and caller interruption remove the pending entry and, when the welcome
+advertises `rpc.cancel`, send `{ "type": "cancel", "id": "request-…" }`.
+Older protocol-v2 servers receive no cancellation notification. This is an
+additive capability, so the protocol version remains 2.
+
+Cancellation belongs to the current socket and applies only to read methods.
+The server answers a cancelled read's original ID with `request_cancelled`;
+missing, completed, repeated, and mutation cancellations are ignored. Late
+responses cannot complete another call. The Promise bridge accepts an
+`AbortSignal` for file diffs and hunk previews and interrupts their Effect calls.
+The viewer aborts both requests when selection changes or it is destroyed.
+Session termination fails all pending calls and sends no cancellation frames.
+
+The Rust socket loop keeps reading frames and events while dispatches execute.
+Each session admits at most 128 pending/running requests, with eight independent
+reads, eight repository operation lanes, one prefetch, and one control request
+able to run concurrently. Operation lanes preserve arrival order per repository,
+including lock-sensitive hunk/discard/amend previews. The existing server-wide
+repository mutex still serializes operations from different sessions. Ordering
+between different sockets is determined by that mutex, not a global wire order.
+Read snapshots retain their existing semantics when another session mutates.
+
+Overload returns `server_busy` without closing the socket. Reusing a pending or
+running ID returns `duplicate_request_id`; clients must keep IDs unique for
+the session. Parse failures, scope checks, Git errors, binary JSON, and event
+delivery continue through their existing protocol paths.
+
+Cancellation removes queued reads immediately. Started dispatches retain their
+slots and repository guards until completion, and their late responses are
+suppressed. Disconnect drops queued work and detaches started dispatches so a
+live blocking worker cannot lose its lock. A mutation already dispatched may
+complete after disconnect; clients must revalidate rather than replay it.
+
+Commit-diff hints retain the one-target protocol limit from issue #7. File-list
+hints validate every supplied hash but process at most one. Both report the
+number actually processed in `count`. Their separate slot keeps a
+large hint out of the interactive read queue. Only one additional hint may
+wait; excess hints receive `server_busy` so prefetch cannot fill session
+admission capacity. This deliberately trades cache
+warming for bounded work; choosing which target to warm remains GitGui policy.
+Git subprocesses still have no cancellation/deadline support: up to eight
+already-started obsolete reads per session can delay further reads until a
+worker finishes. This change bounds their count, not their execution time.
+
+Regression coverage lives in `rpc/session.test.ts` and the server's
+`rpc_queue.rs`/`rpc_tests.rs`, including out-of-order errors, aborts/timeouts,
+late replies, bounded admission, mutation order, and a disconnect during a
+blocked pre-commit hook.
+
 ## One transport retry owner
 
 The [supervisor](../packages/client-runtime/src/connection/supervisor.ts) owns

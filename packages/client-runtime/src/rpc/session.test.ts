@@ -6,6 +6,7 @@
  * event stream.
  */
 import { EnvironmentId } from "@gitgui/contracts/environment";
+import { CAPABILITY_RPC_CANCEL } from "@gitgui/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import { vi } from "vitest";
 import * as Duration from "effect/Duration";
@@ -156,6 +157,7 @@ const waitFor = (predicate: () => boolean) =>
       if (predicate()) return;
       yield* Effect.yieldNow;
     }
+    throw new Error("The fake socket did not reach the expected state.");
   });
 
 const welcome = (protocolVersion = 2) => ({
@@ -236,6 +238,98 @@ describe("the GitGui RPC session", () => {
     }).pipe(Effect.scoped),
   );
 
+  it.effect("correlates out-of-order concurrent successes and errors", () =>
+    Effect.gen(function* () {
+      const { socket, session } = yield* makeSession();
+      socket.deliver(welcome());
+      yield* session.ready;
+      const first = yield* Effect.forkChild(session.client.call("repositories.list", {}));
+      const second = yield* Effect.forkChild(session.client.call("git.status", { repositoryId: "repo" }));
+      yield* waitFor(() => socket.requestsFor("git.status").length === 1);
+      const a = socket.requestsFor("repositories.list")[0]!;
+      const b = socket.requestsFor("git.status")[0]!;
+      socket.deliver({ type: "response", id: b.id, ok: false, error: { code: "forbidden", message: "Denied", details: { requiredScope: "repository:read" } } });
+      const failure = yield* Fiber.join(second).pipe(Effect.flip);
+      expect(failure.requestId).toBe(b.id);
+      expect(failure.code).toBe("forbidden");
+      expect(failure.details).toEqual({ requiredScope: "repository:read" });
+      expect(yield* session.pendingRequests).toBe(1);
+      socket.deliver({ type: "response", id: a.id, ok: true, result: { repositories: [] } });
+      expect((yield* Fiber.join(first)).repositories).toEqual([]);
+      expect(yield* session.pendingRequests).toBe(0);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("cancels timed-out requests and ignores their late responses", () =>
+    Effect.gen(function* () {
+      const { socket, session } = yield* makeSession({ requestTimeout: "5 seconds" });
+      socket.deliver({ ...welcome(), capabilities: [CAPABILITY_RPC_CANCEL] });
+      yield* session.ready;
+      const first = yield* Effect.forkChild(session.client.call("repositories.list", {}));
+      yield* waitFor(() => socket.requestsFor("repositories.list").length === 1);
+      const id = socket.requestsFor("repositories.list")[0]!.id;
+      yield* TestClock.adjust("6 seconds");
+      expect((yield* Fiber.join(first).pipe(Effect.flip)).code).toBe("request_timeout");
+      expect(socket.sent.map((raw) => JSON.parse(raw)).filter((frame) => frame.type === "cancel")).toEqual([{ type: "cancel", id }]);
+      socket.deliver({ type: "response", id, ok: true, result: { repositories: ["obsolete"] } });
+      const second = yield* Effect.forkChild(session.client.call("repositories.list", {}));
+      yield* waitFor(() => socket.requestsFor("repositories.list").length === 2);
+      socket.deliver({ type: "response", id: socket.requestsFor("repositories.list")[1]!.id, ok: true, result: { repositories: [] } });
+      expect((yield* Fiber.join(second)).repositories).toEqual([]);
+      expect(yield* session.pendingRequests).toBe(0);
+    }).pipe(Effect.provide(TestClock.layer()), Effect.scoped),
+  );
+
+  it.effect("aborts obsolete file contents and hunk previews through the Promise bridge", () =>
+    Effect.gen(function* () {
+      const { socket, session } = yield* makeSession();
+      socket.deliver({ ...welcome(), capabilities: [CAPABILITY_RPC_CANCEL] });
+      yield* session.ready;
+      const client = new GitGuiClient({ client: session.client, welcome: yield* session.welcome });
+      const controller = new AbortController();
+      const old = [
+        client.getWorkingTreeFileDiff({ repositoryId: "repo", filePath: "old.txt", staged: false }, controller.signal),
+        client.getHunkPreview({ repositoryId: "repo", filePath: "old.txt", staged: false }, controller.signal),
+        client.getCommitWorkingTreeFileDiff({ repositoryId: "repo", commitHash: "a".repeat(40), filePath: "old.txt" }, controller.signal),
+      ].map((request) => request.catch((error: unknown) => error));
+      yield* waitFor(() => socket.requestsFor("git.commit_working_tree_file_diff").length === 1);
+      controller.abort();
+      const errors = yield* Effect.promise(() => Promise.all(old));
+      expect(errors).toHaveLength(3);
+      for (const error of errors) expect(error).toEqual(expect.objectContaining({ code: "request_cancelled" }));
+      expect(yield* session.pendingRequests).toBe(0);
+      expect(socket.sent.filter((raw) => JSON.parse(raw).type === "cancel")).toHaveLength(3);
+      const before = socket.sent.length;
+      const aborted = yield* Effect.promise(() => client.getCommitFileDiff({
+        repositoryId: "repo", commitHash: "a".repeat(40), filePath: "aborted.txt",
+      }, controller.signal).catch((error: unknown) => error));
+      expect(aborted).toEqual(expect.objectContaining({ code: "request_cancelled" }));
+      expect(socket.sent).toHaveLength(before);
+      const selected = client.getCommitFileDiff({ repositoryId: "repo", commitHash: "a".repeat(40), filePath: "selected.txt" });
+      yield* waitFor(() => socket.requestsFor("git.commit_file_diff").length === 1);
+      for (const method of ["git.working_tree_file_diff", "git.hunk_preview", "git.commit_working_tree_file_diff"]) {
+        socket.deliver({ type: "response", id: socket.requestsFor(method)[0]!.id, ok: true, result: { diff: "obsolete" } });
+      }
+      socket.deliver({ type: "response", id: socket.requestsFor("git.commit_file_diff")[0]!.id, ok: true, result: { diff: "selected" } });
+      expect(yield* Effect.promise(() => selected)).toEqual({ diff: "selected" });
+      client.dispose();
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("fails every concurrent pending request on disconnect without sending cancellations", () =>
+    Effect.gen(function* () {
+      const { socket, session } = yield* makeSession();
+      socket.deliver({ ...welcome(), capabilities: [CAPABILITY_RPC_CANCEL] });
+      yield* session.ready;
+      const requests = [];
+      for (let n = 0; n < 12; n++) requests.push(yield* Effect.forkChild(session.client.call("repositories.list", {})));
+      yield* waitFor(() => socket.requestsFor("repositories.list").length === 12);
+      socket.close(1006, "Disconnected");
+      for (const request of requests) expect((yield* Fiber.join(request).pipe(Effect.flip)).code).toBe("disconnected");
+      expect(yield* session.pendingRequests).toBe(0);
+      expect(socket.sent.filter((raw) => JSON.parse(raw).type === "cancel")).toHaveLength(0);
+    }).pipe(Effect.scoped),
+  );
   it.effect("greets the server and becomes ready", () =>
     Effect.gen(function* () {
       const { socket, session } = yield* makeSession();
@@ -274,6 +368,7 @@ describe("the GitGui RPC session", () => {
 
       yield* Fiber.interrupt(fiber);
       expect(yield* session.pendingRequests).toBe(0);
+      expect(socket.sent.filter((raw) => JSON.parse(raw).type === "cancel")).toHaveLength(0);
     }).pipe(Effect.scoped),
   );
 

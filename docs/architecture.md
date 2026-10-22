@@ -79,6 +79,13 @@ Copy T3 Code's concepts, terminology, layering, and infrastructure where they ap
 
 `gitgui-protocol` is the canonical wire contract. Rust types generate the browser-safe TypeScript contracts consumed by the client. Desktop IPC contracts are separate because they describe Electron capabilities, not Git RPC.
 
+RPC responses may complete out of order and always echo the request ID. The
+Rust server bounds concurrent reads and prefetch separately, preserves
+per-repository mutation/preview order, and retains the existing global
+repository locks. Read cancellation is an optional `rpc.cancel` capability on
+the same authenticated socket. See [connection runtime](connection-runtime.md#concurrent-request-lifetime)
+for admission limits, cancellation, and disconnect ownership.
+
 ### Svelte client
 
 The client owns presentation and client-local workspace state:

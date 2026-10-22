@@ -5,6 +5,9 @@
 //! operations; repository paths never cross the wire after catalog lookup.
 
 mod auth;
+mod rpc_queue;
+#[cfg(test)]
+mod rpc_tests;
 mod watching;
 
 use auth::{AuthError, AuthStore};
@@ -15,7 +18,7 @@ use axum::{
     routing::{get, post},
     Form, Json, Router,
 };
-use futures_util::{SinkExt, StreamExt};
+use futures_util::{FutureExt, SinkExt, StreamExt};
 use gitgui_core::git::{
     cache::{
         CommitFileDiffKey, CommitFileDiffLookup, CommitFilesKey, InFlightCommitFileDiff,
@@ -108,7 +111,7 @@ use std::{
 use tokio::{
     net::TcpListener,
     sync::{broadcast, oneshot, Mutex, RwLock},
-    task::{spawn_blocking, JoinHandle},
+    task::{spawn_blocking, JoinHandle, JoinSet},
 };
 use tower_http::{
     cors::{AllowOrigin, CorsLayer},
@@ -152,6 +155,8 @@ pub const DEFAULT_PORT: u16 = 0;
 pub const PERSISTENCE_SCHEMA_VERSION: u32 = 1;
 const SERVER_ID_FILE: &str = "server.json";
 const REPOSITORY_CATALOG_FILE: &str = "repositories.json";
+/// Hints can contain many targets; only this bounded prefix is warmed.
+const PREFETCH_BATCH_SIZE: usize = 1;
 
 /// Prefix for the machine-readable line emitted by the standalone binary
 /// after its listener binds.
@@ -691,6 +696,8 @@ struct WebSocketQuery {
 }
 
 async fn handle_socket(mut socket: WebSocket, state: Arc<ServerState>, session: AuthSession) {
+    let mut queue = rpc_queue::RequestQueue::default();
+    let mut tasks = JoinSet::new();
     let mut events = watching::can_read(&session).then(|| state.repository_events.subscribe());
     let welcome = WelcomeMessage::for_environment(
         state.info.environment_id.clone(),
@@ -702,7 +709,52 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<ServerState>, session: 
     }
 
     loop {
+        while let Some(request) = queue.next() {
+            let state = state.clone();
+            let session = session.clone();
+            tasks.spawn(async move {
+                let id = request.id.clone();
+                let method = request.method.clone();
+                let started = std::time::Instant::now();
+                let response = std::panic::AssertUnwindSafe(dispatch_authorized(
+                    request, &state, &session,
+                ))
+                .catch_unwind()
+                .await
+                .unwrap_or_else(|_| internal_error(id.clone(), "RPC worker failed"));
+                let text = serde_json::to_string(&response);
+                if matches!(method.as_str(),
+                    "git.commit_file_diff" | "git.working_tree_file_diff" | "git.hunk_preview"
+                    | "git.apply_hunks" | "git.stage" | "git.unstage" | "repositories.refresh"
+                ) {
+                    if let Ok(text) = &text {
+                        tracing::info!(
+                            target: "gitgui::rpc",
+                            method,
+                            dispatch_ms = started.elapsed().as_secs_f64() * 1000.0,
+                            response_bytes = text.len().min(u32::MAX as usize),
+                            "RPC dispatch completed"
+                        );
+                    }
+                }
+                (id, text)
+            });
+        }
         let frame = tokio::select! {
+            result = tasks.join_next(), if !tasks.is_empty() => {
+                if let Some(Ok((id, text))) = result {
+                    if queue.finish(&id) {
+                        match text {
+                            Ok(text) => { if send_text(&mut socket, text).await.is_err() { break; } }
+                            Err(error) => {
+                                warn!(error = %error, "failed to serialize WebSocket response");
+                                break;
+                            }
+                        }
+                    }
+                }
+                continue;
+            }
             frame = socket.next() => match frame { Some(frame) => frame, None => break },
             event = async {
                 match events.as_mut() {
@@ -721,7 +773,7 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<ServerState>, session: 
         };
         match frame {
             Ok(Message::Text(text)) => {
-                if process_text_frame(&mut socket, &state, &session, text.as_str())
+                if process_text_frame(&mut socket, &mut queue, &session, text.as_str())
                     .await
                     .is_err()
                 {
@@ -729,23 +781,17 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<ServerState>, session: 
                 }
             }
             Ok(Message::Binary(bytes)) => {
-                let text = String::from_utf8(bytes.to_vec());
-                let request_id = text
-                    .as_ref()
-                    .ok()
-                    .and_then(|text| request_id_from_text(text));
-                let result = text
-                    .map_err(|_| {
-                        ProtocolError::new(
+                let result = match std::str::from_utf8(&bytes) {
+                    Ok(text) => process_text_frame(&mut socket, &mut queue, &session, text).await,
+                    Err(_) => {
+                        let error = ProtocolErrorMessage::new(ProtocolError::new(
                             error_codes::INVALID_REQUEST,
                             "binary frames must contain UTF-8 JSON",
-                        )
-                    })
-                    .and_then(|text| parse_request(&text));
-                if process_request_result(&mut socket, &state, &session, result, request_id)
-                    .await
-                    .is_err()
-                {
+                        ));
+                        send_json(&mut socket, &error).await
+                    }
+                };
+                if result.is_err() {
                     break;
                 }
             }
@@ -765,16 +811,29 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<ServerState>, session: 
             }
         }
     }
+    // Drop queued requests, but let started dispatches finish with their locks
+    // intact. Aborting a spawn_blocking await cannot stop the Git worker.
+    tasks.detach_all();
 }
 
 async fn process_text_frame(
     socket: &mut WebSocket,
-    state: &ServerState,
+    queue: &mut rpc_queue::RequestQueue,
     session: &AuthSession,
     text: &str,
 ) -> Result<(), ()> {
+    if let Ok(gitgui_protocol::CancelRequest::Cancel { id }) = serde_json::from_str(text) {
+        if queue.cancel(&id) {
+            let response = ResponseEnvelope::error(
+                id,
+                ProtocolError::new(error_codes::REQUEST_CANCELLED, "The read request was cancelled"),
+            );
+            return send_json(socket, &response).await;
+        }
+        return Ok(());
+    }
     let result = parse_request(text);
-    process_request_result(socket, state, session, result, request_id_from_text(text)).await
+    process_request_result(socket, queue, session, result, request_id_from_text(text)).await
 }
 
 fn parse_request(text: &str) -> Result<RequestEnvelope, ProtocolError> {
@@ -803,40 +862,28 @@ fn parse_request(text: &str) -> Result<RequestEnvelope, ProtocolError> {
 
 async fn process_request_result(
     socket: &mut WebSocket,
-    state: &ServerState,
+    queue: &mut rpc_queue::RequestQueue,
     session: &AuthSession,
     result: Result<RequestEnvelope, ProtocolError>,
     request_id: Option<String>,
 ) -> Result<(), ()> {
     match result {
         Ok(request) => {
-            let method = request.method.clone();
-            let measure = matches!(
-                method.as_str(),
-                "git.commit_file_diff"
-                    | "git.working_tree_file_diff"
-                    | "git.hunk_preview"
-                    | "git.apply_hunks"
-                    | "git.stage"
-                    | "git.unstage"
-                    | "repositories.refresh"
-            );
-            let started = std::time::Instant::now();
-            let response = dispatch_authorized(request, state, session).await;
-            if measure {
-                let text = serde_json::to_string(&response).map_err(|error| {
-                    warn!(error = %error, "failed to serialize WebSocket response");
-                })?;
-                tracing::info!(
-                    target: "gitgui::rpc",
-                    method,
-                    dispatch_ms = started.elapsed().as_secs_f64() * 1000.0,
-                    response_bytes = text.len().min(u32::MAX as usize),
-                    "RPC dispatch completed"
-                );
-                send_text(socket, text).await
-            } else {
-                send_json(socket, &response).await
+            let id = request.id.clone();
+            // Check scope before admission: saturation or cancellation must not
+            // turn a forbidden operation into a different outcome.
+            if let Some(error) = authorization_error(&request.method, session) {
+                return send_json(socket, &ResponseEnvelope::error(id, error)).await;
+            }
+            match queue.push(request) {
+                Ok(()) => Ok(()),
+                Err(code) => {
+                    let response = ResponseEnvelope::error(
+                        id,
+                        ProtocolError::new(code, "RPC admission limit or duplicate request ID"),
+                    );
+                    send_json(socket, &response).await
+                }
             }
         }
         Err(error) => match request_id {
@@ -863,20 +910,24 @@ async fn dispatch_authorized(
     state: &ServerState,
     session: &AuthSession,
 ) -> ResponseEnvelope {
-    let required_scope = required_scope_for_method(&request.method);
-    if let Some(required_scope) = required_scope {
-        if !session.scopes.iter().any(|scope| scope == required_scope) {
-            return ResponseEnvelope::error(
-                request.id,
-                ProtocolError::with_details(
-                    error_codes::FORBIDDEN,
-                    "The current session does not permit this GitGui operation",
-                    json!({ "requiredScope": required_scope }),
-                ),
-            );
-        }
+    if let Some(error) = authorization_error(&request.method, session) {
+        return ResponseEnvelope::error(request.id, error);
     }
     dispatch(request, state).await
+}
+
+fn authorization_error(method: &str, session: &AuthSession) -> Option<ProtocolError> {
+    let required_scope = required_scope_for_method(method);
+    if let Some(required_scope) = required_scope {
+        if !session.scopes.iter().any(|scope| scope == required_scope) {
+            return Some(ProtocolError::with_details(
+                error_codes::FORBIDDEN,
+                "The current session does not permit this GitGui operation",
+                json!({ "requiredScope": required_scope }),
+            ));
+        }
+    }
+    None
 }
 
 fn required_scope_for_method(method: &str) -> Option<&'static str> {
@@ -2218,7 +2269,13 @@ async fn git_prefetch_commit_files(
         return repository_not_configured(request_id, &params.repository_id);
     };
     let cache = state.cache.clone();
-    let hashes = params.commit_hashes;
+    // Prefetch is a hint. One target bounds non-cancellable blocking work and
+    // avoids warming more full diffs than the user is likely to open.
+    let hashes = params
+        .commit_hashes
+        .into_iter()
+        .take(PREFETCH_BATCH_SIZE)
+        .collect::<Vec<_>>();
     let count = hashes.len() as u32;
     match spawn_blocking(move || {
         for hash in &hashes {
@@ -2279,7 +2336,11 @@ async fn git_prefetch_commit_diffs(
         return repository_not_configured(request_id, &params.repository_id);
     };
     let cache = state.cache.clone();
-    let targets = params.targets;
+    let targets = params
+        .targets
+        .into_iter()
+        .take(PREFETCH_BATCH_SIZE)
+        .collect::<Vec<_>>();
     match spawn_blocking(move || {
         let mut count = 0u32;
         for target in &targets {
@@ -3279,6 +3340,7 @@ fn default_server_data_dir() -> Option<PathBuf> {
 
 fn implemented_capabilities() -> Vec<String> {
     [
+        gitgui_protocol::CAPABILITY_RPC_CANCEL,
         CAPABILITY_SERVER_INFO,
         CAPABILITY_SERVER_STATUS,
         CAPABILITY_REPOSITORIES_LIST,

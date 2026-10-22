@@ -2,6 +2,19 @@
 
 **Scope:** Code investigation and bounded runtime diagnostics for slow file-view loads and file/hunk staging refreshes. The code paths below are confirmed; the diagnostics provide measurements but do not benchmark a repository on their own.
 
+**Issue #4 implementation update:** The serial-dispatch and uncancelled-selection
+findings below describe the original investigation snapshot. The socket now
+dispatches independent reads concurrently with bounded admission, preserves
+per-repository operation order and existing global mutexes, and handles
+selection cancellation through the shared session. Prefetch validates full
+hints but warms at most one target in its own lane. Queued cancelled reads and
+disconnected requests are dropped; started blocking workers finish with their
+slots/locks intact. See [request lifetime](connection-runtime.md#concurrent-request-lifetime)
+for the protocol, limits, failure tests, and remaining subprocess-timeout limits.
+Updates from the related diagnostics, prefetch, refresh, and invalidation work
+are retained below. The scheduling changes do not establish measured latency
+improvements on their own.
+
 ## Summary
 
 The clearest systemic bottleneck is that the Rust WebSocket handler awaits one RPC to completion before reading the next request on that connection. The client can send multiple requests, but a slow request—including an eager prefetch or an obsolete file selection—blocks every request behind it.

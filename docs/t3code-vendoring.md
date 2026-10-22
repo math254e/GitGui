@@ -28,6 +28,24 @@ The checks themselves have isolated fixture tests in
 
 ## What is vendored
 
+Issue #4 extends the adapted `rpc/session.ts` request lifetime: interruption and
+timeout notify capable Rust servers using the generated `CancelRequest`, pending
+registration/cleanup is protected from interruption, and responses remain
+correlated by ID. This translates T3 Code's Effect RPC interruption semantics
+to GitGui's JSON envelope; it adds no connection or retry owner. The Svelte
+Promise bridge propagates `AbortSignal` by interrupting the caller effect.
+The integration with main preserves the existing RPC diagnostics and also
+propagates cancellation for commit-to-working-directory diff requests.
+
+The current local T3 checkout was inspected at
+`70cd258d8aac43ea57494527b00bf36de3efa6c0`, specifically its connection-runtime
+documentation, `packages/client-runtime/src/rpc/session.ts`, and
+`apps/server/src/ws.ts` (`RpcServer.toHttpEffectWebsocket`). The pinned vendored
+snapshot above remains unchanged. Rust uses bounded dispatch and preserves
+started blocking workers rather than adopting Effect server fibers, because
+aborting an async await cannot stop a synchronous Git process or safely release
+its repository lock. These server scheduling rules are GitGui-owned.
+
 | Upstream file | GitGui file | Mode |
 | --- | --- | --- |
 | `packages/client-runtime/src/connection/wakeups.ts` | `packages/client-runtime/src/connection/wakeups.ts` | verbatim |

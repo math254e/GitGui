@@ -5,7 +5,7 @@
 //! does not need to duplicate wire definitions by hand.
 
 use gitgui_protocol::{
-    AdvertisedEndpoint, AuthSession, ChangedFile, CommitFile, CommitFileDiff, CommitFileDiffParams,
+    AdvertisedEndpoint, AuthSession, CancelRequest, ChangedFile, CommitFile, CommitFileDiff, CommitFileDiffParams,
     CommitFilesParams, CommitFilesResult, CommitGraph, CommitInfo, CommitRef, CommitRefType,
     CommitWorkingTreeFileDiffParams, CommitWorkingTreeFilesParams, EnvironmentAuthPolicy,
     EnvironmentDescriptor, FileDiffResult, GitAmendInfo, GitAmendParams, GitApplyHunksParams,
@@ -50,6 +50,7 @@ fn main() -> io::Result<()> {
     let config = Config::default().with_large_int("number");
     let declarations = [
         <RequestEnvelope as TS>::decl(&config),
+        <CancelRequest as TS>::decl(&config),
         <ProtocolError as TS>::decl(&config),
         <ResponseSuccessEnvelope as TS>::decl(&config),
         <ResponseErrorEnvelope as TS>::decl(&config),
@@ -147,6 +148,10 @@ fn main() -> io::Result<()> {
     ];
 
     let mut output = String::from(HEADER);
+    output.push_str(&format!(
+        "export const CAPABILITY_RPC_CANCEL = {:?};\n\n",
+        gitgui_protocol::CAPABILITY_RPC_CANCEL
+    ));
     output.push_str("/// Every method the WebSocket RPC surface accepts.\n");
     output.push_str("export const WS_METHOD_NAMES = [\n");
     for method in gitgui_protocol::WS_METHOD_NAMES {

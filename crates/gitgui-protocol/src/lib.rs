@@ -14,6 +14,23 @@ use ts_rs::TS;
 /// Version of the public JSON protocol.
 pub const PROTOCOL_VERSION: u32 = 2;
 
+/// Optional support for session-scoped cancellation of read requests.
+pub const CAPABILITY_RPC_CANCEL: &str = "rpc.cancel";
+
+/// Best-effort read cancellation notification, with no response of its own.
+/// Servers answer the original request with `request_cancelled`. Started
+/// blocking work may finish; mutations cannot be cancelled.
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(tag = "type")]
+pub enum CancelRequest {
+    /// Cancel a read with this request ID on the current socket only.
+    #[serde(rename = "cancel")]
+    Cancel {
+        /// Identifier of the original request.
+        id: String,
+    },
+}
+
 /// Read repository catalogs, snapshots, status, history, and diffs.
 pub const SCOPE_REPOSITORY_READ: &str = "repository:read";
 /// Run Git operations that change repository state.
@@ -239,6 +256,12 @@ pub mod error_codes {
     pub const FORBIDDEN: &str = "forbidden";
     /// The incoming WebSocket message was not a valid request envelope.
     pub const INVALID_REQUEST: &str = "invalid_request";
+    /// A read was cancelled by its owning session.
+    pub const REQUEST_CANCELLED: &str = "request_cancelled";
+    /// The session has reached its bounded request admission limit.
+    pub const SERVER_BUSY: &str = "server_busy";
+    /// An identifier is already pending or running on this session.
+    pub const DUPLICATE_REQUEST_ID: &str = "duplicate_request_id";
     /// The request method is not in the canonical method registry.
     pub const METHOD_NOT_FOUND: &str = "method_not_found";
     /// The method is declared but not implemented by this server version.
@@ -1193,7 +1216,7 @@ pub struct PrefetchCommitFilesParams {
 pub struct PrefetchCommitFilesResult {
     /// Whether the server accepted the hint for processing.
     pub accepted: bool,
-    /// Number of commit hashes accepted by the server.
+    /// Number of commit hashes processed; may be less than the supplied hint.
     pub count: u32,
 }
 
@@ -1227,7 +1250,7 @@ pub struct PrefetchCommitDiffsParams {
 pub struct PrefetchCommitDiffsResult {
     /// Whether the server accepted the hint for processing.
     pub accepted: bool,
-    /// Number of targets accepted by the server.
+    /// Number of targets processed; may be less than the supplied hint.
     pub count: u32,
 }
 

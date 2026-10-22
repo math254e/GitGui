@@ -18,7 +18,10 @@
  *   socket but never greets must not hang the connection.
  * - Every request removes its pending entry on every exit, including a
  *   timeout, an interruption, and a failed write, and a closing session
- *   refuses new requests.
+ *   refuses new requests. Registration and cleanup are uninterruptible.
+ * - Abandoned requests send a capability-gated cancellation notification,
+ *   translating Effect RPC interruption to the Rust envelope. The server
+ *   enforces read-only cancellation.
  * - A blocked session stays blocked. A later socket close does not turn a
  *   deliberate rejection into a transient failure.
  * - The event stream is lossless and ordered, and the server's monotonic event
@@ -26,6 +29,7 @@
  *   leaving the client with a hole.
  */
 import type { OrderedEventEnvelope, ServerInfo, WelcomeMessage } from "@gitgui/contracts";
+import { CAPABILITY_RPC_CANCEL, type CancelRequest } from "@gitgui/contracts";
 import { PROTOCOL_VERSION } from "@gitgui/contracts/environment";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
@@ -201,6 +205,7 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
       PubSub.shutdown(events), PubSub.shutdown(gaps),
     ], { discard: true }));
     let requestCounter = 0;
+    let supportsCancellation = false;
 
     /**
      * Ends the session once, with the first reason that arrives.
@@ -279,6 +284,7 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
         const type = message["type"];
         if (type === "welcome") {
           const payload = message as unknown as WelcomeMessage;
+          supportsCancellation = payload.capabilities.includes(CAPABILITY_RPC_CANCEL);
           if (payload.environment_id !== connection.environmentId) {
             const blocked = new ConnectionBlockedError({
               reason: "configuration",
@@ -401,7 +407,7 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
       method: K,
       input: GitGuiRpcMethods[K]["input"],
     ): Effect.Effect<GitGuiRpcMethods[K]["output"], GitGuiRpcError> =>
-      Effect.gen(function* () {
+      Effect.uninterruptibleMask((restore) => Effect.gen(function* () {
         if (yield* Ref.get(closing)) {
           return yield* new GitGuiRpcError({
             code: "session_closed",
@@ -419,9 +425,10 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
           return next;
         });
         // The entry is removed on every exit: a response, a rejection, a
-        // timeout, an interruption, or a failed write.
+        // timeout, an interruption, or a failed write. Mask registration so
+        // interruption cannot land before this cleanup is installed.
         const result = yield* Effect.ensuring(
-          Effect.gen(function* () {
+          restore(Effect.gen(function* () {
             const writeStartedAt = monotonicNow();
             const entryBeforeWrite = (yield* Ref.get(pending)).get(id);
             if (entryBeforeWrite) entryBeforeWrite.writeStartedAt = writeStartedAt;
@@ -456,15 +463,21 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
                 }),
               ),
             );
-          }),
-          Ref.update(pending, (current) => {
-            const next = new Map(current);
-            next.delete(id);
-            return next;
+          })),
+          Effect.gen(function* () {
+            const abandoned = yield* Ref.modify(pending, (current) => {
+              const next = new Map(current);
+              next.delete(id);
+              return [current.has(id), next] as const;
+            });
+            if (abandoned && supportsCancellation && !(yield* Ref.get(closing))) {
+              const notification: CancelRequest = { type: "cancel", id };
+              yield* writer.write(JSON.stringify(notification)).pipe(Effect.ignore);
+            }
           }),
         );
         return result as GitGuiRpcMethods[K]["output"];
-      });
+      }));
 
     const client: GitGuiRpcProtocolClient = {
       call,

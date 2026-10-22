@@ -5,6 +5,8 @@
 /** Any JSON value accepted by the GitGui wire protocol. */
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 
+export const CAPABILITY_RPC_CANCEL = "rpc.cancel";
+
 /// Every method the WebSocket RPC surface accepts.
 export const WS_METHOD_NAMES = [
   "server.get_info",
@@ -56,6 +58,12 @@ method: string,
  * Method-specific parameters. An omitted `params` field is treated as `{}`.
  */
 params: JsonValue, };
+
+export type CancelRequest = { "type": "cancel",
+/**
+ * Identifier of the original request.
+ */
+id: string, };
 
 export type ProtocolError = {
 /**
@@ -700,7 +708,7 @@ export type PrefetchCommitFilesResult = {
  */
 accepted: boolean,
 /**
- * Number of commit hashes accepted by the server.
+ * Number of commit hashes processed; may be less than the supplied hint.
  */
 count: number, };
 
@@ -734,7 +742,7 @@ export type PrefetchCommitDiffsResult = {
  */
 accepted: boolean,
 /**
- * Number of targets accepted by the server.
+ * Number of targets processed; may be less than the supplied hint.
  */
 count: number, };
 

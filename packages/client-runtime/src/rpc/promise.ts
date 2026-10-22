@@ -128,8 +128,26 @@ export class GitGuiClient {
   private call<K extends GitGuiRpcMethod>(
     method: K,
     input: GitGuiRpcMethods[K]["input"],
+    signal?: AbortSignal,
   ): Promise<GitGuiRpcMethods[K]["output"]> {
-    return this.run(this.client.call(method, input)).catch((error) => {
+    // Keep interruption inside the Effect call, so its pending-entry finalizer
+    // runs and informs the server. A Promise.race would leave that call alive.
+    if (signal?.aborted) {
+      return Promise.reject(new GitGuiClientError("The read request was cancelled.", { code: "request_cancelled" }));
+    }
+    const call = this.client.call(method, input);
+    const result = signal === undefined ? call : Effect.raceFirst(
+      call,
+      Effect.callback<never, GitGuiRpcError>((resume) => {
+        const abort = () => resume(Effect.fail(new GitGuiRpcError({
+          code: "request_cancelled", message: "The read request was cancelled.",
+        })));
+        if (signal.aborted) { abort(); return; }
+        signal.addEventListener("abort", abort, { once: true });
+        return Effect.sync(() => signal.removeEventListener("abort", abort));
+      }),
+    );
+    return this.run(result).catch((error) => {
       throw toClientError(error);
     });
   }
@@ -227,25 +245,25 @@ export class GitGuiClient {
     return this.call("git.commit_working_tree_files", params);
   }
 
-  getCommitWorkingTreeFileDiff(params: CommitWorkingTreeFileDiffParams) {
+  getCommitWorkingTreeFileDiff(params: CommitWorkingTreeFileDiffParams, signal?: AbortSignal) {
     return this.call("git.commit_working_tree_file_diff", {
       ...params,
       repositoryId: assertRepositoryId(params.repositoryId),
-    });
+    }, signal);
   }
 
-  getCommitFileDiff(params: CommitFileDiffParams) {
+  getCommitFileDiff(params: CommitFileDiffParams, signal?: AbortSignal) {
     return this.call("git.commit_file_diff", {
       ...params,
       repositoryId: assertRepositoryId(params.repositoryId),
-    });
+    }, signal);
   }
 
-  getWorkingTreeFileDiff(params: WorkingTreeFileDiffParams): Promise<FileDiffResult> {
+  getWorkingTreeFileDiff(params: WorkingTreeFileDiffParams, signal?: AbortSignal): Promise<FileDiffResult> {
     return this.call("git.working_tree_file_diff", {
       ...params,
       repositoryId: assertRepositoryId(params.repositoryId),
-    });
+    }, signal);
   }
 
   prefetchCommitFiles(repositoryId: string, commitHashes: string[]) {
@@ -262,11 +280,11 @@ export class GitGuiClient {
     });
   }
 
-  getHunkPreview(params: GitHunkPreviewParams) {
+  getHunkPreview(params: GitHunkPreviewParams, signal?: AbortSignal) {
     return this.call("git.hunk_preview", {
       ...params,
       repositoryId: assertRepositoryId(params.repositoryId),
-    });
+    }, signal);
   }
 
   applyHunks(params: GitApplyHunksParams) {
