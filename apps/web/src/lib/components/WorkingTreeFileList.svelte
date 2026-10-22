@@ -1,7 +1,8 @@
 <script lang="ts">
   import { FileTree, type GitStatus, type GitStatusEntry } from "@pierre/trees";
-  import { Minus, Plus, Trash2 } from "@lucide/svelte";
-  import { onMount } from "svelte";
+  import { Minus, Plus } from "@lucide/svelte";
+  import { onDestroy, onMount } from "svelte";
+  import { dismissContextMenu, showContextMenu, type ContextMenuItem } from "$lib/contextMenu";
   import type { ChangedFile } from "@gitgui/contracts";
   import type { CommitFile } from "$lib/types/repository";
 
@@ -14,7 +15,7 @@
     onSelectionChange: (files: ChangedFile[]) => void;
     onAction: (file: ChangedFile) => void;
     onDiscard?: (file: ChangedFile) => void;
-    onDiscardAll?: () => void;
+    onDiscardSelected?: (files: ChangedFile[]) => void;
     disabled?: boolean;
   };
 
@@ -32,7 +33,7 @@
     onSelectionChange,
     onAction,
     onDiscard,
-    onDiscardAll,
+    onDiscardSelected,
     disabled = false,
   }: Props = $props();
 
@@ -47,7 +48,7 @@
   let scrollMutationObserver: MutationObserver | null = null;
   let scrollbarGutter = $state(15);
   let treeHasOverflow = $state(false);
-  let contextMenu = $state<{ x: number; y: number } | null>(null);
+  const contextMenuOwner = {};
 
   const fileIconTokens = [
     "astro",
@@ -243,6 +244,8 @@
     };
   });
 
+  onDestroy(() => dismissContextMenu(contextMenuOwner));
+
   $effect(() => {
     const currentTree = tree;
     const nextFiles = treeFiles;
@@ -279,34 +282,76 @@
   }
 
   function handleContextMenu(event: MouseEvent) {
-    if (!onDiscardAll || !event.composedPath().some(
-      (target) => target instanceof Element && target.getAttribute("data-type") === "item",
-    )) {
+    const row = getTreeRow(event);
+    if (disabled || (!onDiscard && !onDiscardSelected) || !row) {
       return;
     }
 
     event.preventDefault();
-    contextMenu = {
-      x: Math.min(event.clientX, window.innerWidth - 196),
-      y: Math.min(event.clientY, window.innerHeight - 48),
-    };
+    openFileContextMenu(row, { x: event.clientX, y: event.clientY });
   }
 
-  function handleWindowClick(event: MouseEvent) {
-    if (!(event.target instanceof Element) || !event.target.closest("[data-working-tree-context-menu]")) {
-      contextMenu = null;
+  function handleTreeKeydown(event: KeyboardEvent) {
+    if (event.key !== "ContextMenu" && event.key !== "Apps" && !(event.shiftKey && event.key === "F10")) {
+      return;
     }
-  }
 
-  function handleWindowKeydown(event: KeyboardEvent) {
-    if (event.key === "Escape") {
-      contextMenu = null;
+    const row = getTreeRow(event);
+    if (disabled || (!onDiscard && !onDiscardSelected) || !row) {
+      return;
     }
+
+    event.preventDefault();
+    const rect = row.getBoundingClientRect();
+    openFileContextMenu(row, { x: rect.left, y: rect.bottom });
   }
 
-  function discardAllFromContextMenu() {
-    contextMenu = null;
-    onDiscardAll?.();
+  function openFileContextMenu(row: HTMLElement, position: { x: number; y: number }) {
+    const treePath = row.dataset.itemPath ?? "";
+    const file = fileByTreePath.get(treePath);
+    const selectedFiles = (tree?.getSelectedPaths() ?? [])
+      .map((path) => fileByTreePath.get(path))
+      .filter((file): file is ChangedFile => Boolean(file));
+    let items: ContextMenuItem<"discard-file" | "discard-selected">[];
+    if (selectedFiles.length > 1) {
+      if (!onDiscardSelected) {
+        return;
+      }
+      items = [{ id: "discard-selected", label: "Discard selected", destructive: true, icon: "trash" }];
+    } else {
+      if (!onDiscard || !file) {
+        return;
+      }
+      items = [{ id: "discard-file", label: "Discard changes", destructive: true, icon: "trash" }];
+    }
+
+    const menu = showContextMenu(items, position, contextMenuOwner);
+    // Match the tree's hover color by path so refreshes and virtualized row
+    // replacements retain the menu target without changing the selection.
+    const highlight = document.createElement("style");
+    highlight.textContent = `[data-type="item"][data-item-path="${CSS.escape(treePath)}"] {
+      background-color: var(--trees-bg-muted);
+      --truncate-marker-background-overlay-color: var(--trees-bg-muted);
+    }`;
+    host?.shadowRoot?.appendChild(highlight);
+
+    void menu.then((selected) => {
+      highlight.remove();
+      if (disabled) {
+        return;
+      }
+      if (selected === "discard-file" && file) {
+        onDiscard?.(file);
+      } else if (selected === "discard-selected" && selectedFiles.length > 0) {
+        onDiscardSelected?.(selectedFiles);
+      }
+    });
+  }
+
+  function getTreeRow(event: Event) {
+    return event.composedPath().find(
+      (target): target is HTMLElement => target instanceof HTMLElement && target.getAttribute("data-type") === "item",
+    ) ?? null;
   }
 
   function syncScrollMetrics() {
@@ -418,19 +463,11 @@
   }
 </script>
 
-<svelte:window onclick={handleWindowClick} onkeydown={handleWindowKeydown} />
-
-<div class="relative h-full min-h-0 w-full overflow-hidden" role="group" aria-label={`${actionLabel} files`} oncontextmenu={handleContextMenu}>
-  <div bind:this={host} class="h-full min-h-0 w-full overflow-hidden" style={`--gitgui-tree-row-margin-right: ${(onDiscard ? 41 : 13) + (treeHasOverflow ? scrollbarGutter : 0)}px; --trees-bg-override: var(--app-theme-sidebar); --trees-fg-override: var(--app-theme-sidebar-foreground); --trees-fg-muted-override: var(--app-theme-sidebar-muted-foreground); --trees-border-color-override: var(--app-theme-sidebar-border); --trees-selected-bg-override: var(--app-theme-sidebar-row-selected); --trees-selected-fg-override: var(--app-theme-accent-surface-foreground); --trees-accent-override: var(--app-theme-accent); --trees-focus-ring-color-override: var(--app-theme-focus); --trees-status-added-override: #2f9e6f; --trees-status-deleted-override: #e5484d; --trees-status-modified-override: #d09a2e; --trees-status-renamed-override: #8b5cf6; --trees-status-untracked-override: #2f9e6f; --trees-status-ignored-override: var(--app-theme-text-subtle); --trees-border-radius-override: 4px; --trees-font-family-override: inherit; --trees-font-size-override: 13px; --trees-padding-inline-override: 3px; --trees-item-padding-x-override: 3px; --trees-item-row-gap-override: 6px; --trees-level-gap-override: 0px; --trees-icon-width-override: 18px; --trees-item-height: 28px;`}></div>
+<div class="relative h-full min-h-0 w-full overflow-hidden" role="group" aria-label={`${actionLabel} files`} oncontextmenu={handleContextMenu} onkeydown={handleTreeKeydown}>
+  <div bind:this={host} class="h-full min-h-0 w-full overflow-hidden" style={`--gitgui-tree-row-margin-right: ${13 + (treeHasOverflow ? scrollbarGutter : 0)}px; --trees-bg-override: var(--app-theme-sidebar); --trees-fg-override: var(--app-theme-sidebar-foreground); --trees-fg-muted-override: var(--app-theme-sidebar-muted-foreground); --trees-border-color-override: var(--app-theme-sidebar-border); --trees-selected-bg-override: var(--app-theme-sidebar-row-selected); --trees-selected-fg-override: var(--app-theme-accent-surface-foreground); --trees-accent-override: var(--app-theme-accent); --trees-focus-ring-color-override: var(--app-theme-focus); --trees-status-added-override: #2f9e6f; --trees-status-deleted-override: #e5484d; --trees-status-modified-override: #d09a2e; --trees-status-renamed-override: #8b5cf6; --trees-status-untracked-override: #2f9e6f; --trees-status-ignored-override: var(--app-theme-text-subtle); --trees-border-radius-override: 4px; --trees-font-family-override: inherit; --trees-font-size-override: 13px; --trees-padding-inline-override: 3px; --trees-item-padding-x-override: 3px; --trees-item-row-gap-override: 6px; --trees-level-gap-override: 0px; --trees-icon-width-override: 18px; --trees-item-height: 28px;`}></div>
 
   <div class="pointer-events-none absolute inset-0 overflow-hidden">
     {#each treeFiles as entry, index (entry.path)}
-      {#if onDiscard}
-        <button aria-label={`Discard ${entry.file.path}`} title={`Discard ${entry.file.path}`} type="button"
-          class="pointer-events-auto absolute inline-flex h-7 w-7 items-center justify-center rounded bg-[var(--app-theme-sidebar)] text-[var(--app-theme-text-muted)] hover:text-[var(--app-theme-error-foreground)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus)] disabled:opacity-40"
-          disabled={disabled} style={`top: ${index * 28 - scrollTop}px; right: ${28 + (treeHasOverflow ? scrollbarGutter : 0)}px`}
-          onclick={() => onDiscard?.(entry.file)}><Trash2 aria-hidden="true" size={14} /></button>
-      {/if}
       <button
         aria-label={`${actionLabel} ${entry.file.path}`}
         class="pointer-events-auto absolute inline-flex h-7 w-7 items-center justify-center rounded bg-[var(--app-theme-sidebar)] text-[var(--app-theme-text-muted)] transition-colors hover:bg-[var(--app-theme-sidebar-row-hover)] hover:text-[var(--app-theme-accent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus)] disabled:cursor-not-allowed disabled:opacity-40"
@@ -449,23 +486,4 @@
     {/each}
   </div>
 
-  {#if contextMenu}
-    <div
-      class="fixed z-[600] min-w-48 border border-[var(--app-theme-border)] bg-[var(--app-theme-surface-raised)] p-1 shadow-lg"
-      data-working-tree-context-menu
-      role="menu"
-      aria-label="Unstaged file actions"
-      style={`left: ${contextMenu.x}px; top: ${contextMenu.y}px;`}
-    >
-      <button
-        class="w-full px-3 py-2 text-left text-sm text-[var(--app-theme-error-foreground)] hover:bg-[var(--app-theme-sidebar-row-hover)] focus-visible:outline-2 focus-visible:outline-[var(--app-theme-focus)] disabled:opacity-45"
-        disabled={disabled || files.length === 0}
-        role="menuitem"
-        type="button"
-        onclick={discardAllFromContextMenu}
-      >
-        Discard all unstaged
-      </button>
-    </div>
-  {/if}
 </div>

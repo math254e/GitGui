@@ -278,7 +278,7 @@
                 onSelectionChange={handleUnstagedSelection}
                 onAction={stageSingleFile}
                 onDiscard={(file) => onDiscardPaths([file.path])}
-                onDiscardAll={() => onDiscardPaths(unstagedFiles.map((file) => file.path))}
+                onDiscardSelected={(files) => onDiscardPaths(files.map((file) => file.path))}
                 disabled={stageControlsDisabled}
               />
             {:else}
@@ -363,8 +363,16 @@
       </div>
 
       <label class="mb-2 flex items-center gap-2 text-xs" title={amendBlockedReason}>
-        <input type="checkbox" checked={draft.amendMode} disabled={commitInputsDisabled || amendLoading || (!draft.amendMode && Boolean(amendBlockedReason))}
-          onchange={(event) => onAmendToggle(event.currentTarget.checked)} />
+        <span class="relative inline-flex size-3.5 shrink-0">
+          <input
+            class="peer size-3.5 appearance-none rounded-none border border-[var(--app-theme-input)] bg-[var(--app-theme-canvas)] checked:border-[var(--app-theme-accent)] checked:bg-[var(--app-theme-accent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus)] disabled:cursor-not-allowed disabled:opacity-50"
+            type="checkbox"
+            checked={draft.amendMode}
+            disabled={commitInputsDisabled || amendLoading || (!draft.amendMode && Boolean(amendBlockedReason))}
+            onchange={(event) => onAmendToggle(event.currentTarget.checked)}
+          />
+          <Check aria-hidden="true" class="pointer-events-none absolute left-px top-px hidden text-[var(--app-theme-accent-foreground)] peer-checked:block peer-disabled:opacity-50" size={12} strokeWidth={2.5} />
+        </span>
         Amend last commit
       </label>
       {#if draft.amendMode}
@@ -377,7 +385,7 @@
 
       <input
         id="commit-summary"
-        class="mb-2 h-9 w-full rounded-md border border-[var(--app-theme-input)] bg-[var(--app-theme-canvas)] px-3 text-sm text-[var(--app-theme-text)] outline-none placeholder:text-[var(--app-theme-placeholder)] focus:border-[var(--app-theme-focus)] focus:ring-2 focus:ring-[var(--app-theme-focus-ring)] disabled:cursor-not-allowed disabled:opacity-50"
+        class="mb-2 block h-9 w-full rounded-[2px] border border-[var(--app-theme-input)] bg-[var(--app-theme-canvas)] px-3 text-sm text-[var(--app-theme-text)] outline-none placeholder:text-[var(--app-theme-placeholder)] focus:border-[var(--app-theme-focus)] focus:ring-2 focus:ring-[var(--app-theme-focus-ring)] disabled:cursor-not-allowed disabled:opacity-50"
         disabled={commitInputsDisabled}
         placeholder="Summary"
         type="text"
@@ -386,7 +394,7 @@
       />
       <textarea
         id="commit-description"
-        class="h-20 w-full resize-none rounded-md border border-[var(--app-theme-input)] bg-[var(--app-theme-canvas)] px-3 py-2 text-sm text-[var(--app-theme-text)] outline-none placeholder:text-[var(--app-theme-placeholder)] focus:border-[var(--app-theme-focus)] focus:ring-2 focus:ring-[var(--app-theme-focus-ring)] disabled:cursor-not-allowed disabled:opacity-50"
+        class="block h-20 w-full resize-none rounded-[2px] border border-[var(--app-theme-input)] bg-[var(--app-theme-canvas)] px-3 py-2 text-sm text-[var(--app-theme-text)] outline-none placeholder:text-[var(--app-theme-placeholder)] focus:border-[var(--app-theme-focus)] focus:ring-2 focus:ring-[var(--app-theme-focus-ring)] disabled:cursor-not-allowed disabled:opacity-50"
         aria-label="Commit description"
         disabled={commitInputsDisabled}
         placeholder="Description (optional)"
@@ -394,7 +402,7 @@
         oninput={(event) => editMessage("description", event.currentTarget.value)}
       ></textarea>
       <button
-        class="mt-3 inline-flex h-10 w-full items-center justify-center gap-2 rounded-md border border-[var(--app-theme-accent)] bg-[var(--app-theme-accent-surface)] px-3 text-sm font-semibold text-[var(--app-theme-accent-surface-foreground)] transition-colors hover:bg-[var(--app-theme-sidebar-row-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus)] disabled:cursor-not-allowed disabled:opacity-45"
+        class="mt-2 flex h-10 w-full items-center justify-center gap-2 rounded-[2px] border border-[var(--app-theme-accent)] bg-[var(--app-theme-accent-surface)] px-3 text-sm font-semibold text-[var(--app-theme-accent-surface-foreground)] transition-colors hover:bg-[var(--app-theme-sidebar-row-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus)] disabled:cursor-not-allowed disabled:opacity-45"
         disabled={commitDisabled}
         type="submit"
       >

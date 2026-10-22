@@ -1,6 +1,7 @@
 <script lang="ts">
   import { Cloud, Monitor } from "@lucide/svelte";
   import { onDestroy, tick, untrack } from "svelte";
+  import { dismissContextMenu, showContextMenu } from "$lib/contextMenu";
   import { GraphRenderIndex, visibleRowRange, captureHistoryAnchor, restoreHistoryAnchor } from "$lib/git-graph/viewport";
   import { drawGitGraphCanvas } from "$lib/git-graph/canvas-renderer";
   import { APP_THEME_VARIABLES, GRAPH_THEME_COLOR_ROLES } from "$lib/theme/types";
@@ -66,7 +67,7 @@
   let resizeState = $state<ResizeState | null>(null);
   let restoredColumns = false;
   let hoveredRowHash = $state<string | null>(null);
-  let contextMenu = $state<{ commit: CommitInfo; x: number; y: number } | null>(null);
+  const contextMenuOwner = {};
   let graphViewport = $state<HTMLDivElement | null>(null);
   let graphCanvas = $state<HTMLCanvasElement | null>(null);
   let graphScrollTop = $state(0);
@@ -105,9 +106,40 @@
   });
 
   onDestroy(() => {
+    dismissContextMenu(contextMenuOwner);
     window.removeEventListener("pointermove", resizeColumn);
     resizeState = null;
   });
+
+  function openCommitContextMenu(commit: CommitInfo, position: { x: number; y: number }) {
+    void showContextMenu(
+      [{ id: "compare", label: "Compare to working tree", icon: "git-branch" }],
+      position,
+      contextMenuOwner,
+    ).then((selected) => {
+      if (selected === "compare") {
+        onCompareCommitToWorkingTree(commit);
+      }
+    });
+  }
+
+  function handleCommitContextMenu(event: MouseEvent, commit: CommitInfo) {
+    event.preventDefault();
+    openCommitContextMenu(commit, { x: event.clientX, y: event.clientY });
+  }
+
+  function handleCommitKeydown(event: KeyboardEvent, commit: CommitInfo) {
+    if (event.key === "ContextMenu" || event.key === "Apps" || (event.shiftKey && event.key === "F10")) {
+      event.preventDefault();
+      const rect = event.currentTarget instanceof HTMLElement ? event.currentTarget.getBoundingClientRect() : null;
+      if (rect) {
+        openCommitContextMenu(commit, { x: rect.left, y: rect.bottom });
+      }
+      return;
+    }
+
+    navigateHistory(event, commit.hash);
+  }
 
   function captureGraphScroll(viewport: HTMLDivElement, initialRepositoryId: string | null) {
     let observedScrollTop = viewport.scrollTop;
@@ -1026,15 +1058,11 @@
                     : "bg-[var(--app-theme-surface)] hover:bg-[var(--app-theme-sidebar-row-hover)]"
                 }`}
                 data-commit-hash={commit.hash}
-                onkeydown={(event) => navigateHistory(event, commit.hash)}
+                onkeydown={(event) => handleCommitKeydown(event, commit)}
                 style={`grid-template-columns: ${gridTemplate}; height: ${rowHeight}px;`}
                 type="button"
                 onclick={() => onSelectCommit(commit)}
-                oncontextmenu={(event) => {
-                  event.preventDefault();
-                  onSelectCommit(commit);
-                  contextMenu = { commit, x: event.clientX, y: event.clientY };
-                }}
+                oncontextmenu={(event) => handleCommitContextMenu(event, commit)}
                 onpointerenter={() => (hoveredRowHash = commit.hash)}
                 onpointerleave={() => (hoveredRowHash = hoveredRowHash === commit.hash ? null : hoveredRowHash)}
               >
@@ -1093,14 +1121,6 @@
           <li aria-hidden="true" style={`height: ${rowRange.after}px;`}></li>
         </ol>
       </div>
-      {#if contextMenu}
-        <div class="fixed z-[500] min-w-56 border border-[var(--app-theme-border)] bg-[var(--app-theme-surface-raised)] p-1 shadow-lg" style={`left: ${contextMenu.x}px; top: ${contextMenu.y}px;`} role="menu" aria-label="Commit actions">
-          <button class="w-full px-3 py-2 text-left text-sm hover:bg-[var(--app-theme-sidebar-row-hover)] focus-visible:outline-2 focus-visible:outline-[var(--app-theme-focus)]" role="menuitem" type="button" onclick={() => { onCompareCommitToWorkingTree(contextMenu!.commit); contextMenu = null; }}>
-            Compare against working directory
-          </button>
-          <button class="w-full px-3 py-1 text-left text-xs text-[var(--app-theme-text-subtle)] hover:bg-[var(--app-theme-sidebar-row-hover)]" type="button" onclick={() => (contextMenu = null)}>Close</button>
-        </div>
-      {/if}
     </div>
   {:else}
     <div class="grid h-full place-items-center p-8 text-center">
