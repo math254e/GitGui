@@ -21,6 +21,11 @@ preconditions while regenerating Git's patch and validating current contents.
 See [implementation and measured before/after work](file-view-work-measurement.md).
 The original investigation below describes the baseline, not the optimized path.
 
+**Follow-up:** Issue #9 now adds bounded core reads, omission metadata, a plain
+text inspection path, and hunk guards. See [Bounded large-file diffs](large-file-diffs.md)
+for the current behavior, local parser measurements, and remaining limits. The
+investigation below describes the original paths before that change.
+
 ## Summary
 
 The clearest systemic bottleneck is that the Rust WebSocket handler awaits one RPC to completion before reading the next request on that connection. The client can send multiple requests, but a slow request—including an eager prefetch or an obsolete file selection—blocks every request behind it.

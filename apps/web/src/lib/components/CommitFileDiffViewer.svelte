@@ -1,5 +1,7 @@
 <script lang="ts">
   import { X } from "@lucide/svelte";
+  import LargeFileNotice from "./LargeFileNotice.svelte";
+  import { fileViewState } from "./file-view-state";
   import { onMount, untrack } from "svelte";
   import type { CodeView, DiffLineAnnotation, FileContents, FileDiffMetadata } from "@pierre/diffs";
   import type { GitHunkPreview, GitApplyHunksParams } from "@gitgui/contracts";
@@ -65,6 +67,7 @@
   const showingDeletedFile = $derived(statusLabel(selectedFile) === "D");
   const displayedFileIsEmpty = $derived(diff !== null &&
     (showingDeletedFile ? diff.originalContent : diff.modifiedContent) === "");
+  const viewState = $derived(fileViewState(diff, loading, error, renderError, renderer !== null));
 
   $effect(() => {
     const requestKey = diffRequestKey;
@@ -157,6 +160,7 @@
     hunkError = "";
     selectedHunks = [];
     error = "";
+    if (renderer) renderError = "";
     loading = true;
 
     try {
@@ -191,7 +195,7 @@
         diff = result.diff;
         // Contents are ready before the Git patch. The continuation shares
         // their status/index snapshot and first full-file read with preview.
-        if (source === "workingTree" || source === "staged") {
+        if ((source === "workingTree" || source === "staged") && !diff.isBinary && !diff.omittedContent) {
           if (result.hunkError) hunkError = result.hunkError;
           else void loadHunkPreview(request, repositoryId, source, file.path, signal, result.hunkContextId);
         }
@@ -229,7 +233,7 @@
     }
 
     const { viewer, library } = currentRenderer;
-    if (!currentDiff || currentDiff.isBinary) {
+    if (!currentDiff || currentDiff.isBinary || currentDiff.omittedContent) {
       renderError = "";
       viewer.setItems([]);
       parsedDiff = null;
@@ -456,7 +460,7 @@
     </button>
   </header>
 
-  {#if (diffSource === "workingTree" || diffSource === "staged") && !loading && diff}
+  {#if (diffSource === "workingTree" || diffSource === "staged") && !loading && diff && !diff.omittedContent}
     {#if hunkError || hunkPreview?.unavailableReason}
       <div class="hunk-controls"><p class="text-xs text-[var(--app-theme-text-muted)]">{hunkError || hunkPreview?.unavailableReason}</p></div>
     {:else if selectedHunks.length && contentViewMode === "diff"}
@@ -473,14 +477,14 @@
     <!-- svelte-ignore a11y_no_noninteractive_tabindex (Keyboard focus enables scrolling and line selection in this code region.) -->
     <div bind:this={viewerContainer} class="diff-content h-full min-h-0 overflow-auto" role="region"
       aria-label={contentViewMode === "diff" ? "File diff" : "File contents"}
-      aria-busy={loading || (diff !== null && !diff.isBinary && !renderer && !renderError)} tabindex="0"></div>
+      aria-busy={viewState === "loading"} tabindex="0"></div>
 
-    {#if loading || (diff && !diff.isBinary && !renderer && !renderError)}
+    {#if viewState === "loading"}
       <div class="viewer-state" role="status">
         <span class="loading-indicator" aria-hidden="true"></span>
         <p class="state-title">Loading file...</p>
       </div>
-    {:else if error || renderError}
+    {:else if viewState === "error"}
       <div class="viewer-state" role="alert">
         <div class="state-message state-error">
           <p class="state-title">Could not load this file</p>
@@ -488,13 +492,17 @@
           <button class="state-action" type="button" onclick={retryDiff}>Retry</button>
         </div>
       </div>
-    {:else if diff?.isBinary}
+    {:else if viewState === "binary" && diff}
       <div class="viewer-state" role="status">
         <div class="state-message">
           <p class="state-title">Binary file</p>
           <p class="state-detail">{diff.message ?? "This file cannot be displayed as text."}</p>
         </div>
       </div>
+    {:else if diff?.omittedContent}
+      {#key diff}
+        <LargeFileNotice omitted={diff.omittedContent} repositoryPath={snapshot.info.root} />
+      {/key}
     {:else if noContentChanges && contentViewMode === "diff" && diffViewMode === "hunks"}
       <div class="viewer-state" role="status">
         <div class="state-message">

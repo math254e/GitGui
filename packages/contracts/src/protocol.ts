@@ -866,7 +866,13 @@ export type CommitRefType = "localBranch" | "remoteBranch" | "tag";
 
 export type CommitFile = { path: string, originalPath: string | null, status: string, };
 
-export type CommitFileDiff = { originalPath: string | null, modifiedPath: string, originalContent: string, modifiedContent: string, isBinary: boolean, message: string | null, };
+export type CommitFileDiff = { originalPath: string | null, modifiedPath: string, originalContent: string, modifiedContent: string, isBinary: boolean, message: string | null,
+/**
+ * Both content strings are empty when this field is present.
+ */
+omittedContent?: OmittedDiffContent, };
+
+export type OmittedDiffContent = { reason: string, maxBytesPerSide: number, maxLinesPerSide: number, maxLineBytes: number, originalPreview: string, modifiedPreview: string, };
 
 export type ProtocolErrorMessage = {
 /**

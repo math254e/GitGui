@@ -86,6 +86,11 @@ repository locks. Read cancellation is an optional `rpc.cancel` capability on
 the same authenticated socket. See [connection runtime](connection-runtime.md#concurrent-request-lifetime)
 for admission limits, cancellation, and disconnect ownership.
 
+File-diff content budgets are enforced by the Rust Git core before caching and
+transfer. The additive `omittedContent` response metadata lets the client explain
+omission and offer bounded plain-text prefixes without invoking the diff parser.
+See [Bounded large-file diffs](large-file-diffs.md) for limits and inspection paths.
+
 ### Svelte client
 
 The client owns presentation and client-local workspace state:

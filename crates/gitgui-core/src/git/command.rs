@@ -1,6 +1,6 @@
 use serde::Serialize;
 use std::{
-    io::Write,
+    io::{Read, Write},
     path::Path,
     process::{Command, Stdio},
     time::Instant,
@@ -28,7 +28,52 @@ impl GitCommand {
 
     /// `diff --no-index` uses exit code 1 for a successfully produced diff.
     pub fn run_diff(args: &[&str], cwd: &Path) -> Result<String, GitError> {
-        Self::run_command(args, Some(cwd), None, true)
+        // A file may grow after the content guard. Bound the generated patch
+        // independently so direct hunk RPCs cannot transfer arbitrary output.
+        const MAX_PATCH_BYTES: usize = 256 * 1024;
+        let started = Instant::now();
+        let failure = |message: &str| GitError {
+            message: message.to_string(),
+            stderr: String::new(),
+            status: None,
+        };
+        let mut child = git_command()
+            .args(args)
+            .current_dir(cwd)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|e| failure(&format!("Failed to execute git: {e}")))?;
+        let mut bytes = Vec::new();
+        let read = child
+            .stdout
+            .take()
+            .expect("piped stdout")
+            .take((MAX_PATCH_BYTES + 1) as u64)
+            .read_to_end(&mut bytes);
+        let limited = bytes.len() > MAX_PATCH_BYTES;
+        if limited || read.is_err() {
+            let _ = child.kill();
+        }
+        let status = child
+            .wait()
+            .map_err(|e| failure(&format!("Failed to wait for git: {e}")))?;
+        tracing::info!(target: "gitgui::git_command", category = "diff",
+            elapsed_ms = started.elapsed().as_secs_f64() * 1000.0,
+            stdout_bytes = bytes.len(), output_limited = limited, exit_code = status.code(),
+            "Git subprocess completed");
+        read.map_err(|e| failure(&format!("Failed to read Git patch: {e}")))?;
+        if limited {
+            return Err(failure(
+                "Patch exceeds the preview limit; use whole-file actions and inspect with Git.",
+            ));
+        }
+        if !status.success() && status.code() != Some(1) {
+            return Err(failure(
+                "Could not generate Git patch; refresh and try again.",
+            ));
+        }
+        String::from_utf8(bytes).map_err(|_| failure("Non-UTF-8 files use whole-file actions"))
     }
 
     pub fn run_owned(args: &[String], cwd: Option<&Path>) -> Result<String, GitError> {

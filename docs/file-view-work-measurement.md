@@ -1,5 +1,11 @@
 # Working-tree file-view work (#5)
 
+**Issue #9 integration:** The large-file success measurements below describe
+the pre-budget implementation. Large files now return omitted content and do
+not support hunk continuations; the ignored historical measurement must be
+adapted before comparing that case. Eligible files retain the shared continuation
+path. See [bounded diff behavior](large-file-diffs.md).
+
 ## Implementation
 
 The viewer requests `git.working_tree_file_diff` with optional `prepareHunks`.

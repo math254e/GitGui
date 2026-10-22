@@ -4,7 +4,7 @@ use super::{
     command::{GitCommand, GitError},
     repository::{
         load_repository_status, load_working_tree_file_diff_with_content, ChangedFile, CommitFile,
-        CommitFileDiff,
+        CommitFileDiff, DIFF_MAX_BYTES, DIFF_MAX_LINES, DIFF_MAX_LINE_BYTES,
     },
 };
 use serde::Serialize;
@@ -153,19 +153,31 @@ fn revision_with_inputs(
             hash.update(b"file");
             hash.update(format!("{:?}", meta.permissions()));
             let mut file = fs::File::open(root.join(path)).map_err(|e| error(e.to_string()))?;
-            #[cfg(test)]
-            super::command::test_metrics::read(meta.len() as usize);
             let mut buffer = [0; 65536];
+            let mut read_bytes = 0;
             loop {
-                let count = file.read(&mut buffer).map_err(|e| error(e.to_string()))?;
+                let available = contents.as_ref().map_or(buffer.len(), |bytes| {
+                    (DIFF_MAX_BYTES + 1 - bytes.len()).min(buffer.len())
+                });
+                let count = file
+                    .read(&mut buffer[..available])
+                    .map_err(|e| error(e.to_string()))?;
                 if count == 0 {
                     break;
                 }
+                read_bytes += count;
                 hash.update(&buffer[..count]);
                 if let Some(bytes) = contents.as_mut() {
                     bytes.extend_from_slice(&buffer[..count]);
+                    if read_bytes > DIFF_MAX_BYTES {
+                        #[cfg(test)]
+                        super::command::test_metrics::read(read_bytes);
+                        return Err(error("Large files use whole-file actions; inspect the bounded text preview or use Git."));
+                    }
                 }
             }
+            #[cfg(test)]
+            super::command::test_metrics::read(read_bytes);
         }
         Ok(_) => return Err(error("Unsupported filesystem entry")),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -237,31 +249,8 @@ impl HunkContext {
 }
 
 pub fn prepare_hunks(root: &str, path: &str, staged: bool) -> Result<ReviewedHunks, GitError> {
-    safe_path(Path::new(root), path)?;
-    let snapshot = load_repository_status(root)?;
-    let root_path = Path::new(&snapshot.info.root);
-    let entry = index_entry(root_path, path)?;
-    let before = revision_with_inputs(
-        root_path,
-        path,
-        snapshot.status.head_oid.as_deref().unwrap_or(""),
-        &entry,
-        None,
-    )?;
-    let file = snapshot
-        .status
-        .changed_files
-        .into_iter()
-        .find(|file| file.path == path)
-        .ok_or_else(|| error("File has no changes; refresh the diff"))?;
-    HunkContext {
-        root: snapshot.info.root,
-        revision_before: before,
-        file,
-        entry,
-        staged,
-    }
-    .complete()
+    let (_, context) = load_working_tree_file_view(root, None, path, staged)?;
+    context?.complete()
 }
 
 /// Prepares one file selection's status/index/content preconditions. Preview
@@ -294,29 +283,57 @@ pub fn load_working_tree_file_view(
     let path = file.path.as_str();
     let mut contents = Vec::new();
     let entry = index_entry(root_path, path)?;
-    let before = revision_with_inputs(
-        root_path,
-        path,
-        snapshot.status.head_oid.as_deref().unwrap_or(""),
-        &entry,
-        if staged { None } else { Some(&mut contents) },
-    );
+    let staged_diff = if staged {
+        Some(load_working_tree_file_diff_with_content(
+            &snapshot.info.root,
+            head.or(snapshot.status.head_oid.as_deref()),
+            &file,
+            staged,
+            None,
+        )?)
+    } else {
+        None
+    };
+    let before = if staged_diff
+        .as_ref()
+        .is_some_and(|diff| diff.omitted_content.is_some())
+    {
+        Err(error(
+            "Large files use whole-file actions; inspect the bounded text preview or use Git.",
+        ))
+    } else {
+        revision_with_inputs(
+            root_path,
+            path,
+            snapshot.status.head_oid.as_deref().unwrap_or(""),
+            &entry,
+            if staged { None } else { Some(&mut contents) },
+        )
+    };
     let bytes = if !staged
-        && before.is_ok()
+        && (before.is_ok() || contents.len() > DIFF_MAX_BYTES)
         && fs::symlink_metadata(root_path.join(path)).is_ok_and(|m| m.is_file())
     {
         Some(contents)
     } else {
         None
     };
-    let diff = load_working_tree_file_diff_with_content(
-        &snapshot.info.root,
-        head.or(snapshot.status.head_oid.as_deref()),
-        &file,
-        staged,
-        bytes,
-    )?;
+    let diff = match staged_diff {
+        Some(diff) => diff,
+        None => load_working_tree_file_diff_with_content(
+            &snapshot.info.root,
+            head.or(snapshot.status.head_oid.as_deref()),
+            &file,
+            staged,
+            bytes,
+        )?,
+    };
     let context = before.and_then(|before| {
+        if diff.omitted_content.is_some() {
+            return Err(error(
+                "Large files use whole-file actions; inspect the bounded text preview or use Git.",
+            ));
+        }
         if staged && head.is_some() && head != snapshot.status.head_oid.as_deref() {
             return Err(error("HEAD changed; refresh and review again"));
         }
@@ -392,6 +409,7 @@ fn build_hunk_review(context: &HunkContext) -> Result<ReviewedHunks, GitError> {
             args.extend(["--", path]);
             patch = GitCommand::run_diff(&args, root_path)?;
         }
+        validate_patch_preview(&patch)?;
         if patch.contains("GIT binary patch")
             || patch.lines().any(|l| l.starts_with("Binary files "))
         {
@@ -441,6 +459,22 @@ fn build_hunk_review(context: &HunkContext) -> Result<ReviewedHunks, GitError> {
         preview,
         context: context.clone(),
     })
+}
+
+fn validate_patch_preview(patch: &str) -> Result<(), GitError> {
+    // Keep a file growing between the content check and revision hash from
+    // sending a small-in-bytes but huge-in-lines patch to the synchronous parser.
+    // Allow both sides plus hunk/file headers and context markers.
+    if patch.lines().count() > DIFF_MAX_LINES * 4 + 32
+        || patch
+            .lines()
+            .any(|line| line.len() > DIFF_MAX_LINE_BYTES + 1)
+    {
+        return Err(error(
+            "Patch exceeds the preview limit; use whole-file actions and inspect with Git.",
+        ));
+    }
+    Ok(())
 }
 
 pub fn apply_hunks(
@@ -806,7 +840,7 @@ mod tests {
     }
 
     #[test]
-    fn file_view_continuations_stage_and_unstage_text_including_large_and_untracked_files() {
+    fn file_view_continuations_stage_and_unstage_eligible_text_and_untracked_files() {
         for untracked in [false, true] {
             let repo = repository();
             let root = repo.path();
@@ -814,7 +848,7 @@ mod tests {
             if !untracked {
                 base_file(root, "file [1].txt");
             }
-            let content = format!("changed\n{}", "long line\n".repeat(150_000));
+            let content = format!("changed\n{}", "long line\n".repeat(250));
             fs::write(root.join("file [1].txt"), &content).unwrap();
             let (diff, context) =
                 load_working_tree_file_view(r, None, "file [1].txt", false).unwrap();
@@ -1289,5 +1323,49 @@ mod tests {
             "R"
         );
         assert!(!root.join("old.txt").exists());
+    }
+    #[test]
+    fn large_hunk_requests_are_unavailable_but_whole_file_staging_still_works() {
+        let repo = repository();
+        let root = repo.path();
+        let r = root.to_str().unwrap();
+        fs::write(root.join("large.txt"), "line\n".repeat(100_000)).unwrap();
+        for staged in [false, true] {
+            if staged {
+                operations::stage(r, &["large.txt".into()]).unwrap();
+            }
+            assert!(preview_hunks(r, "large.txt", staged)
+                .unwrap_err()
+                .message
+                .contains("Large files"));
+            let (diff, context) =
+                load_working_tree_file_view(r, None, "large.txt", staged).unwrap();
+            assert!(diff.omitted_content.is_some());
+            assert!(context.is_err());
+            assert!(apply_hunks(r, "large.txt", staged, "", &[0]).is_err());
+        }
+        operations::unstage(r, &["large.txt".into()]).unwrap();
+        assert_eq!(
+            fs::read_to_string(root.join("large.txt"))
+                .unwrap()
+                .lines()
+                .count(),
+            100_000
+        );
+    }
+
+    #[test]
+    fn generated_patches_have_an_independent_output_limit() {
+        let repo = repository();
+        let root = repo.path();
+        fs::write(root.join("large.txt"), "line\n".repeat(100_000)).unwrap();
+        let result = GitCommand::run_diff(
+            &["diff", "--no-index", "--", "/dev/null", "large.txt"],
+            root,
+        );
+        assert!(result.unwrap_err().message.contains("preview limit"));
+        // Both shapes fit the subprocess byte budget but are unsafe to parse.
+        assert!(validate_patch_preview(&"+x\n".repeat(100_000)).is_err());
+        assert!(validate_patch_preview(&format!("+{}", "x".repeat(20_000))).is_err());
     }
 }

@@ -26,7 +26,7 @@ use gitgui_protocol::{
     RepositorySummary, RequestEnvelope, ResponseEnvelope, ResponseErrorEnvelope,
     ResponseSuccessEnvelope, ServerInfo, ServerLifecycle, ServerReadiness, ServerStatus, StashInfo,
     TokenExchangeResponse, WebSocketTicketResponse, WelcomeMessage, WelcomePayload,
-    WorkingTreeFileDiffParams, WorktreeInfo,
+    WorkingTreeFileDiffParams, WorktreeInfo, OmittedDiffContent,
 };
 use std::{
     fs, io,
@@ -144,6 +144,7 @@ fn main() -> io::Result<()> {
         <CommitRefType as TS>::decl(&config),
         <CommitFile as TS>::decl(&config),
         <CommitFileDiff as TS>::decl(&config),
+        <OmittedDiffContent as TS>::decl(&config),
         <ProtocolErrorMessage as TS>::decl(&config),
     ];
 

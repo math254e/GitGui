@@ -1409,6 +1409,19 @@ pub struct CommitFile {
     pub status: String,
 }
 
+/// Content omitted before transfer or parsing. Previews are plain text prefixes,
+/// at most 8 KiB per side; they are never complete files or executable patches.
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct OmittedDiffContent {
+    pub reason: String,
+    pub max_bytes_per_side: usize,
+    pub max_lines_per_side: usize,
+    pub max_line_bytes: usize,
+    pub original_preview: String,
+    pub modified_preview: String,
+}
+
 /// Structured text or binary diff for one file.
 #[derive(Clone, Debug, Deserialize, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -1419,6 +1432,10 @@ pub struct CommitFileDiff {
     pub modified_content: String,
     pub is_binary: bool,
     pub message: Option<String>,
+    /// Both content strings are empty when this field is present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub omitted_content: Option<OmittedDiffContent>,
 }
 
 /// Error-only message used when an incoming frame has no usable request ID.
