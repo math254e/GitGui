@@ -234,6 +234,72 @@ pub fn load_commit_files_from_root(
     Ok(output.lines().filter_map(parse_commit_file).collect())
 }
 
+/// Lists paths that differ between a commit and the current working directory.
+pub fn load_commit_working_tree_files(
+    repo_root: &str,
+    commit_hash: &str,
+) -> Result<Vec<CommitFile>, GitError> {
+    let root = Path::new(repo_root);
+    let output = GitCommand::run(
+        &["diff", "--name-status", "--find-renames", commit_hash, "--"],
+        Some(root),
+    )?;
+    let mut files: Vec<CommitFile> = output.lines().filter_map(parse_commit_file).collect();
+    // `git diff <commit>` omits untracked paths, though they are part of the
+    // visible working directory. Include them as additions for this view.
+    for changed in repository_status(root)?.changed_files {
+        if changed.index_status == "?" && !files.iter().any(|file| file.path == changed.path) {
+            files.push(CommitFile {
+                path: changed.path,
+                original_path: None,
+                status: "A".into(),
+            });
+        }
+    }
+    Ok(files)
+}
+
+/// Loads one file's contents from a commit and the current working directory.
+pub fn load_commit_working_tree_file_diff(
+    repo_root: &str,
+    commit_hash: &str,
+    file: &CommitFile,
+) -> Result<CommitFileDiff, GitError> {
+    let root = Path::new(repo_root);
+    let original_path = file.original_path.as_deref().unwrap_or(&file.path);
+    let original_content = if file.status.starts_with('A') {
+        FileContent::Text(String::new())
+    } else {
+        load_file_at_revision(root, commit_hash, original_path)
+    };
+    let modified_content = if file.status.starts_with('D') {
+        FileContent::Text(String::new())
+    } else {
+        load_file_from_working_tree(root, &file.path)
+    };
+    let is_binary = original_content.is_binary() || modified_content.is_binary();
+    let message = if is_binary {
+        Some("Binary file content cannot be displayed.".to_string())
+    } else {
+        original_content
+            .message()
+            .or_else(|| modified_content.message())
+            .map(ToString::to_string)
+    };
+    Ok(CommitFileDiff {
+        original_path: if file.status.starts_with('A') {
+            None
+        } else {
+            Some(original_path.to_string())
+        },
+        modified_path: file.path.clone(),
+        original_content: original_content.into_text(),
+        modified_content: modified_content.into_text(),
+        is_binary,
+        message,
+    })
+}
+
 pub fn load_commit_file_diff(
     repo_root: &str,
     commit_hash: &str,
@@ -1326,5 +1392,43 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["feature-tip", "feature-base", "root"]
         );
+    }
+
+    #[test]
+    fn commit_to_working_tree_comparison_includes_staged_unstaged_and_untracked_files() {
+        let repository = new_test_repository();
+        let root = repository.0.as_path();
+        run_test_git(root, &["init", "-q", "-b", "main"]);
+        run_test_git(root, &["config", "user.email", "test@example.com"]);
+        run_test_git(root, &["config", "user.name", "GitGui Test"]);
+        std::fs::write(root.join("tracked.txt"), "base\n").unwrap();
+        run_test_git(root, &["add", "tracked.txt"]);
+        run_test_git(root, &["commit", "-q", "-m", "base"]);
+        let base = run_test_git(root, &["rev-parse", "HEAD"])
+            .trim()
+            .to_string();
+        std::fs::write(root.join("tracked.txt"), "staged\n").unwrap();
+        run_test_git(root, &["add", "tracked.txt"]);
+        std::fs::write(root.join("tracked.txt"), "working\n").unwrap();
+        std::fs::write(root.join("new.txt"), "untracked\n").unwrap();
+
+        let files = load_commit_working_tree_files(root.to_str().unwrap(), &base).unwrap();
+        assert!(files.iter().any(|file| file.path == "tracked.txt"));
+        assert!(files
+            .iter()
+            .any(|file| file.path == "new.txt" && file.status == "A"));
+        let tracked = files
+            .iter()
+            .find(|file| file.path == "tracked.txt")
+            .unwrap();
+        let diff =
+            load_commit_working_tree_file_diff(root.to_str().unwrap(), &base, tracked).unwrap();
+        assert_eq!(diff.original_content, "base\n");
+        assert_eq!(diff.modified_content, "working\n");
+        let added = files.iter().find(|file| file.path == "new.txt").unwrap();
+        let diff =
+            load_commit_working_tree_file_diff(root.to_str().unwrap(), &base, added).unwrap();
+        assert_eq!(diff.original_content, "");
+        assert_eq!(diff.modified_content, "untracked\n");
     }
 }

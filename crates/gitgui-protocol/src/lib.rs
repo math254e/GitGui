@@ -40,7 +40,8 @@ pub const CLIENT_SCOPES: &[&str] = &[SCOPE_REPOSITORY_READ, SCOPE_REPOSITORY_OPE
 /// Canonical method for retrieving immutable server metadata.
 pub const METHOD_SERVER_GET_INFO: &str = "server.get_info";
 /// Canonical method for retrieving current server lifecycle status.
-pub const METHOD_SERVER_GET_STATUS: &str = "server.get_status";/// Canonical method for repository catalog reads.
+pub const METHOD_SERVER_GET_STATUS: &str = "server.get_status";
+/// Canonical method for repository catalog reads.
 pub const METHOD_REPOSITORIES_LIST: &str = "repositories.list";
 /// Canonical host-admin method for registering and loading a repository.
 pub const METHOD_REPOSITORIES_OPEN: &str = "repositories.open";
@@ -58,6 +59,8 @@ pub const METHOD_REPOSITORIES_REFRESH: &str = "repositories.refresh";
 pub const METHOD_GIT_STATUS: &str = "git.status";
 /// Canonical method for listing the files changed by a commit.
 pub const METHOD_GIT_COMMIT_FILES: &str = "git.commit_files";
+pub const METHOD_GIT_COMMIT_WORKING_TREE_FILES: &str = "git.commit_working_tree_files";
+pub const METHOD_GIT_COMMIT_WORKING_TREE_FILE_DIFF: &str = "git.commit_working_tree_file_diff";
 /// Canonical method for reading one committed file diff.
 pub const METHOD_GIT_COMMIT_FILE_DIFF: &str = "git.commit_file_diff";
 /// Canonical method for reading one working-tree file diff.
@@ -112,6 +115,8 @@ pub const WS_METHOD_NAMES: &[&str] = &[
     METHOD_REPOSITORIES_REFRESH,
     METHOD_GIT_STATUS,
     METHOD_GIT_COMMIT_FILES,
+    METHOD_GIT_COMMIT_WORKING_TREE_FILES,
+    METHOD_GIT_COMMIT_WORKING_TREE_FILE_DIFF,
     METHOD_GIT_COMMIT_FILE_DIFF,
     METHOD_GIT_WORKING_TREE_FILE_DIFF,
     METHOD_GIT_PREFETCH_COMMIT_FILES,
@@ -190,6 +195,8 @@ pub struct RepositoryChanged {
 pub const CAPABILITY_GIT_STATUS: &str = "git.status";
 /// Capability advertised when commit file listing is available.
 pub const CAPABILITY_GIT_COMMIT_FILES: &str = "git.commit_files";
+pub const CAPABILITY_GIT_COMMIT_WORKING_TREE_FILES: &str = "git.commit_working_tree_files";
+pub const CAPABILITY_GIT_COMMIT_WORKING_TREE_FILE_DIFF: &str = "git.commit_working_tree_file_diff";
 /// Capability advertised when committed file diffs are available.
 pub const CAPABILITY_GIT_COMMIT_FILE_DIFF: &str = "git.commit_file_diff";
 /// Capability advertised when working-tree file diffs are available.
@@ -1110,6 +1117,23 @@ pub struct CommitFilesParams {
 pub struct CommitFilesResult {
     /// Files changed by the requested commit.
     pub files: Vec<CommitFile>,
+}
+
+/// Parameters for listing files differing between a commit and working tree.
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct CommitWorkingTreeFilesParams {
+    pub repository_id: String,
+    pub commit_hash: String,
+}
+
+/// Parameters for reading one file's commit-to-working-tree diff.
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct CommitWorkingTreeFileDiffParams {
+    pub repository_id: String,
+    pub commit_hash: String,
+    pub file_path: String,
 }
 
 /// Parameters for reading one file's committed diff.

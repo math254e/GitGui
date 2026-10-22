@@ -14,7 +14,7 @@
   type Diffs = typeof import("@pierre/diffs");
   type DiffViewMode = "hunks" | "inline" | "split";
   type ContentViewMode = "diff" | "file";
-  type DiffSource = "commit" | "workingTree" | "staged";
+  type DiffSource = "commit" | "workingTree" | "staged" | "commitWorkingTree";
   const contentModes = [
     { value: "diff", label: "Diff", title: "Compare original and modified contents" },
     { value: "file", label: "File", title: "Read the full file contents" },
@@ -69,7 +69,7 @@
     const requestKey = diffRequestKey;
 
     const currentSnapshot = snapshot;
-    if (diffSource === "commit" && requestKey === activeDiffRequestKey) {
+    if ((diffSource === "commit" || diffSource === "commitWorkingTree") && requestKey === activeDiffRequestKey) {
       return;
     }
 
@@ -159,7 +159,7 @@
       const parentHash = commit?.parents[0] ?? null;
       const headHash = currentSnapshot.status.headOid ?? null;
 
-      if (source === "commit" && !commitHash) {
+      if ((source === "commit" || source === "commitWorkingTree") && !commitHash) {
         throw new Error("No commit is selected.");
       }
 
@@ -171,6 +171,8 @@
               ...(parentHash ? { parentHash } : {}),
               filePath: file.path,
             })
+          : source === "commitWorkingTree"
+          ? client.getCommitWorkingTreeFileDiff({ repositoryId, commitHash: commitHash ?? "", filePath: file.path })
           : client.getWorkingTreeFileDiff({
               repositoryId,
               ...(headHash ? { headHash } : {}),
@@ -180,7 +182,7 @@
 
       // Hunk actions are supplementary. A slow preview must not keep already
       // loaded file contents behind the loading overlay after a mutation.
-      if (source !== "commit") {
+      if (source === "workingTree" || source === "staged") {
         void loadHunkPreview(request, repositoryId, source, file.path);
       }
       const result = await resultPromise;
@@ -447,7 +449,7 @@
     </button>
   </header>
 
-  {#if diffSource !== "commit" && !loading && diff}
+  {#if (diffSource === "workingTree" || diffSource === "staged") && !loading && diff}
     {#if hunkError || hunkPreview?.unavailableReason}
       <div class="hunk-controls"><p class="text-xs text-[var(--app-theme-text-muted)]">{hunkError || hunkPreview?.unavailableReason}</p></div>
     {:else if selectedHunks.length && contentViewMode === "diff"}

@@ -18,7 +18,7 @@
     amendHead: string | null;
   };
 
-  export type WorkingTreeDiffSource = "workingTree" | "staged";
+  export type WorkingTreeDiffSource = "workingTree" | "staged" | "commitWorkingTree";
 
   export type WorkingTreePanelProps = {
     snapshot: RepositorySnapshot;

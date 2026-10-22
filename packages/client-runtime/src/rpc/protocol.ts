@@ -20,6 +20,8 @@ import type {
   CommitFileDiffParams,
   CommitFilesParams,
   CommitFilesResult,
+  CommitWorkingTreeFilesParams,
+  CommitWorkingTreeFileDiffParams,
   FileDiffResult,
   GitAmendInfo,
   GitAmendParams,
@@ -113,6 +115,8 @@ export interface GitGuiRpcMethods {
   };
   "git.status": { readonly input: GitStatusParams; readonly output: GitStatusResult };
   "git.commit_files": { readonly input: CommitFilesParams; readonly output: CommitFilesResult };
+  "git.commit_working_tree_files": { readonly input: CommitWorkingTreeFilesParams; readonly output: CommitFilesResult };
+  "git.commit_working_tree_file_diff": { readonly input: CommitWorkingTreeFileDiffParams; readonly output: FileDiffResult };
   "git.commit_file_diff": { readonly input: CommitFileDiffParams; readonly output: FileDiffResult };
   "git.working_tree_file_diff": {
     readonly input: WorkingTreeFileDiffParams;
@@ -169,6 +173,8 @@ export const WS_METHOD_NAMES = [
   "repositories.refresh",
   "git.status",
   "git.commit_files",
+  "git.commit_working_tree_files",
+  "git.commit_working_tree_file_diff",
   "git.commit_file_diff",
   "git.working_tree_file_diff",
   "git.prefetch_commit_files",
@@ -222,6 +228,8 @@ export const WS_METHODS = {
   repositoriesRefresh: "repositories.refresh",
   gitStatus: "git.status",
   gitCommitFiles: "git.commit_files",
+  gitCommitWorkingTreeFiles: "git.commit_working_tree_files",
+  gitCommitWorkingTreeFileDiff: "git.commit_working_tree_file_diff",
   gitCommitFileDiff: "git.commit_file_diff",
   gitWorkingTreeFileDiff: "git.working_tree_file_diff",
   gitPrefetchCommitFiles: "git.prefetch_commit_files",

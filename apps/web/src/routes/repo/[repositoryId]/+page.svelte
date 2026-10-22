@@ -81,7 +81,7 @@
           client={store.client!}
           repositoryId={store.activeRepositoryId!}
           snapshot={store.snapshot}
-          diffSource={store.changesSelected ? store.selectedFileSource : "commit"}
+          diffSource={store.changesSelected ? store.selectedFileSource : (store.comparingCommitToWorkingTree ? "commitWorkingTree" : "commit")}
           selectedCommit={store.selectedCommit}
           selectedFile={store.selectedFile}
           contentRevision={store.workspaceState?.fileContentRevisions[store.activeRepositoryId!]?.[store.selectedFile.path] ?? 0}
@@ -124,6 +124,7 @@
               onScrollCommandHandled={(commandId) => store.finishScrollToCommit(commandId)}
               onSelectChanges={() => store.selectChanges()}
               onSelectCommit={(commit) => store.selectCommit(commit)}
+              onCompareCommitToWorkingTree={(commit) => store.compareCommitToWorkingTree(commit)}
             />
           {/key}
         </div>
@@ -162,8 +163,9 @@
         repositoryId={store.activeRepositoryId!}
         snapshot={store.snapshot}
         selectedCommit={store.selectedCommit}
+        comparisonWithWorkingTree={store.comparingCommitToWorkingTree}
         selectedFile={store.selectedFile}
-        onSelectFile={(file) => store.selectFile(file)}
+        onSelectFile={(file) => store.selectFile(file, store.comparingCommitToWorkingTree ? "commitWorkingTree" : "workingTree")}
       />
     {:else if store.snapshot}
       <RepositoryDetailsPanel snapshot={store.snapshot} />
@@ -180,7 +182,7 @@
             client={store.client!}
             repositoryId={store.activeRepositoryId!}
             snapshot={store.snapshot}
-            diffSource={store.changesSelected ? store.selectedFileSource : "commit"}
+            diffSource={store.changesSelected ? store.selectedFileSource : (store.comparingCommitToWorkingTree ? "commitWorkingTree" : "commit")}
             selectedCommit={store.selectedCommit}
             selectedFile={store.selectedFile}
             contentRevision={store.workspaceState?.fileContentRevisions[store.activeRepositoryId!]?.[store.selectedFile.path] ?? 0}
@@ -230,6 +232,7 @@
                   onScrollCommandHandled={(commandId) => store.finishScrollToCommit(commandId)}
                   onSelectChanges={() => store.selectChanges()}
                   onSelectCommit={(commit) => store.selectCommit(commit)}
+                  onCompareCommitToWorkingTree={(commit) => store.compareCommitToWorkingTree(commit)}
                 />
               {/key}
             </div>
@@ -271,8 +274,9 @@
             repositoryId={store.activeRepositoryId!}
             snapshot={store.snapshot}
             selectedCommit={store.selectedCommit}
+            comparisonWithWorkingTree={store.comparingCommitToWorkingTree}
             selectedFile={store.selectedFile}
-            onSelectFile={(file) => store.selectFile(file)}
+            onSelectFile={(file) => store.selectFile(file, store.comparingCommitToWorkingTree ? "commitWorkingTree" : "workingTree")}
           />
         {:else if store.snapshot}
           <RepositoryDetailsPanel snapshot={store.snapshot} />

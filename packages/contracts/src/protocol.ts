@@ -18,6 +18,8 @@ export const WS_METHOD_NAMES = [
   "repositories.refresh",
   "git.status",
   "git.commit_files",
+  "git.commit_working_tree_files",
+  "git.commit_working_tree_file_diff",
   "git.commit_file_diff",
   "git.working_tree_file_diff",
   "git.prefetch_commit_files",
@@ -635,6 +637,10 @@ export type CommitFilesResult = {
  * Files changed by the requested commit.
  */
 files: Array<CommitFile>, };
+
+export type CommitWorkingTreeFilesParams = { repositoryId: string, commitHash: string, };
+
+export type CommitWorkingTreeFileDiffParams = { repositoryId: string, commitHash: string, filePath: string, };
 
 export type CommitFileDiffParams = {
 /**

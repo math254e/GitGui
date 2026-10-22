@@ -11,6 +11,8 @@
 import type {
   CommitFileDiffParams,
   CommitFilesParams,
+  CommitWorkingTreeFilesParams,
+  CommitWorkingTreeFileDiffParams,
   FileDiffResult,
   GitAmendParams,
   GitApplyHunksParams,
@@ -218,6 +220,18 @@ export class GitGuiClient {
       commitHash,
     };
     return this.call("git.commit_files", params);
+  }
+
+  getCommitWorkingTreeFiles(repositoryId: string, commitHash: string) {
+    const params: CommitWorkingTreeFilesParams = { repositoryId: assertRepositoryId(repositoryId), commitHash };
+    return this.call("git.commit_working_tree_files", params);
+  }
+
+  getCommitWorkingTreeFileDiff(params: CommitWorkingTreeFileDiffParams) {
+    return this.call("git.commit_working_tree_file_diff", {
+      ...params,
+      repositoryId: assertRepositoryId(params.repositoryId),
+    });
   }
 
   getCommitFileDiff(params: CommitFileDiffParams) {

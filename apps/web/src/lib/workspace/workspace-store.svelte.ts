@@ -257,11 +257,13 @@ export class WorkspaceStore {
   selectedGraphItem = $derived(this.activeRepository?.selectedGraphItem ?? null);
   selectedFile = $derived(this.activeRepository?.selectedFile ?? null);
   selectedFileSource = $derived(this.activeRepository?.selectedFileSource ?? "workingTree");
+  comparingCommitToWorkingTreeHash = $state<string | null>(null);
   selectedChangePaths = $derived(this.activeRepository?.selectedChangePaths ?? []);
   selectedChangeSource = $derived(this.activeRepository?.selectedChangeSource ?? "workingTree");
   selectedCommit = $derived(
     this.selectedGraphItem?.type === "commit" ? this.selectedGraphItem.commit : null,
   );
+  comparingCommitToWorkingTree = $derived(this.comparingCommitToWorkingTreeHash === this.selectedCommit?.hash);
   changesSelected = $derived(this.selectedGraphItem?.type === "changes");
 
   repoTabs = $derived<RepoTab[]>(
@@ -614,7 +616,7 @@ export class WorkspaceStore {
         ? selectedGraphItem?.type === "changes"
           ? reconcileWorkingTreeFile(
               previousRepo?.selectedFile ?? null,
-              previousRepo?.selectedFileSource ?? "workingTree",
+              previousRepo?.selectedFileSource === "staged" ? "staged" : "workingTree",
               snapshot,
             )
           : selectedGraphItem?.type === "commit" &&
@@ -952,6 +954,7 @@ export class WorkspaceStore {
   }
 
   selectCommit(commit: CommitInfo): void {
+    this.comparingCommitToWorkingTreeHash = null;
     this.updateActiveRepository((repo) => ({
       ...repo,
       selectedGraphItem: { type: "commit", commit },
@@ -960,6 +963,12 @@ export class WorkspaceStore {
       selectedChangePaths: [],
       selectedChangeSource: null,
     }));
+  }
+
+  compareCommitToWorkingTree(commit: CommitInfo): void {
+    this.comparingCommitToWorkingTreeHash = commit.hash;
+    this.selectCommit(commit);
+    this.comparingCommitToWorkingTreeHash = commit.hash;
   }
 
   selectRef(ref: CommitRef): void {
@@ -975,6 +984,7 @@ export class WorkspaceStore {
   }
 
   selectChanges(): void {
+    this.comparingCommitToWorkingTreeHash = null;
     this.updateActiveRepository((repo) => ({
       ...repo,
       selectedGraphItem: { type: "changes" },

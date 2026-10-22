@@ -10,11 +10,12 @@
     repositoryId: string;
     snapshot: RepositorySnapshot;
     selectedCommit: CommitInfo;
+    comparisonWithWorkingTree?: boolean;
     selectedFile: CommitFile | null;
     onSelectFile: (file: CommitFile) => void;
   };
 
-  let { client, repositoryId, snapshot, selectedCommit, selectedFile, onSelectFile }: Props = $props();
+  let { client, repositoryId, snapshot, selectedCommit, comparisonWithWorkingTree = false, selectedFile, onSelectFile }: Props = $props();
   let commitFiles = $state<CommitFile[]>([]);
   let filesLoading = $state(false);
   let filesError = $state("");
@@ -29,13 +30,13 @@
   let fileStatusCounts = $derived(getFileStatusCounts(commitFiles));
 
   $effect(() => {
-    const requestKey = `${repositoryId}\0${selectedCommit.hash}`;
+    const requestKey = `${repositoryId}\0${selectedCommit.hash}\0${comparisonWithWorkingTree}`;
     if (requestKey === lastFilesRequestKey) {
       return;
     }
 
     lastFilesRequestKey = requestKey;
-    void loadFiles(repositoryId, selectedCommit.hash);
+    void loadFiles(repositoryId, selectedCommit.hash, comparisonWithWorkingTree);
   });
 
   onDestroy(() => {
@@ -124,7 +125,7 @@
     return counts;
   }
 
-  async function loadFiles(repositoryId: string, commitHash: string) {
+  async function loadFiles(repositoryId: string, commitHash: string, compareWorkingTree: boolean) {
     if (destroyed) {
       return;
     }
@@ -135,7 +136,9 @@
     filesLoading = true;
 
     try {
-      const result = await client.getCommitFiles(repositoryId, commitHash);
+      const result = compareWorkingTree
+        ? await client.getCommitWorkingTreeFiles(repositoryId, commitHash)
+        : await client.getCommitFiles(repositoryId, commitHash);
 
       if (!destroyed && request === activeFilesRequest) {
         commitFiles = result.files;
@@ -173,7 +176,7 @@
             <GitCommitHorizontal aria-hidden="true" size={14} strokeWidth={2.25} />
           </span>
           <p class="truncate text-xs font-semibold text-[var(--app-theme-sidebar-foreground)]">
-            Commit:
+            {comparisonWithWorkingTree ? "Compare with working directory:" : "Commit:"}
             <code class="font-mono" title={selectedCommit.hash}>{shortHash(selectedCommit.hash)}</code>
           </p>
         </div>

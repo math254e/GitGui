@@ -34,6 +34,7 @@
     onScrollCommandHandled: (commandId: number) => void;
     onSelectChanges: () => void;
     onSelectCommit: (commit: CommitInfo) => void;
+    onCompareCommitToWorkingTree: (commit: CommitInfo) => void;
   };
 
   const rowHeight = 34;
@@ -55,6 +56,7 @@
     onScrollCommandHandled,
     onSelectChanges,
     onSelectCommit,
+    onCompareCommitToWorkingTree,
   }: Props = $props();
   let columns = $state<HistoryColumn[]>([
     { id: "branch", label: "Branch", width: 118, visible: true },
@@ -64,6 +66,7 @@
   let resizeState = $state<ResizeState | null>(null);
   let restoredColumns = false;
   let hoveredRowHash = $state<string | null>(null);
+  let contextMenu = $state<{ commit: CommitInfo; x: number; y: number } | null>(null);
   let graphViewport = $state<HTMLDivElement | null>(null);
   let graphCanvas = $state<HTMLCanvasElement | null>(null);
   let graphScrollTop = $state(0);
@@ -1025,6 +1028,11 @@
                 style={`grid-template-columns: ${gridTemplate}; height: ${rowHeight}px;`}
                 type="button"
                 onclick={() => onSelectCommit(commit)}
+                oncontextmenu={(event) => {
+                  event.preventDefault();
+                  onSelectCommit(commit);
+                  contextMenu = { commit, x: event.clientX, y: event.clientY };
+                }}
                 onpointerenter={() => (hoveredRowHash = commit.hash)}
                 onpointerleave={() => (hoveredRowHash = hoveredRowHash === commit.hash ? null : hoveredRowHash)}
               >
@@ -1083,6 +1091,14 @@
           <li aria-hidden="true" style={`height: ${rowRange.after}px;`}></li>
         </ol>
       </div>
+      {#if contextMenu}
+        <div class="fixed z-[500] min-w-56 border border-[var(--app-theme-border)] bg-[var(--app-theme-surface-raised)] p-1 shadow-lg" style={`left: ${contextMenu.x}px; top: ${contextMenu.y}px;`} role="menu" aria-label="Commit actions">
+          <button class="w-full px-3 py-2 text-left text-sm hover:bg-[var(--app-theme-sidebar-row-hover)] focus-visible:outline-2 focus-visible:outline-[var(--app-theme-focus)]" role="menuitem" type="button" onclick={() => { onCompareCommitToWorkingTree(contextMenu!.commit); contextMenu = null; }}>
+            Compare against working directory
+          </button>
+          <button class="w-full px-3 py-1 text-left text-xs text-[var(--app-theme-text-subtle)] hover:bg-[var(--app-theme-sidebar-row-hover)]" type="button" onclick={() => (contextMenu = null)}>Close</button>
+        </div>
+      {/if}
     </div>
   {:else}
     <div class="grid h-full place-items-center p-8 text-center">

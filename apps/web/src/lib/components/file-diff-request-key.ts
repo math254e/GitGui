@@ -3,12 +3,13 @@ import type { CommitFile, CommitInfo, RepositorySnapshot } from "$lib/types/repo
 export function buildFileDiffRequestKey(
   repositoryId: string,
   snapshot: RepositorySnapshot,
-  source: "commit" | "workingTree" | "staged",
+  source: "commit" | "workingTree" | "staged" | "commitWorkingTree",
   commit: CommitInfo | null,
   file: CommitFile,
   contentRevision = 0,
 ): string {
-  const commitHash = source === "commit" ? commit?.hash ?? "" : snapshot.status.headOid ?? "";
+  const commitSource = source === "commit" || source === "commitWorkingTree";
+  const commitHash = commitSource ? commit?.hash ?? "" : snapshot.status.headOid ?? "";
   const parentHash = source === "commit" ? commit?.parents[0] ?? "" : "";
 
   return [

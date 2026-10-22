@@ -31,6 +31,8 @@ use gitgui_core::git::{
     repository::{
         load_commit_file_diff as load_core_commit_file_diff,
         load_commit_files_from_root as load_core_commit_files,
+        load_commit_working_tree_file_diff as load_core_commit_working_tree_file_diff,
+        load_commit_working_tree_files as load_core_commit_working_tree_files,
         load_repository as load_core_repository,
         load_repository_graph as load_core_repository_graph,
         load_repository_status as load_core_repository_status,
@@ -45,7 +47,8 @@ use gitgui_protocol::{
     error_codes, AdvertisedEndpoint, AuthSession, ChangedFile as ProtocolChangedFile,
     CommitFile as ProtocolCommitFile, CommitFileDiff as ProtocolCommitFileDiff, CommitFilesParams,
     CommitFilesResult, CommitGraph as ProtocolCommitGraph, CommitInfo as ProtocolCommitInfo,
-    CommitRef as ProtocolCommitRef, CommitRefType as ProtocolCommitRefType, EnvironmentAuthPolicy,
+    CommitRef as ProtocolCommitRef, CommitRefType as ProtocolCommitRefType,
+    CommitWorkingTreeFileDiffParams, CommitWorkingTreeFilesParams, EnvironmentAuthPolicy,
     EnvironmentDescriptor, FileDiffResult, GitAmendParams, GitApplyHunksParams, GitBranch,
     GitBranchCreateParams, GitBranchCreateResult, GitBranchListParams, GitBranchListResult,
     GitBranchSwitchParams, GitBranchSwitchResult, GitCommitParams, GitCommitResult,
@@ -65,7 +68,8 @@ use gitgui_protocol::{
     StashInfo as ProtocolStashInfo, WelcomeMessage, WorktreeInfo as ProtocolWorktreeInfo,
     CAPABILITY_GIT_AMEND, CAPABILITY_GIT_BRANCH_CREATE, CAPABILITY_GIT_BRANCH_LIST,
     CAPABILITY_GIT_BRANCH_SWITCH, CAPABILITY_GIT_COMMIT, CAPABILITY_GIT_COMMIT_FILES,
-    CAPABILITY_GIT_COMMIT_FILE_DIFF, CAPABILITY_GIT_DISCARD, CAPABILITY_GIT_FETCH,
+    CAPABILITY_GIT_COMMIT_FILE_DIFF, CAPABILITY_GIT_COMMIT_WORKING_TREE_FILES,
+    CAPABILITY_GIT_COMMIT_WORKING_TREE_FILE_DIFF, CAPABILITY_GIT_DISCARD, CAPABILITY_GIT_FETCH,
     CAPABILITY_GIT_HUNKS, CAPABILITY_GIT_PREFETCH_COMMIT_DIFFS,
     CAPABILITY_GIT_PREFETCH_COMMIT_FILES, CAPABILITY_GIT_PULL, CAPABILITY_GIT_PUSH,
     CAPABILITY_GIT_STAGE, CAPABILITY_GIT_STASH_POP, CAPABILITY_GIT_STASH_PUSH,
@@ -904,6 +908,8 @@ fn required_scope_for_method(method: &str) -> Option<&'static str> {
         | METHOD_GIT_DISCARD_PREVIEW
         | METHOD_GIT_AMEND_INFO
         | METHOD_GIT_COMMIT_FILES
+        | gitgui_protocol::METHOD_GIT_COMMIT_WORKING_TREE_FILES
+        | gitgui_protocol::METHOD_GIT_COMMIT_WORKING_TREE_FILE_DIFF
         | METHOD_GIT_COMMIT_FILE_DIFF
         | METHOD_GIT_WORKING_TREE_FILE_DIFF
         | METHOD_GIT_PREFETCH_COMMIT_FILES
@@ -932,6 +938,12 @@ async fn dispatch(request: RequestEnvelope, state: &ServerState) -> ResponseEnve
         }
         METHOD_GIT_STATUS => git_status(request.id, request.params, state).await,
         METHOD_GIT_COMMIT_FILES => git_commit_files(request.id, request.params, state).await,
+        gitgui_protocol::METHOD_GIT_COMMIT_WORKING_TREE_FILES => {
+            git_commit_working_tree_files(request.id, request.params, state).await
+        }
+        gitgui_protocol::METHOD_GIT_COMMIT_WORKING_TREE_FILE_DIFF => {
+            git_commit_working_tree_file_diff(request.id, request.params, state).await
+        }
         METHOD_GIT_COMMIT_FILE_DIFF => {
             git_commit_file_diff(request.id, request.params, state).await
         }
@@ -1934,6 +1946,105 @@ async fn git_commit_files(
         Err(error) => {
             warn!(error = %error, "commit file list worker failed");
             git_failure(request_id, "commit file list worker failed")
+        }
+    }
+}
+
+async fn git_commit_working_tree_files(
+    request_id: String,
+    params: Value,
+    state: &ServerState,
+) -> ResponseEnvelope {
+    let params =
+        match parse_params::<CommitWorkingTreeFilesParams>(params, "git.commit_working_tree_files")
+        {
+            Ok(params) => params,
+            Err(error) => return ResponseEnvelope::error(request_id, error),
+        };
+    if let Err(error) = validate_repository_id(&params.repository_id) {
+        return ResponseEnvelope::error(request_id, error);
+    }
+    if let Err(error) = validate_object_id(&params.commit_hash) {
+        return ResponseEnvelope::error(request_id, error);
+    }
+    let Some(repository) = state.repository(&params.repository_id).await else {
+        return repository_not_configured(request_id, &params.repository_id);
+    };
+    let result = spawn_blocking(move || {
+        load_core_commit_working_tree_files(&repository.operation_path, &params.commit_hash)
+    })
+    .await;
+    match result {
+        Ok(Ok(files)) => response_success(
+            request_id,
+            CommitFilesResult {
+                files: files.into_iter().map(protocol_commit_file).collect(),
+            },
+        ),
+        Ok(Err(error)) => {
+            warn!(error = %error.message, "commit working-tree file list failed");
+            git_failure(request_id, "comparison files could not be loaded")
+        }
+        Err(error) => {
+            warn!(error = %error, "commit working-tree file worker failed");
+            git_failure(request_id, "comparison file worker failed")
+        }
+    }
+}
+
+async fn git_commit_working_tree_file_diff(
+    request_id: String,
+    params: Value,
+    state: &ServerState,
+) -> ResponseEnvelope {
+    let params = match parse_params::<CommitWorkingTreeFileDiffParams>(
+        params,
+        "git.commit_working_tree_file_diff",
+    ) {
+        Ok(params) => params,
+        Err(error) => return ResponseEnvelope::error(request_id, error),
+    };
+    if let Err(error) = validate_repository_id(&params.repository_id) {
+        return ResponseEnvelope::error(request_id, error);
+    }
+    if let Err(error) = validate_object_id(&params.commit_hash) {
+        return ResponseEnvelope::error(request_id, error);
+    }
+    if let Err(error) = validate_relative_file_path(&params.file_path) {
+        return ResponseEnvelope::error(request_id, error);
+    }
+    let Some(repository) = state.repository(&params.repository_id).await else {
+        return repository_not_configured(request_id, &params.repository_id);
+    };
+    let result = spawn_blocking(move || {
+        let files =
+            load_core_commit_working_tree_files(&repository.operation_path, &params.commit_hash)?;
+        let Some(file) = find_commit_file(&files, &params.file_path) else {
+            return Ok(None);
+        };
+        load_core_commit_working_tree_file_diff(
+            &repository.operation_path,
+            &params.commit_hash,
+            &file,
+        )
+        .map(Some)
+    })
+    .await;
+    match result {
+        Ok(Ok(Some(diff))) => response_success(
+            request_id,
+            FileDiffResult {
+                diff: protocol_diff(diff),
+            },
+        ),
+        Ok(Ok(None)) => invalid_params(request_id, "file is not part of this comparison"),
+        Ok(Err(error)) => {
+            warn!(error = %error.message, "commit working-tree file diff failed");
+            git_failure(request_id, "comparison diff could not be loaded")
+        }
+        Err(error) => {
+            warn!(error = %error, "commit working-tree diff worker failed");
+            git_failure(request_id, "comparison diff worker failed")
         }
     }
 }
@@ -3180,6 +3291,8 @@ fn implemented_capabilities() -> Vec<String> {
         CAPABILITY_REPOSITORIES_REMOVE,
         CAPABILITY_GIT_STATUS,
         CAPABILITY_GIT_COMMIT_FILES,
+        CAPABILITY_GIT_COMMIT_WORKING_TREE_FILES,
+        CAPABILITY_GIT_COMMIT_WORKING_TREE_FILE_DIFF,
         CAPABILITY_GIT_COMMIT_FILE_DIFF,
         CAPABILITY_GIT_WORKING_TREE_FILE_DIFF,
         CAPABILITY_GIT_PREFETCH_COMMIT_FILES,
@@ -3785,7 +3898,8 @@ mod tests {
     }
 
     #[test]
-    fn creates_and_loads_empty_repository() {        let parent = env::temp_dir().join(format!(
+    fn creates_and_loads_empty_repository() {
+        let parent = env::temp_dir().join(format!(
             "gitgui-create-test-{}-{}",
             std::process::id(),
             SystemTime::now()
