@@ -3,7 +3,7 @@ import tailwindcss from "@tailwindcss/vite";
 import { sveltekit } from "@sveltejs/kit/vite";
 
 // https://vite.dev/config/
-export default defineConfig(async () => ({
+export default defineConfig({
   plugins: [tailwindcss(), sveltekit()],
 
   // The viewer loads Diffs on mount, so prebundle it before that first import.
@@ -12,6 +12,7 @@ export default defineConfig(async () => ({
   },
 
   clearScreen: false,
+  worker: { format: "es" },
   server: {
     port: 1420,
     strictPort: true,
@@ -20,4 +21,4 @@ export default defineConfig(async () => ({
       ignored: ["**/target/**", "**/apps/desktop/dist/**"],
     },
   },
-}));
+});

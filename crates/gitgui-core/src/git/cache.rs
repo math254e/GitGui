@@ -188,10 +188,7 @@ fn commit_file_diff_size(diff: &CommitFileDiff) -> usize {
         diff.original_content.len(),
         diff.modified_content.len(),
         diff.message.as_ref().map_or(0, String::len),
-        diff.omitted_content.as_ref().map_or(0, |omitted| {
-            omitted.reason.len().saturating_add(omitted.original_preview.len())
-                .saturating_add(omitted.modified_preview.len())
-        }),
+        diff.patch.as_ref().map_or(0, String::len),
     ]
     .into_iter()
     .fold(0usize, usize::saturating_add)
@@ -220,7 +217,7 @@ mod tests {
             modified_content: String::new(),
             is_binary: false,
             message: None,
-            omitted_content: None,
+            patch: None,
         }
     }
 
@@ -240,17 +237,14 @@ mod tests {
     }
 
     #[test]
-    fn omitted_prefixes_count_toward_the_cache_budget() {
+    fn native_patches_count_toward_the_cache_budget() {
         let mut entry = diff("");
         let base_size = commit_file_diff_size(&entry);
-        entry.omitted_content = Some(super::super::repository::OmittedDiffContent {
-            reason: "limit".into(), max_bytes_per_side: 65536, max_lines_per_side: 500,
-            max_line_bytes: 8192, original_preview: "old".into(), modified_preview: "new".into(),
-        });
-        assert_eq!(commit_file_diff_size(&entry), base_size + 11);
+        entry.patch = Some("native patch".into());
+        assert_eq!(commit_file_diff_size(&entry), base_size + 12);
         let mut cache = CommitFilesCache::default();
-        cache.insert_diff(key("omitted.txt"), entry);
-        assert_eq!(cache.recent_diff_bytes, base_size + 11);
+        cache.insert_diff(key("patch.txt"), entry);
+        assert_eq!(cache.recent_diff_bytes, base_size + 12);
         cache.evict_repo("/repo");
         assert_eq!(cache.recent_diff_bytes, 0);
     }

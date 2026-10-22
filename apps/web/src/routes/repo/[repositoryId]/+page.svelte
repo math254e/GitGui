@@ -1,5 +1,7 @@
 <script lang="ts">
   import { page } from "$app/state";
+  import { onMount } from "svelte";
+  import { acquireDiffRenderer } from "$lib/diff/renderer";
   import CommitDetailsPanel from "$lib/components/CommitDetailsPanel.svelte";
   import CommitFileDiffViewer from "$lib/components/CommitFileDiffViewer.svelte";
   import EmptyDetailsPanel from "$lib/components/EmptyDetailsPanel.svelte";
@@ -15,6 +17,13 @@
   import { repositoryIdFromParam } from "$lib/workspace/routes";
 
   const store = useWorkspaceStore();
+
+  onMount(() => {
+    const renderer = acquireDiffRenderer();
+    // A viewer reports initialization failures with Retry when opened.
+    void renderer.ready.catch(() => {});
+    return renderer.release;
+  });
 
   const routedRepositoryId = $derived(repositoryIdFromParam(page.params.repositoryId));
 

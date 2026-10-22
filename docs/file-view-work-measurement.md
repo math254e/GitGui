@@ -1,10 +1,11 @@
 # Working-tree file-view work (#5)
 
-**Issue #9 integration:** The large-file success measurements below describe
-the pre-budget implementation. Large files now return omitted content and do
-not support hunk continuations; the ignored historical measurement must be
-adapted before comparing that case. Eligible files retain the shared continuation
-path. See [bounded diff behavior](large-file-diffs.md).
+**Large-file update:** The omission limits introduced by #9 have been removed.
+Complete text and hunk continuations are available again, with Git-generated
+display patches and browser workers for parsing/highlighting. The historical
+process/read counts below predate that additional snapshot-patch subprocess
+and should not be treated as current measurements. See
+[large-file diffs](large-file-diffs.md).
 
 ## Implementation
 

@@ -1432,7 +1432,12 @@ pub struct CommitFileDiff {
     pub modified_content: String,
     pub is_binary: bool,
     pub message: Option<String>,
-    /// Both content strings are empty when this field is present.
+    /// Git-generated unified patch for these exact contents. Absent on older
+    /// servers and for binary or unavailable contents; empty for identical text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub patch: Option<String>,
+    /// Legacy servers may omit both contents. Current servers return full text.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub omitted_content: Option<OmittedDiffContent>,

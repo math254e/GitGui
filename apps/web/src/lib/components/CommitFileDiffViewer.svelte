@@ -7,13 +7,15 @@
   import type { GitHunkPreview, GitApplyHunksParams } from "@gitgui/contracts";
   import type { GitGuiClient } from "@gitgui/client-runtime";
   import { DIFF_VIEW_UNSAFE_CSS, resolveDiffThemeName } from "$lib/theme/diffTheme";
+  import { parseDiffInWorker } from "$lib/diff/parser";
+  import { acquireDiffRenderer } from "$lib/diff/renderer";
   import { themeStore } from "$lib/theme/useTheme";
   import type { ThemeAppearance } from "$lib/theme/types";
   import type { CommitFile, CommitFileDiff, CommitInfo, RepositorySnapshot } from "$lib/types/repository";
-  import { buildFileDiffRequestKey } from "./file-diff-request-key";
+  import { buildFileDiffRequestKey, buildFileDiffSelectionKey } from "./file-diff-request-key";
+  import { hasCurrentHunkReview, resolveFileDiffPatch, reuseFileDiff, reuseHunkPreview } from "./file-diff-response";
 
   type HunkAnnotation = { id: number; header: string; request: number; revision: string };
-  type Diffs = typeof import("@pierre/diffs");
   type DiffViewMode = "hunks" | "inline" | "split";
   type ContentViewMode = "diff" | "file";
   type DiffSource = "commit" | "workingTree" | "staged" | "commitWorkingTree";
@@ -41,13 +43,20 @@
   };
 
   let { client, repositoryId, snapshot, diffSource, selectedCommit, selectedFile, contentRevision = 0, onClose, onApplyHunks, pending = false }: Props = $props();
+  const viewerId = $props.id();
+  let releaseRendererResources: (() => void) | undefined;
   let viewerContainer: HTMLDivElement;
-  let renderer = $state.raw<{ library: Diffs; viewer: CodeView<HunkAnnotation> } | null>(null);
-  let parsedDiff: { source: CommitFileDiff; preview: GitHunkPreview | null; metadata: FileDiffMetadata } | null = null;
-  let diff = $state<CommitFileDiff | null>(null);
-  let hunkPreview = $state<GitHunkPreview | null>(null);
+  let renderer = $state.raw<{ viewer: CodeView<HunkAnnotation>; annotationName: (annotation: DiffLineAnnotation<HunkAnnotation>) => string } | null>(null);
+  let parsedDiff = $state.raw<{ source: CommitFileDiff; preview: GitHunkPreview | null; metadata: FileDiffMetadata } | null>(null);
+  let parsing = $state(false);
+  let reviewedRequestKey = $state("");
+  let parseError = $state("");
+  let diff = $state.raw<CommitFileDiff | null>(null);
+  let hunkPreview = $state.raw<GitHunkPreview | null>(null);
   let hunkError = $state("");
   let selectedHunks = $state<number[]>([]);
+  let hunkActions = new Map<string, HunkAnnotation>();
+  const mountedHunkActions = new WeakMap<HTMLElement, Map<string, { element: HTMLElement; hunk: HunkAnnotation }>>();
   let loading = $state(false);
   let error = $state("");
   let renderError = $state("");
@@ -56,10 +65,15 @@
   let wordWrap = $state(false);
   let appearance = $state<ThemeAppearance>(themeStore.getSnapshot().resolvedAppearance);
   let activeRequest = 0;
+  let activeSelection = 0;
+  let activeSelectionKey = "";
+  let activeStatusSnapshot: RepositorySnapshot["status"] | null = null;
   let selectionController: AbortController | undefined;
   // CodeView ignores new payloads with an unchanged item version, including
   // hunk annotations arriving after the file contents.
   let renderVersion = 0;
+  let parseVersion = 0;
+  let contentVersion = 0;
   let activeDiffRequestKey = "";
   let destroyed = false;
   const diffRequestKey = $derived(buildFileDiffRequestKey(repositoryId, snapshot, diffSource, selectedCommit, selectedFile, contentRevision));
@@ -67,24 +81,75 @@
   const showingDeletedFile = $derived(statusLabel(selectedFile) === "D");
   const displayedFileIsEmpty = $derived(diff !== null &&
     (showingDeletedFile ? diff.originalContent : diff.modifiedContent) === "");
-  const viewState = $derived(fileViewState(diff, loading, error, renderError, renderer !== null));
+  const viewState = $derived(fileViewState(diff, (loading && diff === null) || (contentViewMode === "diff" && parsing && parsedDiff === null),
+    error || (contentViewMode === "diff" ? parseError : ""), renderError, renderer !== null));
+  const hunkActionsDisabled = $derived(pending || Boolean(error) || Boolean(parseError) ||
+    Boolean(hunkError) || Boolean(renderError) || !onApplyHunks ||
+    !hasCurrentHunkReview(diff, hunkPreview, parsedDiff, reviewedRequestKey, diffRequestKey));
 
   $effect(() => {
     const requestKey = diffRequestKey;
 
     const currentSnapshot = snapshot;
-    if ((diffSource === "commit" || diffSource === "commitWorkingTree") && requestKey === activeDiffRequestKey) {
+    if (requestKey === activeDiffRequestKey &&
+        (diffSource === "commit" || diffSource === "commitWorkingTree" || currentSnapshot.status === activeStatusSnapshot)) {
       return;
     }
 
     activeDiffRequestKey = requestKey;
+    activeStatusSnapshot = currentSnapshot.status;
     untrack(() => { void loadDiff(repositoryId, diffSource, selectedCommit, selectedFile, currentSnapshot); });
   });
 
   $effect(() => {
     const currentDiff = diff;
+    const preview = hunkPreview;
+    parseError = "";
+    parsing = false;
+    if (!currentDiff || currentDiff.isBinary || currentDiff.omittedContent ||
+        currentDiff.originalContent === currentDiff.modifiedContent) {
+      parsedDiff = null;
+      return;
+    }
+
+    // Worktree text can have CRLF/clean-filter differences from the index.
+    // The snapshot patch is not the reviewed Git patch: displaying it first
+    // can turn a small edit into a full rewrite until the review arrives.
+    // Keep an existing display during revalidation and parse only the review,
+    // or the snapshot fallback once review has explicitly failed.
+    const patch = resolveFileDiffPatch(currentDiff, preview, diffSource === "workingTree" || diffSource === "staged", hunkError);
+    if (!patch) {
+      parsing = true;
+      return;
+    }
+
+    const controller = new AbortController();
+    parsing = true;
+    void parseDiffInWorker({
+      originalPath: currentDiff.originalPath,
+      modifiedPath: currentDiff.modifiedPath,
+      originalContent: currentDiff.originalContent,
+      modifiedContent: currentDiff.modifiedContent,
+      patch: patch.patch,
+      cacheKey: `${viewerId}:diff:${++parseVersion}`,
+    }, controller.signal).then(({ metadata, durationMs }) => {
+      if (destroyed || controller.signal.aborted) return;
+      parsedDiff = { source: currentDiff, preview, metadata };
+      recordDiffDiagnostic("parse", durationMs, currentDiff);
+    }).catch((caught) => {
+      if (!destroyed && !controller.signal.aborted) parseError = formatError(caught);
+    }).finally(() => {
+      if (!destroyed && !controller.signal.aborted) parsing = false;
+    });
+    // Terminating the worker interrupts synchronous parsing immediately; stale
+    // results cannot replace the current selection, even on older servers.
+    return () => controller.abort();
+  });
+
+  $effect(() => {
+    const currentDiff = diff;
     const startedAt = performance.now();
-    renderView(renderer, currentDiff, contentViewMode, diffViewMode, wordWrap, appearance);
+    renderView(renderer, currentDiff, parsedDiff, contentViewMode, diffViewMode, wordWrap, appearance);
     if (renderer && currentDiff && !currentDiff.isBinary) {
       recordDiffDiagnostic("render", performance.now() - startedAt, currentDiff);
     }
@@ -92,7 +157,7 @@
 
   $effect(() => {
     const selection = selectedHunks;
-    const disabled = pending || loading || Boolean(renderError) || !onApplyHunks;
+    const disabled = hunkActionsDisabled;
     for (const row of viewerContainer?.querySelectorAll<HTMLElement>("[data-hunk-action]") ?? []) {
       const input = row.querySelector<HTMLInputElement>("input");
       const button = row.querySelector<HTMLButtonElement>("button");
@@ -115,25 +180,26 @@
     return () => {
       destroyed = true;
       activeRequest += 1;
+      activeSelection += 1;
       selectionController?.abort();
       unsubscribeTheme();
       renderer?.viewer.cleanUp();
+      releaseRendererResources?.();
       parsedDiff = null;
     };
   });
 
   async function initializeViewer() {
+    const resources = acquireDiffRenderer();
+    releaseRendererResources = resources.release;
     try {
-      // Diffs uses browser DOM APIs; load it only after the viewer mounts.
-      const library = await import("@pierre/diffs");
-      if (destroyed) {
-        return;
-      }
-
-      const viewer = new library.CodeView<HunkAnnotation>();
+      const { library, workers } = await resources.ready;
+      if (destroyed) { resources.release(); return; }
+      const viewer = new library.CodeView<HunkAnnotation>({}, workers);
       viewer.setup(viewerContainer);
-      renderer = { library, viewer };
+      renderer = { viewer, annotationName: library.getLineAnnotationName };
     } catch (caught) {
+      resources.release();
       if (!destroyed) {
         renderError = formatError(caught);
       }
@@ -155,10 +221,18 @@
     selectionController?.abort();
     selectionController = new AbortController();
     const signal = selectionController.signal;
-    diff = null;
-    hunkPreview = null;
+    const requestKey = buildFileDiffRequestKey(repositoryId, currentSnapshot, source, commit, file, contentRevision);
+    const selectionKey = buildFileDiffSelectionKey(repositoryId, source, commit, file);
+    if (selectionKey !== activeSelectionKey) {
+      activeSelectionKey = selectionKey;
+      activeSelection += 1;
+      diff = null;
+      parsedDiff = null;
+      hunkPreview = null;
+      reviewedRequestKey = "";
+      selectedHunks = [];
+    }
     hunkError = "";
-    selectedHunks = [];
     error = "";
     if (renderer) renderError = "";
     loading = true;
@@ -192,17 +266,28 @@
 
       const result = await resultPromise;
       if (!destroyed && request === activeRequest) {
-        diff = result.diff;
+        const nextDiff = reuseFileDiff(diff, result.diff);
+        if (nextDiff !== diff) {
+          contentVersion += 1;
+          hunkPreview = null;
+          selectedHunks = [];
+          diff = nextDiff;
+        }
         // Contents are ready before the Git patch. The continuation shares
         // their status/index snapshot and first full-file read with preview.
         if ((source === "workingTree" || source === "staged") && !diff.isBinary && !diff.omittedContent) {
-          if (result.hunkError) hunkError = result.hunkError;
-          else void loadHunkPreview(request, repositoryId, source, file.path, signal, result.hunkContextId);
+          if (result.hunkError) {
+            hunkError = result.hunkError;
+            hunkPreview = null;
+            selectedHunks = [];
+          }
+          else void loadHunkPreview(request, repositoryId, source, file.path, signal, requestKey, result.hunkContextId);
         }
       }
     } catch (caught) {
       if (!destroyed && request === activeRequest) {
         error = formatError(caught);
+        reviewedRequestKey = "";
       }
     } finally {
       if (!destroyed && request === activeRequest) {
@@ -211,18 +296,27 @@
     }
   }
 
-  async function loadHunkPreview(request: number, repositoryId: string, source: DiffSource, filePath: string, signal: AbortSignal, contextId?: string) {
+  async function loadHunkPreview(request: number, repositoryId: string, source: DiffSource, filePath: string, signal: AbortSignal, requestKey: string, contextId?: string) {
     try {
       const preview = await client.getHunkPreview({ repositoryId, filePath, staged: source === "staged", ...(contextId ? { contextId } : {}) }, signal);
-      if (!destroyed && request === activeRequest) hunkPreview = preview;
+      if (!destroyed && request === activeRequest) {
+        const nextPreview = reuseHunkPreview(hunkPreview, preview);
+        if (nextPreview !== hunkPreview) selectedHunks = [];
+        hunkPreview = nextPreview;
+        reviewedRequestKey = requestKey;
+      }
     } catch (caught) {
-      if (!destroyed && request === activeRequest) hunkError = formatError(caught);
+      if (!destroyed && request === activeRequest) {
+        hunkError = formatError(caught);
+        reviewedRequestKey = "";
+      }
     }
   }
 
   function renderView(
     currentRenderer: typeof renderer,
     currentDiff: CommitFileDiff | null,
+    prepared: typeof parsedDiff,
     view: ContentViewMode,
     mode: DiffViewMode,
     wrap: boolean,
@@ -232,15 +326,22 @@
       return;
     }
 
-    const { viewer, library } = currentRenderer;
+    const { viewer } = currentRenderer;
     if (!currentDiff || currentDiff.isBinary || currentDiff.omittedContent) {
+      hunkActions = new Map();
       renderError = "";
       viewer.setItems([]);
-      parsedDiff = null;
       return;
     }
 
+    const unchanged = currentDiff.originalContent === currentDiff.modifiedContent;
+    // Keep the displayed rows and highlighting while a refreshed snapshot or
+    // reviewed hunk patch is parsed. Replace them only with a complete result.
+    if (view === "diff" && !unchanged &&
+        (prepared?.source !== currentDiff || prepared.preview !== hunkPreview)) return;
+
     try {
+      hunkActions = new Map();
       renderError = "";
       viewer.setOptions({
         theme: resolveDiffThemeName(themeAppearance),
@@ -256,10 +357,17 @@
         hunkSeparators: "line-info",
         diffIndicators: "classic",
         lineDiffType: "none",
+        // Keep very large files as virtualized text; highlighting is optional
+        // and must not allocate a whole-file token tree for enormous inputs.
+        tokenizeMaxLength: currentDiff.originalContent.length + currentDiff.modifiedContent.length > 256 * 1024 ? 0 : 20_000,
+        tokenizeMaxLineLength: 1000,
         overflow: wrap ? "wrap" : "scroll",
         enableLineSelection: true,
         lineHoverHighlight: "both",
-        renderAnnotation: (annotation) => untrack(() => renderHunkAction(annotation.metadata)),
+        // Pierre eagerly creates every annotation's DOM even in virtualized
+        // views. Mount action controls only for slots in the rendered window.
+        renderAnnotation: undefined,
+        onPostRender: (node, _instance, phase) => untrack(() => syncVisibleHunkActions(node, phase === "unmount")),
         // These measurements match the shared T3 separator stylesheet.
         itemMetrics: { hunkSeparatorHeight: 24, spacing: 0, paddingTop: 0, paddingBottom: 8 },
         layout: { paddingTop: 0, paddingBottom: 0, gap: 0 },
@@ -268,11 +376,11 @@
       const modifiedFile: FileContents = {
         name: currentDiff.modifiedPath,
         contents: currentDiff.modifiedContent,
+        cacheKey: `${viewerId}:file:${contentVersion}:modified`,
       };
 
       // A pure rename has no hunks for Diffs to render. Keep its full contents
       // available in the expanded views and show an empty state in Hunks.
-      const unchanged = currentDiff.originalContent === currentDiff.modifiedContent;
       if (unchanged && view === "diff" && mode === "hunks") {
         viewer.setItems([]);
         return;
@@ -281,41 +389,34 @@
       if (view === "file" || unchanged) {
         // Deleted files still have useful original contents to inspect.
         const file = view === "file" && showingDeletedFile
-          ? { name: currentDiff.originalPath ?? currentDiff.modifiedPath, contents: currentDiff.originalContent }
+          ? { name: currentDiff.originalPath ?? currentDiff.modifiedPath, contents: currentDiff.originalContent, cacheKey: `${viewerId}:file:${contentVersion}:original` }
           : modifiedFile;
-        viewer.setItems(file.contents === "" ? [] : [{ id: "file", type: "file", file, version: ++renderVersion }]);
+        viewer.setItems(file.contents === "" ? [] : [{ id: file.cacheKey!, type: "file", file, version: ++renderVersion }]);
         return;
       }
 
-      // Reuse the parsed diff when changing layout or wrapping a large file.
-      if (parsedDiff?.source !== currentDiff || parsedDiff.preview !== hunkPreview) {
-        const parseStartedAt = performance.now();
-        const originalFile: FileContents | null = currentDiff.originalPath === null
-          ? null
-          : { name: currentDiff.originalPath, contents: currentDiff.originalContent };
-        parsedDiff = {
-          source: currentDiff,
-          preview: hunkPreview,
-          metadata: hunkPreview && !hunkPreview.unavailableReason && hunkPreview.patch
-            ? library.parsePatchFiles(hunkPreview.patch, hunkPreview.revision, true)[0].files[0]
-            : library.parseDiffFromFile(originalFile, modifiedFile, { context: 3 }, true),
-        };
-        recordDiffDiagnostic("parse", performance.now() - parseStartedAt, currentDiff);
+      // Layout, theme, and wrapping reuse the worker result without reparsing.
+      if (prepared?.source !== currentDiff || prepared.preview !== hunkPreview) {
+        return;
       }
 
       const preview = hunkPreview;
       const annotations: DiffLineAnnotation<HunkAnnotation>[] = preview && !preview.unavailableReason && onApplyHunks
-        ? parsedDiff.metadata.hunks.map((hunk, id) => ({
+        ? prepared.metadata.hunks.map((hunk, id) => ({
             // Place controls directly after their Git hunk, including additions
             // and deletions where only one side has any lines.
             side: hunk.additionCount ? "additions" : "deletions",
             lineNumber: hunk.additionCount
               ? hunk.additionStart + hunk.additionCount - 1
               : hunk.deletionStart + hunk.deletionCount - 1,
-            metadata: { id: preview.hunks[id].id, header: preview.hunks[id].header, request: activeRequest, revision: preview.revision },
+            metadata: { id: preview.hunks[id].id, header: preview.hunks[id].header, request: activeSelection, revision: preview.revision },
           }))
         : [];
-      viewer.setItems([{ id: "diff", type: "diff", fileDiff: parsedDiff.metadata, annotations, version: ++renderVersion }]);
+      for (const annotation of annotations) hunkActions.set(currentRenderer.annotationName(annotation), annotation.metadata);
+      // Pierre retains a reused item's old highlighted text until its next
+      // highlight finishes. New content needs a fresh renderer immediately;
+      // layout/theme changes keep the same parsed result and item identity.
+      viewer.setItems([{ id: prepared.metadata.cacheKey!, type: "diff", fileDiff: prepared.metadata, annotations, version: ++renderVersion }]);
     } catch (caught) {
       renderError = formatError(caught);
     }
@@ -340,6 +441,31 @@
     selectedHunks = selectedHunks.includes(id) ? selectedHunks.filter((selected) => selected !== id) : [...selectedHunks, id];
   }
 
+  function syncVisibleHunkActions(node: HTMLElement, unmount: boolean) {
+    const mounted = mountedHunkActions.get(node) ?? new Map<string, { element: HTMLElement; hunk: HunkAnnotation }>();
+    mountedHunkActions.set(node, mounted);
+    const visible = new Set<string>();
+    if (!unmount) for (const slot of node.shadowRoot?.querySelectorAll<HTMLSlotElement>("slot[name]") ?? []) {
+      const hunk = hunkActions.get(slot.name);
+      if (!hunk) continue;
+      visible.add(slot.name);
+      const cached = mounted.get(slot.name);
+      if (cached && cached.hunk.request === hunk.request && cached.hunk.revision === hunk.revision) continue;
+      cached?.element.remove();
+      const element = document.createElement("div");
+      element.slot = slot.name;
+      element.dataset.annotationSlot = "";
+      element.style.whiteSpace = "normal";
+      element.appendChild(renderHunkAction(hunk));
+      node.appendChild(element);
+      mounted.set(slot.name, { element, hunk });
+    }
+    for (const [name, { element }] of mounted) if (!visible.has(name)) {
+      element.remove();
+      mounted.delete(name);
+    }
+  }
+
   function renderHunkAction(hunk: HunkAnnotation) {
     const row = document.createElement("div");
     row.className = "inline-hunk-actions";
@@ -348,10 +474,11 @@
     const checkbox = document.createElement("input");
     checkbox.type = "checkbox";
     checkbox.checked = selectedHunks.includes(hunk.id);
-    checkbox.disabled = pending || loading || Boolean(renderError) || !onApplyHunks;
+    checkbox.disabled = hunkActionsDisabled;
     checkbox.setAttribute("aria-label", `Select hunk ${hunk.id + 1}`);
     checkbox.onchange = () => {
-      if (hunk.request === activeRequest && !destroyed && !pending && !loading) toggleHunk(hunk.id);
+      if (hunk.request === activeSelection && hunk.revision === hunkPreview?.revision &&
+          !destroyed && !hunkActionsDisabled) toggleHunk(hunk.id);
     };
     label.append(checkbox, `Hunk ${hunk.id + 1}`);
     const header = document.createElement("code");
@@ -363,14 +490,14 @@
     action.setAttribute("aria-label", `${action.textContent} ${hunk.id + 1}`);
     action.disabled = checkbox.disabled;
     action.onclick = () => {
-      if (!destroyed && hunk.request === activeRequest && hunk.revision === hunkPreview?.revision) submitHunks([hunk.id]);
+      if (!destroyed && hunk.request === activeSelection && hunk.revision === hunkPreview?.revision) submitHunks([hunk.id]);
     };
     row.append(label, header, action);
     return row;
   }
 
   function submitHunks(ids = [...selectedHunks]) {
-    if (!hunkPreview || pending || loading || renderError || !ids.length) return;
+    if (!hunkPreview || hunkActionsDisabled || !ids.length) return;
     selectedHunks = [];
     onApplyHunks?.({ repositoryId, filePath: selectedFile.path, staged: diffSource === "staged", revision: hunkPreview.revision, hunkIds: ids });
   }
@@ -403,6 +530,8 @@
   }
 
   function retryDiff() {
+    // Retry must restart parsing even when the server returns identical text.
+    activeSelectionKey = "";
     if (!renderer) {
       void initializeViewer();
     }
@@ -460,13 +589,13 @@
     </button>
   </header>
 
-  {#if (diffSource === "workingTree" || diffSource === "staged") && !loading && diff && !diff.omittedContent}
+  {#if (diffSource === "workingTree" || diffSource === "staged") && diff && !diff.omittedContent}
     {#if hunkError || hunkPreview?.unavailableReason}
       <div class="hunk-controls"><p class="text-xs text-[var(--app-theme-text-muted)]">{hunkError || hunkPreview?.unavailableReason}</p></div>
     {:else if selectedHunks.length && contentViewMode === "diff"}
       <div class="hunk-controls flex items-center justify-between gap-3" aria-label="Selected hunks">
         <span class="text-xs text-[var(--app-theme-text-muted)]">{selectedHunks.length} {selectedHunks.length === 1 ? "hunk" : "hunks"} selected</span>
-        <button type="button" class="state-action !mt-0" disabled={pending || loading || !renderer || Boolean(renderError) || !onApplyHunks} onclick={() => submitHunks()}>
+        <button type="button" class="state-action !mt-0" disabled={hunkActionsDisabled} onclick={() => submitHunks()}>
           {diffSource === "staged" ? "Unstage selected hunks" : "Stage selected hunks"}
         </button>
       </div>
@@ -488,7 +617,7 @@
       <div class="viewer-state" role="alert">
         <div class="state-message state-error">
           <p class="state-title">Could not load this file</p>
-          <p class="state-detail">{error || renderError}</p>
+          <p class="state-detail">{error || (contentViewMode === "diff" ? parseError : "") || renderError}</p>
           <button class="state-action" type="button" onclick={retryDiff}>Retry</button>
         </div>
       </div>

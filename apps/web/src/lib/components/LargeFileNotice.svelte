@@ -5,10 +5,9 @@
 </script>
 
 <div class="large-file-notice" role="status">
-  <p class="notice-title">Large file content omitted</p>
-  <p>{omitted.reason} Automatic diffs are limited to {omitted.maxBytesPerSide / 1024} KiB,
-    {omitted.maxLinesPerSide} lines per side, and {omitted.maxLineBytes / 1024} KiB per line.</p>
-  <p>No complete diff was loaded. Hunk actions are unavailable; whole-file actions remain available.</p>
+  <p class="notice-title">Update the server to view this file</p>
+  <p>This server is running an older version that omits larger files. Update or restart it
+    with the current GitGui version to view the complete diff.</p>
   <details>
     <summary>Inspect text prefixes (up to 8 KiB per side)</summary>
     <p>These prefixes omit the rest of each file and may end mid-line. They are not a complete diff.</p>
@@ -25,7 +24,7 @@
       Use <code>git diff</code> for working-tree changes, <code>git diff --cached</code> for staged changes,
       or <code>git show &lt;commit&gt;</code> for a commit. These commands inspect all changed paths;
       add a literal path filter if needed. Open working files in an editor that supports large files.</p>
-    <p>For a remote repository, run these commands on that host. GitGui does not load full content above these limits.</p>
+    <p>For a remote repository, run these commands on that host.</p>
   </details>
 </div>
 

@@ -3699,23 +3699,15 @@ fn protocol_diff(diff: CoreCommitFileDiff) -> ProtocolCommitFileDiff {
         modified_content: diff.modified_content,
         is_binary: diff.is_binary,
         message: diff.message,
-        omitted_content: diff
-            .omitted_content
-            .map(|omitted| gitgui_protocol::OmittedDiffContent {
-                reason: omitted.reason,
-                max_bytes_per_side: omitted.max_bytes_per_side,
-                max_lines_per_side: omitted.max_lines_per_side,
-                max_line_bytes: omitted.max_line_bytes,
-                original_preview: omitted.original_preview,
-                modified_preview: omitted.modified_preview,
-            }),
+        patch: diff.patch,
+        omitted_content: None,
     }
 }
 
 #[cfg(test)]
 #[test]
-fn omitted_diff_metadata_survives_cache_and_wire_conversion() {
-    use gitgui_core::git::{cache::CommitFilesCache, repository::OmittedDiffContent};
+fn native_patch_and_complete_content_survive_cache_and_wire_conversion() {
+    use gitgui_core::git::cache::CommitFilesCache;
     let key = CommitFileDiffKey {
         repo_root: "/repo".into(),
         commit_hash: "commit".into(),
@@ -3724,34 +3716,27 @@ fn omitted_diff_metadata_survives_cache_and_wire_conversion() {
         original_path: None,
         status: "A".into(),
     };
+    let content = "const value = 42;\n".repeat(10_000);
     let diff = CoreCommitFileDiff {
         original_path: None,
         modified_path: "large.txt".into(),
         original_content: String::new(),
-        modified_content: String::new(),
+        modified_content: content.clone(),
         is_binary: false,
         message: None,
-        omitted_content: Some(OmittedDiffContent {
-            reason: "Byte limit".into(),
-            max_bytes_per_side: 65536,
-            max_lines_per_side: 500,
-            max_line_bytes: 8192,
-            original_preview: String::new(),
-            modified_preview: "prefix".into(),
-        }),
+        patch: Some("native patch".into()),
     };
     let mut cache = CommitFilesCache::default();
     cache.insert_diff(key.clone(), diff);
     let wire = protocol_diff(cache.get_diff(&key).unwrap());
     let serialized = serde_json::to_value(&wire).unwrap();
-    assert_eq!(serialized["omittedContent"]["modifiedPreview"], "prefix");
-    assert_eq!(serialized["modifiedContent"], "");
+    assert_eq!(serialized["patch"], "native patch");
+    assert_eq!(serialized["modifiedContent"], content);
+    assert!(serialized.get("omittedContent").is_none());
     let mut legacy = serialized;
-    legacy.as_object_mut().unwrap().remove("omittedContent");
+    legacy.as_object_mut().unwrap().remove("patch");
     assert!(serde_json::from_value::<ProtocolCommitFileDiff>(legacy)
-        .unwrap()
-        .omitted_content
-        .is_none());
+        .unwrap().patch.is_none());
 }
 
 fn core_changed_file_to_commit_file(file: &CoreChangedFile) -> CoreCommitFile {

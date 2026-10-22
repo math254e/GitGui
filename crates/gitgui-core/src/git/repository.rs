@@ -8,22 +8,6 @@ use std::io::Read;
 use std::path::Path;
 use std::process::Stdio;
 
-pub const DIFF_MAX_BYTES: usize = 64 * 1024;
-pub const DIFF_MAX_LINES: usize = 500;
-pub const DIFF_MAX_LINE_BYTES: usize = 8 * 1024;
-const PREVIEW_MAX_BYTES: usize = 8 * 1024;
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct OmittedDiffContent {
-    pub reason: String,
-    pub max_bytes_per_side: usize,
-    pub max_lines_per_side: usize,
-    pub max_line_bytes: usize,
-    pub original_preview: String,
-    pub modified_preview: String,
-}
-
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RepositoryInfo {
@@ -147,7 +131,7 @@ pub struct CommitFileDiff {
     pub is_binary: bool,
     pub message: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub omitted_content: Option<OmittedDiffContent>,
+    pub patch: Option<String>,
 }
 
 pub fn load_repository(path: &str) -> Result<RepositorySnapshot, GitError> {
@@ -297,35 +281,16 @@ pub fn load_commit_working_tree_file_diff(
     } else {
         load_file_from_working_tree(root, &file.path)?
     };
-    let is_binary = original_content.is_binary() || modified_content.is_binary();
-    let omitted_content = omitted_content(&original_content, &modified_content, is_binary);
-    let message = if is_binary {
-        Some("Binary file content cannot be displayed.".to_string())
-    } else {
-        original_content.message().or_else(|| modified_content.message()).map(ToString::to_string)
-    };
-
-    Ok(CommitFileDiff {
-        original_path: if file.status.starts_with('A') {
+    file_diff(
+        if file.status.starts_with('A') {
             None
         } else {
             Some(original_path.to_string())
         },
-        modified_path: file.path.clone(),
-        original_content: if omitted_content.is_some() {
-            String::new()
-        } else {
-            original_content.into_text()
-        },
-        modified_content: if omitted_content.is_some() {
-            String::new()
-        } else {
-            modified_content.into_text()
-        },
-        is_binary,
-        message,
-        omitted_content,
-    })
+        file.path.clone(),
+        original_content,
+        modified_content,
+    )
 }
 
 pub fn load_commit_file_diff(
@@ -350,35 +315,16 @@ pub fn load_commit_file_diff(
         load_file_at_revision(root, commit_hash, &file.path)?
     };
 
-    let is_binary = original_content.is_binary() || modified_content.is_binary();
-    let omitted_content = omitted_content(&original_content, &modified_content, is_binary);
-    let message = if is_binary {
-        Some("Binary file content cannot be displayed.".to_string())
-    } else {
-        original_content.message().or_else(|| modified_content.message()).map(ToString::to_string)
-    };
-
-    Ok(CommitFileDiff {
-        original_path: if status == 'A' {
+    file_diff(
+        if status == 'A' {
             None
         } else {
             Some(original_path.to_string())
         },
-        modified_path: file.path.clone(),
-        original_content: if omitted_content.is_some() {
-            String::new()
-        } else {
-            original_content.into_text()
-        },
-        modified_content: if omitted_content.is_some() {
-            String::new()
-        } else {
-            modified_content.into_text()
-        },
-        is_binary,
-        message,
-        omitted_content,
-    })
+        file.path.clone(),
+        original_content,
+        modified_content,
+    )
 }
 
 pub fn load_working_tree_file_diff(
@@ -433,42 +379,84 @@ pub(crate) fn load_working_tree_file_diff_with_content(
     } else if staged {
         load_file_from_index(root, &file.path)?
     } else if let Some(bytes) = worktree_content {
-        let limited = bytes.len() > DIFF_MAX_BYTES;
-        classify_content(bytes, limited)
+        classify_content(bytes)
     } else {
         load_file_from_working_tree(root, &file.path)?
     };
 
-    let is_binary = original_content.is_binary() || modified_content.is_binary();
-    let omitted_content = omitted_content(&original_content, &modified_content, is_binary);
-    let message = if is_binary {
-        Some("Binary file content cannot be displayed.".to_string())
-    } else {
-        original_content.message().or_else(|| modified_content.message()).map(ToString::to_string)
-    };
-
-    Ok(CommitFileDiff {
-        original_path: if status == '?' || status == 'A' {
+    file_diff(
+        if status == '?' || status == 'A' {
             None
         } else if !staged && status_is_present(index_status) && index_status != '?' {
             Some(file.path.clone())
         } else {
             Some(original_path.to_string())
         },
-        modified_path: file.path.clone(),
-        original_content: if omitted_content.is_some() {
-            String::new()
-        } else {
-            original_content.into_text()
-        },
-        modified_content: if omitted_content.is_some() {
-            String::new()
-        } else {
-            modified_content.into_text()
-        },
+        file.path.clone(),
+        original_content,
+        modified_content,
+    )
+}
+
+fn file_diff(
+    original_path: Option<String>,
+    modified_path: String,
+    original: FileContent,
+    modified: FileContent,
+) -> Result<CommitFileDiff, GitError> {
+    let is_binary = original.is_binary() || modified.is_binary();
+    let message = if is_binary {
+        Some("Binary file content cannot be displayed.".to_string())
+    } else {
+        original
+            .message()
+            .or_else(|| modified.message())
+            .map(ToString::to_string)
+    };
+    let original_content = original.into_text();
+    let modified_content = modified.into_text();
+    // Git computes the patch from the exact content snapshot sent to the client.
+    // This avoids a second read racing with edits and the browser's quadratic
+    // JavaScript diff algorithm on files with many changed lines.
+    let patch = if is_binary || message.is_some() {
+        None
+    } else if original_content == modified_content {
+        Some(String::new())
+    } else {
+        let directory = tempfile::tempdir().map_err(content_error)?;
+        fs::write(directory.path().join("original"), &original_content).map_err(content_error)?;
+        fs::write(directory.path().join("modified"), &modified_content).map_err(content_error)?;
+        Some(GitCommand::run_diff(
+            &[
+                "-c",
+                "core.autocrlf=false",
+                "diff",
+                "--no-index",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--no-color",
+                "--text",
+                "--unified=3",
+                "--inter-hunk-context=0",
+                "--diff-algorithm=myers",
+                "--no-indent-heuristic",
+                "--src-prefix=a/",
+                "--dst-prefix=b/",
+                "--",
+                "original",
+                "modified",
+            ],
+            directory.path(),
+        )?)
+    };
+    Ok(CommitFileDiff {
+        original_path,
+        modified_path,
+        original_content,
+        modified_content,
         is_binary,
         message,
-        omitted_content,
+        patch,
     })
 }
 
@@ -938,7 +926,6 @@ enum FileContent {
     Text(String),
     Binary,
     Missing(String),
-    Omitted { preview: String, reason: String },
 }
 
 impl FileContent {
@@ -954,41 +941,6 @@ impl FileContent {
             _ => String::new(),
         }
     }
-    fn preview(&self) -> String {
-        let text = match self {
-            Self::Text(text) | Self::Omitted { preview: text, .. } => text,
-            Self::Binary | Self::Missing(_) => return String::new(),
-        };
-        let mut end = text.len().min(PREVIEW_MAX_BYTES);
-        while !text.is_char_boundary(end) {
-            end -= 1;
-        }
-        text[..end].to_string()
-    }
-}
-
-fn omitted_content(
-    original: &FileContent,
-    modified: &FileContent,
-    binary: bool,
-) -> Option<OmittedDiffContent> {
-    if binary {
-        return None;
-    }
-    let reason = match (original, modified) {
-        (FileContent::Omitted { reason, .. }, _) | (_, FileContent::Omitted { reason, .. }) => {
-            reason.clone()
-        }
-        _ => return None,
-    };
-    Some(OmittedDiffContent {
-        reason,
-        max_bytes_per_side: DIFF_MAX_BYTES,
-        max_lines_per_side: DIFF_MAX_LINES,
-        max_line_bytes: DIFF_MAX_LINE_BYTES,
-        original_preview: original.preview(),
-        modified_preview: modified.preview(),
-    })
 }
 
 fn content_error(message: impl ToString) -> GitError {
@@ -999,48 +951,32 @@ fn content_error(message: impl ToString) -> GitError {
     }
 }
 
-// Read one sentinel byte beyond the budget, including when a working file grows
-// during the read. Never allocate based on untrusted metadata or blob size.
-fn read_content(reader: impl Read) -> Result<(Vec<u8>, bool), GitError> {
+fn read_content(mut reader: impl Read) -> Result<Vec<u8>, GitError> {
     let mut bytes = Vec::new();
-    reader
-        .take((DIFF_MAX_BYTES + 1) as u64)
-        .read_to_end(&mut bytes)
-        .map_err(|e| content_error(format!("Failed to read file content: {e}")))?;
-    let limited = bytes.len() > DIFF_MAX_BYTES;
-    Ok((bytes, limited))
+    let mut buffer = [0; 65536];
+    loop {
+        let count = reader
+            .read(&mut buffer)
+            .map_err(|e| content_error(format!("Failed to read file content: {e}")))?;
+        if count == 0 {
+            break;
+        }
+        bytes.extend_from_slice(&buffer[..count]);
+        // Stop binary reads early; text files remain available in full.
+        if buffer[..count].contains(&0) {
+            break;
+        }
+    }
+    Ok(bytes)
 }
 
-fn classify_content(mut bytes: Vec<u8>, limited: bool) -> FileContent {
+fn classify_content(bytes: Vec<u8>) -> FileContent {
     if bytes.contains(&0) {
         return FileContent::Binary;
     }
-    if let Err(error) = std::str::from_utf8(&bytes) {
-        if limited && error.error_len().is_none() {
-            bytes.truncate(error.valid_up_to());
-        } else {
-            return FileContent::Binary;
-        }
-    }
-    let text = String::from_utf8(bytes).expect("validated UTF-8");
-    let reason = if limited {
-        Some("A file side exceeds the byte limit.")
-    } else if text.lines().count() > DIFF_MAX_LINES {
-        Some("A file side exceeds the line limit.")
-    } else if text
-        .split('\n')
-        .any(|line| line.len() > DIFF_MAX_LINE_BYTES)
-    {
-        Some("A line exceeds the line-length limit.")
-    } else {
-        None
-    };
-    match reason {
-        Some(reason) => FileContent::Omitted {
-            preview: text,
-            reason: reason.to_string(),
-        },
-        None => FileContent::Text(text),
+    match String::from_utf8(bytes) {
+        Ok(text) => FileContent::Text(text),
+        Err(_) => FileContent::Binary,
     }
 }
 
@@ -1063,7 +999,7 @@ fn load_file_from_index(root: &Path, file_path: &str) -> Result<FileContent, Git
 fn load_file_from_git_spec(root: &Path, spec: &str) -> Result<FileContent, GitError> {
     let started = std::time::Instant::now();
     // cat-file emits raw blob bytes, without textconv or external diff helpers.
-    // Stderr is not captured: diagnostics must not become another unbounded pipe.
+    // Stderr is not captured; failures use a path-scoped diagnostic below.
     let mut child = git_command()
         .args(["cat-file", "blob", spec])
         .current_dir(root)
@@ -1072,24 +1008,25 @@ fn load_file_from_git_spec(root: &Path, spec: &str) -> Result<FileContent, GitEr
         .spawn()
         .map_err(|e| content_error(format!("Failed to execute git: {e}")))?;
     let result = read_content(child.stdout.take().expect("piped stdout"));
-    if result.as_ref().map_or(true, |(_, limited)| *limited) {
+    if result.as_ref().map_or(true, |bytes| bytes.contains(&0)) {
         // This is the exact child owned by this read; reap it even on read errors.
         let _ = child.kill();
     }
     let status = child
         .wait()
         .map_err(|e| content_error(format!("Failed to wait for git: {e}")))?;
-    let (bytes, limited) = result?;
+    let bytes = result?;
+    let binary = bytes.contains(&0);
     tracing::info!(target: "gitgui::git_command", category = "cat-file",
         elapsed_ms = started.elapsed().as_secs_f64() * 1000.0,
-        stdout_bytes = bytes.len(), output_limited = limited, exit_code = status.code(),
+        stdout_bytes = bytes.len(), binary, exit_code = status.code(),
         "Git subprocess completed");
-    if !limited && !status.success() {
+    if !binary && !status.success() {
         return Err(content_error(format!(
             "Could not read Git blob {spec}; refresh and try again."
         )));
     }
-    Ok(classify_content(bytes, limited))
+    Ok(classify_content(bytes))
 }
 
 fn load_file_from_working_tree(root: &Path, file_path: &str) -> Result<FileContent, GitError> {
@@ -1099,10 +1036,10 @@ fn load_file_from_working_tree(root: &Path, file_path: &str) -> Result<FileConte
     }
     let file = fs::File::open(&full_path)
         .map_err(|e| content_error(format!("Failed to open {file_path}: {e}")))?;
-    let (bytes, limited) = read_content(file)?;
+    let bytes = read_content(file)?;
     #[cfg(test)]
     super::command::test_metrics::read(bytes.len());
-    Ok(classify_content(bytes, limited))
+    Ok(classify_content(bytes))
 }
 
 #[cfg(test)]
@@ -1111,55 +1048,32 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
-    fn content_limits_cover_bytes_lines_long_lines_and_utf8_boundaries() {
-        let exact_bytes = format!("{}\n", "x".repeat(DIFF_MAX_LINE_BYTES - 1)).repeat(8);
-        assert_eq!(exact_bytes.len(), DIFF_MAX_BYTES);
-        let (bytes, limited) = read_content(exact_bytes.as_bytes()).unwrap();
-        assert!(!limited);
-        assert!(matches!(classify_content(bytes, limited), FileContent::Text(_)));
-        let unicode = FileContent::Text(format!("{}€", "x".repeat(PREVIEW_MAX_BYTES - 1)));
-        assert_eq!(unicode.preview().len(), PREVIEW_MAX_BYTES - 1);
-        let at_limit = format!("{}\n", "x".repeat(130)).repeat(DIFF_MAX_LINES);
-        assert!(matches!(
-            classify_content(at_limit.into_bytes(), false),
-            FileContent::Text(_)
-        ));
-        assert!(matches!(
-            classify_content(b"x\n".repeat(DIFF_MAX_LINES + 1), false),
-            FileContent::Omitted { .. }
-        ));
-        assert!(matches!(
-            classify_content(vec![b'x'; DIFF_MAX_LINE_BYTES], false),
-            FileContent::Text(_)
-        ));
-        assert!(matches!(
-            classify_content(vec![b'x'; DIFF_MAX_LINE_BYTES + 1], false),
-            FileContent::Omitted { .. }
-        ));
-        let (bytes, limited) = read_content(std::io::repeat(b'x')).unwrap();
-        assert_eq!(bytes.len(), DIFF_MAX_BYTES + 1);
-        assert!(limited);
-        assert!(matches!(
-            classify_content(bytes, limited),
-            FileContent::Omitted { .. }
-        ));
-        let mut partial_utf8 = vec![b'x'; DIFF_MAX_BYTES];
-        partial_utf8.push(0xe2);
-        let content = classify_content(partial_utf8, true);
-        assert!(matches!(content, FileContent::Omitted { .. }));
-        assert!(content.preview().len() <= PREVIEW_MAX_BYTES);
-        assert!(matches!(
-            classify_content(vec![0xff], false),
-            FileContent::Binary
-        ));
-        assert!(matches!(
-            classify_content(vec![0; DIFF_MAX_BYTES + 1], true),
-            FileContent::Binary
-        ));
+    fn text_contents_have_no_size_or_shape_cutoff_and_binary_reads_stop_early() {
+        for text in ["x\n".repeat(100_000), "x".repeat(256 * 1024), "const value = \"\u{20ac}\";\n".repeat(10_000)] {
+            let bytes = read_content(text.as_bytes()).unwrap();
+            assert_eq!(classify_content(bytes).into_text(), text);
+        }
+        let binary = read_content(std::io::repeat(0)).unwrap();
+        assert!(binary.len() <= 65536);
+        assert!(matches!(classify_content(binary), FileContent::Binary));
+        assert!(matches!(classify_content(vec![0xff]), FileContent::Binary));
     }
 
     #[test]
-    fn large_content_is_bounded_for_worktree_index_commit_rename_and_deletion() {
+    fn snapshot_patch_preserves_line_endings_and_missing_final_newlines() {
+        let diff = file_diff(
+            Some("file.ts".into()), "file.ts".into(),
+            FileContent::Text("old\r\nlast".into()),
+            FileContent::Text("new\r\nlast".into()),
+        ).unwrap();
+        let patch = diff.patch.unwrap();
+        assert!(patch.contains("-old\r\n+new\r\n"));
+        assert!(patch.contains("\\ No newline at end of file"));
+        assert_eq!(diff.modified_content, "new\r\nlast");
+    }
+
+    #[test]
+    fn large_content_is_complete_for_worktree_index_commit_rename_and_deletion() {
         let repository = new_test_repository();
         let root = repository.0.as_path();
         run_test_git(root, &["init", "-q", "-b", "main"]);
@@ -1173,19 +1087,17 @@ mod tests {
             original_path: None,
             status: "??".to_string(),
         };
-        let assert_omitted = |diff: CommitFileDiff| {
+        let assert_complete = |diff: CommitFileDiff| {
             assert!(!diff.is_binary);
-            assert!(diff.original_content.is_empty() && diff.modified_content.is_empty());
-            let omitted = diff.omitted_content.unwrap();
-            assert!(omitted.original_preview.len() <= PREVIEW_MAX_BYTES);
-            assert!(omitted.modified_preview.len() <= PREVIEW_MAX_BYTES);
+            assert!(diff.original_content == large || diff.modified_content == large);
+            assert!(diff.patch.is_some());
         };
-        assert_omitted(
+        assert_complete(
             load_working_tree_file_diff(root.to_str().unwrap(), None, &file, false).unwrap(),
         );
         run_test_git(root, &["add", "--", path]);
         file.status = "A.".to_string();
-        assert_omitted(
+        assert_complete(
             load_working_tree_file_diff(root.to_str().unwrap(), None, &file, true).unwrap(),
         );
         run_test_git(root, &["commit", "-q", "-m", "large"]);
@@ -1193,8 +1105,8 @@ mod tests {
             .trim()
             .to_string();
         file.status = "A".to_string();
-        assert_omitted(load_commit_file_diff(root.to_str().unwrap(), &first, None, &file).unwrap());
-        assert_omitted(load_commit_working_tree_file_diff(root.to_str().unwrap(), &first, &file).unwrap());
+        assert_complete(load_commit_file_diff(root.to_str().unwrap(), &first, None, &file).unwrap());
+        assert_complete(load_commit_working_tree_file_diff(root.to_str().unwrap(), &first, &file).unwrap());
         let renamed = "renamed large.txt";
         run_test_git(root, &["mv", "--", path, renamed]);
         run_test_git(root, &["commit", "-q", "-m", "rename"]);
@@ -1206,13 +1118,13 @@ mod tests {
             original_path: Some(path.to_string()),
             status: "R100".to_string(),
         };
-        assert_omitted(
+        assert_complete(
             load_commit_file_diff(root.to_str().unwrap(), &second, Some(&first), &file).unwrap(),
         );
         fs::remove_file(root.join(renamed)).unwrap();
         file.original_path = None;
         file.status = ".D".to_string();
-        assert_omitted(
+        assert_complete(
             load_working_tree_file_diff(root.to_str().unwrap(), Some(&second), &file, false)
                 .unwrap(),
         );
@@ -1233,12 +1145,12 @@ mod tests {
         let normal =
             load_working_tree_file_diff(root.to_str().unwrap(), None, &file, false).unwrap();
         assert_eq!(normal.modified_content, "normal\n");
-        assert!(normal.omitted_content.is_none());
-        fs::write(root.join(&file.path), vec![0; DIFF_MAX_BYTES * 10]).unwrap();
+        assert!(normal.patch.as_ref().unwrap().contains("+normal"));
+        fs::write(root.join(&file.path), vec![0; 1024 * 1024]).unwrap();
         let binary =
             load_working_tree_file_diff(root.to_str().unwrap(), None, &file, false).unwrap();
         assert!(binary.is_binary);
-        assert!(binary.omitted_content.is_none());
+        assert!(binary.patch.is_none());
         assert!(binary.modified_content.is_empty());
     }
 

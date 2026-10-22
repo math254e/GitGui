@@ -1,147 +1,142 @@
-# Bounded large-file diffs
+# Large-file diffs
 
-Issue [#9](https://github.com/math254e/GitGui/issues/9) adds a server-enforced
-content budget. The original thresholds were measured locally before #3 landed; the integration
-with current main preserves its instrumentation and #5 shared continuations.
+Text files remain viewable regardless of line count, line length, or byte size.
+The former 64 KiB / 500-line / 8 KiB-per-line omission limits and the separate
+256 KiB hunk-patch limit have been removed. These limits prevented ordinary
+source files from being reviewed.
 
-## Behavior
+## Loading and ownership
 
-Each original and modified side must fit all three limits:
+1. `gitgui-core` reads complete UTF-8 contents from the worktree, index, or commit
+   blob. NUL-containing binary reads stop early; invalid UTF-8 retains the
+   existing binary state. Read failures remain errors rather than empty files.
+2. Core asks installed Git to diff the exact text snapshot being returned. It
+   writes the two sides to an owned temporary directory and runs
+   `git -c core.autocrlf=false diff --no-index` with explicit Myers/context
+   options and external diff/textconv disabled. Temporary names never contain
+   repository paths, and the directory is released when the operation returns.
+   Identical text needs no subprocess. This avoids recomputing the diff in
+   JavaScript and avoids rereading a changing worktree for its display patch.
+3. `gitgui-protocol::CommitFileDiff.patch` is an additive, optional unified
+   patch. It is absent for binary/unavailable contents and empty for identical
+   text. Rust generates TypeScript as usual. Older clients can ignore the field;
+   current clients can compute display diffs in a worker when an older server
+   returns complete contents without a patch. Legacy `omittedContent` is still
+   accepted, with a prompt to update the server; current servers never emit it.
+4. `apps/web/src/lib/diff/parse.worker.ts` parses the patch with Pierre's
+   `processFile`, including full contents. Line arrays are hydrated before
+   returning, so expanding context does not split files on the UI thread.
+   Changing the selection or unmounting aborts and terminates the worker.
+   Parsing failures show Retry; there is no synchronous fallback.
+   Working/index diff views wait for the continued Git hunk review before the
+   first parse. Raw snapshot comparisons can treat LF index text versus CRLF
+   worktree text as a full rewrite, whereas Git applies repository attributes
+   and clean filters. Showing both patches in succession changes the displayed
+   code. Only the reviewed patch is initially parsed; explicit review failure
+   or unavailability permits the snapshot fallback with hunk actions disabled.
+   File mode can still show full contents while the review is pending.
+   Background repository refreshes and later reviewed-hunk responses retain
+   the displayed rows until replacement parsing finishes. Equal contents and
+   equal reviewed revisions reuse their existing response objects, preserving
+   highlighting and scroll position. Only a new document selection or explicit
+   Retry clears the viewer. Mutable views still revalidate after status reads,
+   including coarse index notifications that do not identify a path. Transport
+   request generations are separate from selection generations so unchanged
+   revalidation does not invalidate mounted hunk controls. Actions remain
+   enabled for the displayed review during unchanged background revalidation.
+   A changed selected-file request key, replacement contents or review patch,
+   review failure, or active mutation blocks actions until the review matches
+   again. Background transport activity alone does not disable controls. Every
+   application still revalidates its revision on the server before writing.
+5. A separate Pierre `WorkerPoolManager` with one worker handles highlighting.
+   The script is a Vite `?worker` entry so package side-effect metadata cannot
+   tree-shake it into an empty production bundle. Both light/dark themes are
+   initialized together. Worker initialization failure shows Retry.
+   The repository page starts initialization before file selection and keeps
+   the pool alive across viewer mounts. The page and viewers release their
+   leases on unmount; the last release terminates the worker. Failed startup
+   can be retried. Cold CodeView rendering still requires an initialized pool.
+6. Pierre `CodeView` virtualizes visible rows for Hunks, Inline, Split, and File
+   views. Layout, wrapping, and appearance reuse the parsed metadata. Inputs
+   above 256 Ki characters across both sides, or above 20,000 lines in the
+   renderer, display as plain text. Lines longer than 1,000 characters skip
+   syntax tokenization. These are highlighting budgets: full text, context,
+   layouts, line selection, and Git hunk actions remain available.
+   Every parsed result (and file-content snapshot) has its own item/cache
+   identity. Reusing an item for different contents lets Pierre retain the
+   previous highlighted text until replacement highlighting finishes. Fresh
+   items show current plain text immediately; unchanged responses and layout
+   changes keep their existing identities.
+   Hunk action DOM is mounted only for annotation slots in the rendered window
+   through Pierre's public `onPostRender` callback. Its `renderAnnotation`
+   callback otherwise eagerly creates controls for every hunk, including those
+   off screen. Selection state stays in Svelte when controls leave the window.
 
-- 64 KiB of raw UTF-8 content;
-- 500 lines;
-- 8 KiB per line.
+Git still owns selectable hunk generation and application. The continued
+working-tree preview supplies display metadata from the reviewed Git patch,
+parsed in a worker using the same contents. Full revision hashing and stale
+content/index/HEAD checks remain required for mutations. Binary files, conflicts,
+renames, mode changes, symlinks, and submodules retain their existing action
+rules. No client patch becomes executable input to the server.
 
-At the limit, content remains eligible for the existing viewer. Above any limit,
-**both full-content strings are omitted**. The response includes optional
-`omittedContent` metadata with the reason, current limits, and at most 8 KiB of
-plain-text prefix per side. Prefixes respect UTF-8 boundaries, can end mid-line,
-and do not claim to be a patch or the complete file. No exact total size or line
-count is claimed: obtaining it would require reading the omitted content.
+The commit diff cache still enforces its 100-entry / 16 MiB retention budget,
+now including patches. A response larger than the cache budget is returned
+without retaining it. The hunk continuation cache retains only preconditions,
+never file contents or patches. RPC admission and prefetch limits are unchanged.
 
-The viewer explains the omission, offers an explicit “Inspect text prefixes”
-disclosure, and describes full inspection using Git or a capable editor on the
-repository host. Remote files must be inspected on their host. There is no
-unbounded “load anyway” action. The normal Hunks/Inline/Split/File renderer is
-never given prefixes. Whole-file staging/unstaging remains supported; hunk
-selection is unavailable for omitted content.
+## Verification
 
-Normal-sized text retains the current contents, parser, syntax highlighting,
-layouts, wrapping, and hunk actions. Detected binary/non-UTF-8 content retains
-the binary state and empty text representation. Binary detection examines only
-the bounded bytes: binary markers or encoding errors exclusively beyond that
-prefix cannot be detected. Such files conservatively use the omitted-content
-state and are never passed to the text renderer.
+Rust coverage checks full 100,000-line contents across working/index/root-commit,
+commit/worktree, rename, and deletion views; long lines; early binary detection;
+large patch output; and reviewed hunk staging/unstaging. Cache/wire coverage
+checks complete contents, patch retention, and older responses without `patch`.
+Client tests check worker cancellation, success/failure/transfer cleanup,
+100,000-line patch parsing, hydrated context, CRLF, and missing final newlines.
 
-The same limits apply to commit-versus-working-directory comparisons.
+Local browser checks on 2026-10-22 reused the existing Vite session and mounted
+the real Svelte viewer with controlled RPC fixtures. Git generated the patches.
+Cases included the previously blocked `CommitFileDiffViewer.svelte` commit,
+100,000-line rewrites (2.8 MB per side), sparse edits (3.0 MB per side), additions
+(2.5 MB), 6,000 lines of dense code, 256 KiB lines, and 10,000 separate hunks.
+Hunks/Inline/Split/File layouts, wrapping, scrolling to the end, hunk callbacks,
+offscreen hunk selection, and switching away from an intentionally expensive
+legacy parse all worked. The 10,000-hunk case mounted five action controls at
+the end of the file. No observed UI tasks exceeded 50 ms in the final sample; this is
+local evidence, not a latency guarantee. Screenshot capture used an isolated
+Edge browser after the shared preview screenshot operation timed out twice.
 
-## Pipeline and ownership
+A subsequent controlled refresh with highlighting delayed 2.4 seconds reproduced
+old code remaining visible for 2.5 seconds with a reused item ID. Separate item
+identities showed the replacement text within 53 ms in the same check. With
+repository renderer resources warmed, the actual latest-commit component fixture
+showed its first rows in 70 ms and another commit in 63 ms, using one highlight
+worker across both viewer mounts. These fixture timings exclude Git/RPC latency.
+Lifecycle tests cover shared leases, early unmount, pending startup cancellation,
+failed startup, and Retry. Cache identities include the viewer instance so a
+remount cannot reuse another document's highlighted contents.
 
-1. `gitgui-core` resolves each side from the working file, index, or commit blob.
-   Files are read through a capped reader; Git blobs use `git cat-file blob`
-   with piped stdout, rather than collecting all of `git show`. Each side reads
-   at most 65,537 bytes (64 KiB plus a sentinel byte), even if a file grows while
-   reading. A child exceeding the budget is terminated and reaped by its owner.
-   Read/lookup failures return errors rather than a successful empty diff.
-2. Core classifies the bounded bytes before constructing the response. Byte,
-   line-count, and line-length guards protect different shapes of large input.
-   Only prefixes survive an omission, so commit cache entries and their clones
-   are bounded too. Commit prefetch uses the same loader and cannot bypass it.
-3. The server maps core metadata to the canonical Rust protocol. TypeScript is
-   generated with `npm run protocol:generate`. The optional field is additive;
-   normal responses omit it and older responses deserialize with no omission.
-   Existing RPC methods, read scopes, and the direct client/server transport are
-   unchanged. Older clients can ignore the additive field but cannot explain an
-   omission; deploy matching client/server builds to obtain this UI.
-4. The Svelte viewer stores the response, clears its old renderer items/parsed
-   data, and displays omission independently of renderer initialization. It
-   requests supplementary hunk previews only after receiving eligible content.
-   Existing request-generation checks reject stale content and hunk responses.
-   RPC errors still show Retry; renderer errors remain errors for normal text.
-   Prefixes use escaped Svelte text inside scrollable, keyboard-focusable `pre`
-   elements; no highlighting or diff algorithm runs when expanding them.
-5. The shared file-view continuation caps the collected bytes during its first
-   read/hash and rejects hunk preparation for omitted content. Normal files keep
-   #5's shared status/index/read preconditions and stale-revision validation.
-   Staged contents are checked before hashing; direct hunk-preview RPCs use the
-   same preparation and return an explicit whole-file-action error for omission. Generated patch stdout is independently capped
-   at 256 KiB plus a sentinel, including if a file grows after the guard. An
-   oversized patch is an error with whole-file/Git guidance, never a partial
-   selectable patch. Independent patch line-count (2,032, including headers) and
-   line-length (8 KiB plus a diff marker) guards also cover growth between the
-   content check and the first revision hash. Existing stale-revision validation
-   still protects apply.
+The unstaged CRLF case was reproduced separately against the actual edited
+component: its snapshot patch contained 883 deleted and 1,001 added lines,
+while Git's normalized review contained 57 deleted and 175 added lines. A
+delayed-review browser comparison checks that the initial snapshot is never
+parsed/displayed and staging is enabled only for the final reviewed display.
 
-The content budget is Git domain behavior owned by Rust, not a connection-runtime
-policy. No Electron bridge, connection/session lifecycle, or vendored T3 runtime
-changes are needed. T3's workspace and connection-runtime references were read
-to confirm the existing ownership boundary.
+## Remaining costs
 
-## Local measurements and threshold rationale
+This is complete-file transfer, not a streaming or paged protocol. Server
+snapshot buffers, temporary disk space, JSON transfer, structured cloning, and
+client line arrays still scale with file size. Workers isolate expensive
+parsing/highlighting, and virtualization bounds mounted rows; they do not make
+arbitrary inputs free. Extremely large generated files can still incur memory,
+disk, and serialization costs. A future streaming design must preserve Git's
+snapshot and reviewed-mutation semantics rather than reintroduce source-file
+omission as a substitute for responsive rendering.
 
-Run `node scripts/measure-diff-parsing.mjs` after `npm ci`. The script uses the
-installed `@pierre/diffs@1.5.2`, the same `parseDiffFromFile` options as the viewer,
-three synchronous parses per input, and files in which every line changes. This
-is a deliberately expensive diff shape. On this Windows host, Node 24.13.0,
-2026-10-22, observed milliseconds were:
+`node scripts/measure-diff-parsing.mjs` compares Git patch generation and Pierre
+patch parsing on complete rewrites. Browser responsiveness requires measuring
+the real worker/viewer path as above.
 
-| Lines per side | Bytes per side | Three parse times (ms) |
-| --- | --- | --- |
-| 100 | 2,390 | 6, 2, 3 |
-| 250 | 6,140 | 10, 8, 7 |
-| 500 | 12,390 | 30, 30, 35 |
-| 1,000 | 24,890 | 123, 124, 110 |
-| 2,000 | 50,890 | 482, 710, 610 |
-| 5,000 | 128,890 | 5,495, 6,867, 5,289 |
-
-The line budget is deliberately conservative: even a 25 KiB file can block
-synchronous parsing for over 100 ms. A byte-only guard would miss that shape.
-500 fully changed lines stayed below a 50 ms task in this sample. The byte and
-line-length limits independently cap transfer, highlighting, and long-line
-layout work; they are conservative engineering budgets, not empirically proven
-universal latency thresholds. These Node parse timings exclude Git/status,
-networking, browser highlighting/layout, and cold library initialization. They
-are not #3's end-to-end instrumentation or a guarantee for every machine/input.
-
-## Verification and remaining limits
-
-Focused coverage exercises infinite-reader bounds, thresholds, UTF-8 boundaries,
-binary/non-UTF-8 content, missing content errors, large working/index/root-commit/
-rename/deletion sides, cache/wire conversion, legacy response compatibility,
-direct hunk guards, generated patch limits, whole-file actions, and UI state
-precedence. Local Chromium verification used an isolated repository and ephemeral
-server state, with 100,001-line files, and checked normal hunk rendering,
-working-tree/staged/commit omissions, binary display, correct `aria-busy`,
-disclosures initially closed, escaped script-like text, and no supplementary hunk
-request for an omitted file. The large-file response sizes were 19,264 bytes
-(working tree), 19,186 bytes (staged), and 18,925 bytes (commit), including JSON
-escaping and envelope overhead. After warming the normal viewer, no tasks above
-50 ms were observed while selecting the omitted working file and expanding its
-prefix disclosure. This is one local browser sample, not a latency guarantee.
-
-Validation: `npm run check` (zero errors/warnings), `npm run build`, web Vitest
-(76 passed, one opt-in live test skipped after integration), `cargo check --workspace`, and
-`git diff --check`. The default Rust suite reproduces four existing Windows
-failures on an untouched HEAD archive: one uses Windows-invalid filenames and
-three assume LF checkouts despite this host's `core.autocrlf`. With
-`GIT_CONFIG_COUNT=1`, `GIT_CONFIG_KEY_0=core.autocrlf`, and
-`GIT_CONFIG_VALUE_0=false` set for the test process, running
-`cargo test --workspace -- --skip discard_and_stage_treat_unusual_paths_as_literal_file_names`
-passes 57 core, 21 server, and one CORS test after integration, with one
-historical measurement ignored and the Windows-invalid-filename case skipped.
-Current-main integration retains continuation, cache, and concurrency tests.
-The former unbounded large-file continuation success fixture now uses eligible
-text; separate large-file cases verify omitted content, rejected continuation,
-and working whole-file actions.
-
-There is no full-file download, paging, streaming diff protocol, or worker-based
-parser in this change. Old clients talking to old servers are not protected by
-these limits. Current main includes bounded concurrent dispatch, cancellation,
-limited prefetch, and shared hunk work. Status/file-list size, Git subprocess
-deadlines, and remaining revision hashing costs are separate concerns. Content memory/transfer bounds do not imply a
-wall-clock deadline for Git, filesystem access, or unrelated repository work.
-The shared working-tree view preserves #5's single content read for eligible
-unstaged files. Large unstaged files stop that read/hash after a sentinel byte;
-large staged sides are rejected before the worktree revision hash. The existing
-full revision hash is still streamed for other workflows and eligible staged
-views whose unrelated working file may itself be large.
+For the local complete-rewrite CPU sample, 5,000 lines took 59 ms for Git and
+5 ms to parse its patch; 100,000 lines took 118 ms for Git and 86 ms to parse.
+Application patch parsing runs in the worker. These times exclude transfer,
+snapshot file writes, highlighting, and browser layout.

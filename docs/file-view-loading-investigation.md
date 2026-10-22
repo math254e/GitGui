@@ -21,10 +21,12 @@ preconditions while regenerating Git's patch and validating current contents.
 See [implementation and measured before/after work](file-view-work-measurement.md).
 The original investigation below describes the baseline, not the optimized path.
 
-**Follow-up:** Issue #9 now adds bounded core reads, omission metadata, a plain
-text inspection path, and hunk guards. See [Bounded large-file diffs](large-file-diffs.md)
-for the current behavior, local parser measurements, and remaining limits. The
-investigation below describes the original paths before that change.
+**Large-file update:** The #9 content omission limits have been removed.
+Rust returns complete contents and a Git-generated display patch. Browser
+workers parse/hydrate patches and highlight eligible files; large inputs keep
+all text using virtualized plain rendering. See [large-file diffs](large-file-diffs.md)
+for current behavior and browser measurements. The investigation below records
+the original paths before these changes.
 
 ## Summary
 

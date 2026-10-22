@@ -86,10 +86,10 @@ repository locks. Read cancellation is an optional `rpc.cancel` capability on
 the same authenticated socket. See [connection runtime](connection-runtime.md#concurrent-request-lifetime)
 for admission limits, cancellation, and disconnect ownership.
 
-File-diff content budgets are enforced by the Rust Git core before caching and
-transfer. The additive `omittedContent` response metadata lets the client explain
-omission and offer bounded plain-text prefixes without invoking the diff parser.
-See [Bounded large-file diffs](large-file-diffs.md) for limits and inspection paths.
+File-diff RPCs return complete text and an optional Git-generated `patch` from
+the same content snapshot. Text is not omitted based on byte size, line count,
+or line length. The client parses patches and highlights code in workers and
+virtualizes visible rows. See [Large-file diffs](large-file-diffs.md).
 
 ### Svelte client
 
@@ -142,8 +142,11 @@ The desktop shell forwards a `gitgui://` deep link to the renderer.
 the settings; `apps/web/src/lib/workspace/deep-links.ts` resolves them.
 
 The file viewer uses `@pierre/diffs` for syntax-highlighted file contents and
-virtualized diffs. Rust supplies the original and modified contents through the
-existing file-diff RPCs; the viewer computes display hunks from those contents.
+virtualized diffs. Rust supplies the original and modified contents and uses
+installed Git to compute a patch from that exact snapshot. A cancellable Web
+Worker parses and hydrates the patch; a separate worker handles highlighting.
+Large inputs render as plain text with all contents retained. The 16 MiB cache
+budget limits retention rather than the size of a file a person can inspect.
 Hunks collapses unchanged context, Inline expands it in a unified view, and
 Split expands it side by side. Both diff and file views support line wrapping.
 The browser-only renderer is loaded after the Svelte component mounts and is

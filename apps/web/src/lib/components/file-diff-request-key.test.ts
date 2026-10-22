@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { CommitFile, RepositorySnapshot } from "$lib/types/repository";
-import { buildFileDiffRequestKey } from "./file-diff-request-key";
+import { buildFileDiffRequestKey, buildFileDiffSelectionKey } from "./file-diff-request-key";
 
 const snapshot = { status: { headOid: "head" } } as RepositorySnapshot;
 const file = { path: "src/open.ts", status: " M" } as CommitFile;
@@ -24,5 +24,13 @@ describe("file diff request key", () => {
     const commit = { hash: "commit", parents: [] } as never;
     expect(buildFileDiffRequestKey("repo", snapshot, "commit", commit, file, 0))
       .toBe(buildFileDiffRequestKey("repo", snapshot, "commit", commit, file, 9));
+  });
+
+  it("keeps the same document selected when its status changes, and isolates paths and diff sources", () => {
+    const selected = buildFileDiffSelectionKey("repo", "workingTree", null, file);
+    expect(buildFileDiffSelectionKey("repo", "workingTree", null, { ...file, status: "MM" })).toBe(selected);
+    expect(buildFileDiffSelectionKey("repo", "staged", null, file)).not.toBe(selected);
+    expect(buildFileDiffSelectionKey("other-repo", "workingTree", null, file)).not.toBe(selected);
+    expect(buildFileDiffSelectionKey("repo", "workingTree", null, { ...file, path: "other.ts" })).not.toBe(selected);
   });
 });

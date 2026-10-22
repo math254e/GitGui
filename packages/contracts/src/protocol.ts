@@ -868,7 +868,12 @@ export type CommitFile = { path: string, originalPath: string | null, status: st
 
 export type CommitFileDiff = { originalPath: string | null, modifiedPath: string, originalContent: string, modifiedContent: string, isBinary: boolean, message: string | null,
 /**
- * Both content strings are empty when this field is present.
+ * Git-generated unified patch for these exact contents. Absent on older
+ * servers and for binary or unavailable contents; empty for identical text.
+ */
+patch?: string,
+/**
+ * Legacy servers may omit both contents. Current servers return full text.
  */
 omittedContent?: OmittedDiffContent, };
 
