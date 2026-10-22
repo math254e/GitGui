@@ -456,6 +456,51 @@ export class ClientWorkspace {
     return this.serializeStateOperation(() => this.refreshRepositories([assertRepositoryId(repositoryId)]));
   }
 
+  /** Refresh working-tree state without reloading history when a mutation cannot return a snapshot. */
+  async refreshRepositoryStatus(repositoryId: string): Promise<ClientWorkspaceState> {
+    return this.serializeStateOperation(async () => {
+      const id = assertRepositoryId(repositoryId);
+      if (this._state.openRepositoryIds.includes(id)) {
+        this.consumeStatusInvalidation(id);
+        await this.refreshStatus(id);
+        if (!this._state.repositories[id]?.error) this.consumeStatusInvalidation(id);
+      }
+      return this.state;
+    });
+  }
+
+  /** Adopt a snapshot computed under the server's mutation lock. */
+  async applyMutationSnapshot(
+    repositoryId: string,
+    repository: RepositorySummary,
+    snapshot: RepositorySnapshot,
+  ): Promise<ClientWorkspaceState> {
+    return this.serializeStateOperation(async () => {
+      const id = assertRepositoryId(repositoryId);
+      if (!this._state.openRepositoryIds.includes(id)) return this.state;
+
+      // The mutation snapshot includes changes that caused watcher events while
+      // the mutation was running. Supersede older reads and consume those events.
+      this.beginRequest(id);
+      this.pendingChanges.delete(id);
+      this.clearUpdateTimerIfIdle();
+      this.updateRepository(id, () => ({ repository, snapshot, loading: false, refreshing: false }));
+      return this.state;
+    });
+  }
+
+  private consumeStatusInvalidation(repositoryId: string): void {
+    if (this.pendingChanges.get(repositoryId) === "status") this.pendingChanges.delete(repositoryId);
+    this.clearUpdateTimerIfIdle();
+  }
+
+  private clearUpdateTimerIfIdle(): void {
+    if (!this.pendingChanges.size) {
+      clearTimeout(this.updateTimer);
+      this.updateTimer = undefined;
+    }
+  }
+
   async refreshAllRepositories(): Promise<ClientWorkspaceState> {
     return this.serializeStateOperation(() => this.refreshRepositories(this._state.openRepositoryIds));
   }

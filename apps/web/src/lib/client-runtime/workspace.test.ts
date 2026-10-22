@@ -60,6 +60,36 @@ describe("repository invalidations", () => {
     f.workspace.dispose();
   });
 
+  it("uses a status-only explicit refresh when history is unchanged", async () => {
+    const f = await fixture();
+    f.emit("status");
+    await f.workspace.refreshRepositoryStatus("repo-one");
+    await vi.advanceTimersByTimeAsync(100);
+    expect(f.client.getGitStatus).toHaveBeenCalledTimes(1);
+    expect(f.client.refreshRepositories).not.toHaveBeenCalled();
+    expect(f.workspace.state.repositories["repo-one"].snapshot?.graph).toBe(f.snapshot.graph);
+    f.workspace.dispose();
+  });
+
+  it("adopts mutation snapshots and consumes queued watcher invalidations", async () => {
+    const f = await fixture();
+    const changed = {
+      ...f.snapshot,
+      status: { ...f.snapshot.status, changedFiles: [{ path: "staged.txt", originalPath: null, indexStatus: "A", worktreeStatus: "." }] },
+    };
+    f.emit("status");
+    await f.workspace.applyMutationSnapshot(
+      "repo-one",
+      f.workspace.state.repositories["repo-one"].repository,
+      changed,
+    );
+    await vi.advanceTimersByTimeAsync(100);
+    expect(f.client.getGitStatus).not.toHaveBeenCalled();
+    expect(f.client.refreshRepositories).not.toHaveBeenCalled();
+    expect(f.workspace.state.repositories["repo-one"].snapshot).toBe(changed);
+    f.workspace.dispose();
+  });
+
   it("retains an invalidation arriving during a read, and preserves cached data on failure", async () => {
     const f = await fixture();
     let resolve!: (result: Awaited<ReturnType<typeof f.client.getGitStatus>>) => void;

@@ -41,6 +41,15 @@ and expose the repository error. Status refreshes replace the snapshot even
 when Git status letters are unchanged, invalidating mutable diff/hunk previews.
 The route no longer owns polling or focus listeners.
 
+Mutation refreshes follow the same invalidation scope. Hunk stage/unstage and
+discard use a status read and promote to a complete snapshot if HEAD or the
+current branch changed. Whole-file stage/unstage adopts the snapshot returned
+by the mutation RPC. Adopting that snapshot supersedes older reads and consumes
+watcher invalidations already queued for the repository, since the server
+computed the snapshot after applying the mutation under its repository lock.
+Mutation failures and failures while refreshing after a successful mutation
+remain separate outcomes.
+
 Sequence gaps revalidate open repositories. A client that falls behind the
 server's bounded event queue is disconnected so the existing supervisor creates
 a replacement session and rehydrates state. Watch creation failures retry and

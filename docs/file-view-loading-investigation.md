@@ -9,8 +9,8 @@ The clearest systemic bottleneck is that the Rust WebSocket handler awaits one R
 Several paths amplify that queueing:
 
 - Opening a working-tree file starts both a file-diff request and a hunk-preview request. Both independently run repository status. The preview also runs diff generation, repeated index/HEAD lookups, and two full-file revision hashes.
-- Applying one hunk recomputes the full preview for stale-revision safety, then checks and applies the patch. The client subsequently requests a full repository snapshot, rebuilding history and graph for a working-tree-only change.
-- Whole-file stage/unstage loads a full snapshot on the server and returns it, but the route discards the response and requests a second full snapshot.
+- Applying one hunk recomputes the full preview for stale-revision safety, then checks and applies the patch. The client now requests status only; the workspace promotes to a full repository snapshot if HEAD or the current branch changed.
+- Whole-file stage/unstage loads a full snapshot on the server and returns it. The route now adopts that returned snapshot rather than requesting another one.
 - Selecting a commit can queue eager prefetch of every changed file's full diff (up to 256 targets) ahead of the file the user opens.
 - Snapshot changes do not always invalidate a file diff: the viewer key uses status metadata, not snapshot identity or a content revision.
 
@@ -32,13 +32,13 @@ For selectable text changes, one `preview_hunks` call does approximately eight G
 
 `apply_hunks` recomputes that preview to validate the client revision, then executes `git apply --check` and `git apply` ([`working_tree.rs`](../crates/gitgui-core/src/git/working_tree.rs#L268)). Thus an apply is about ten Git subprocesses in the common path, in addition to the earlier preview and working-tree diff used to populate the viewer. These counts are code-path counts, not measured timings.
 
-After the hunk RPC succeeds, the route calls `refreshAfterMutation` ([`+page.svelte`](../apps/web/src/routes/+page.svelte#L1119)). That calls `repositories.refresh`, whose server implementation invokes `load_snapshot`; `load_snapshot` calls `load_repository`, which loads status, stashes, worktrees, commits, graph layout, and refs ([`+page.svelte`](../apps/web/src/routes/+page.svelte#L1165), [`lib.rs`](../crates/gitgui-server/src/lib.rs#L1219), [`lib.rs`](../crates/gitgui-server/src/lib.rs#L3221), [`repository.rs`](../crates/gitgui-core/src/git/repository.rs#L133)). This is broad work for a hunk that only changes the index or working tree.
+After the hunk RPC succeeds, the route refreshes status. `ClientWorkspace.refreshStatus` retains commit, graph, ref, stash, and worktree data when HEAD and the current branch are unchanged; a changed HEAD or branch promotes the operation to `repositories.refresh` and a complete snapshot ([`workspace-store.svelte.ts`](../apps/web/src/lib/workspace/workspace-store.svelte.ts#L1241), [`workspace.ts`](../apps/web/src/lib/client-runtime/workspace.ts#L176)).
 
 ### Whole-file stage/unstage
 
-`git.stage` and `git.unstage` use `run_git_action`. That server helper performs the mutation, loads a full snapshot while holding the repository mutation lock, then returns the snapshot with the result ([`lib.rs`](../crates/gitgui-server/src/lib.rs#L1483), [`lib.rs`](../crates/gitgui-server/src/lib.rs#L1821)). The shared route action awaits but discards the mutation result and then makes another full refresh request ([`+page.svelte`](../apps/web/src/routes/+page.svelte#L1127), [`+page.svelte`](../apps/web/src/routes/+page.svelte#L1165)). This establishes two full snapshot loads for whole-file stage/unstage.
+`git.stage` and `git.unstage` use `run_git_action`. That server helper performs the mutation, loads a full snapshot while holding the repository mutation lock, then returns the snapshot with the result ([`lib.rs`](../crates/gitgui-server/src/lib.rs#L1483), [`lib.rs`](../crates/gitgui-server/src/lib.rs#L1821)). The shared route action now adopts that returned snapshot into the workspace instead of requesting another full refresh ([`workspace-store.svelte.ts`](../apps/web/src/lib/workspace/workspace-store.svelte.ts#L1195), [`workspace.ts`](../apps/web/src/lib/client-runtime/workspace.ts#L469)).
 
-Filesystem notifications can also produce a `repository.changed` status invalidation. The watcher emits debounced status/snapshot events, and the workspace schedules a status refresh for status events ([`watching.rs`](../crates/gitgui-server/src/watching.rs#L284), [`workspace.ts`](../apps/web/src/lib/client-runtime/workspace.ts#L111)). If an index notification is observed during a mutation, it can cause a further status read after the explicit refresh; this is timing-dependent and is lighter than a full snapshot refresh.
+Filesystem notifications can also produce a `repository.changed` status invalidation. The watcher emits debounced status/snapshot events, and the workspace schedules a status refresh for status events ([`watching.rs`](../crates/gitgui-server/src/watching.rs#L284), [`workspace.ts`](../apps/web/src/lib/client-runtime/workspace.ts#L111)). When stage/unstage returns its post-mutation snapshot, the workspace adopts it and consumes invalidations already queued for that repository. A watcher event delivered after adoption can still trigger a status read, preserving convergence for later external changes.
 
 ### Commit diff prefetch
 
@@ -72,4 +72,9 @@ These follow-up tasks were filed as GitHub issues. Priority order is suggested; 
 
 ## Verification boundary
 
-This investigation used static source inspection only. It did not benchmark a repository, inspect a live dev session, or change code. The most important unknown is the measured split between server-side Git/status/refresh time and client-side transfer/parse/render time.
+Issue #6 implements the targeted refresh changes described above. The rest of
+this investigation remains a static code-path analysis; it does not benchmark
+the relative cost of Git, server refresh, transfer, or client rendering.
+
+The most important unknown is the measured split between server-side
+Git/status/refresh time and client-side transfer/parse/render time.

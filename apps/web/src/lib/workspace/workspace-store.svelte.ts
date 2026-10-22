@@ -1195,10 +1195,10 @@ export class WorkspaceStore {
 
     let applied = false;
     try {
-      await request.action(request.repositoryId);
+      const mutationResult = await request.action(request.repositoryId);
       applied = true;
       request.onApplied?.();
-      const refreshedState = await this.refreshAfterMutation(workspace, request.repositoryId);
+      const refreshedState = await this.refreshAfterMutation(workspace, request.repositoryId, request.kind, mutationResult);
       if (request.kind === "switchBranch" && this.hasUnmergedFiles(request.repositoryId, refreshedState)) {
         toast.warning("Switched with conflicts", { description: "Resolve the highlighted conflicts." });
       } else if (request.notifySuccess !== false && request.successMessage) {
@@ -1218,7 +1218,7 @@ export class WorkspaceStore {
           action: {
             label: "Retry refresh",
             onClick: () => {
-              void this.refreshAfterMutation(workspace, request.repositoryId).catch((error) =>
+              void this.refreshAfterMutation(workspace, request.repositoryId, request.kind).catch((error) =>
                 toast.error("Refresh failed", { description: summarizeGitError(error) }),
               );
             },
@@ -1241,8 +1241,14 @@ export class WorkspaceStore {
   private async refreshAfterMutation(
     workspace: ClientWorkspace,
     repositoryId: string,
+    kind?: string,
+    mutationResult?: unknown,
   ): Promise<ClientWorkspaceState> {
-    const state = await workspace.refreshRepository(repositoryId);
+    const state = isMutationSnapshotResult(mutationResult)
+      ? await workspace.applyMutationSnapshot(repositoryId, mutationResult.repository, mutationResult.snapshot)
+      : kind === "stage" || kind === "unstage" || kind === "discard"
+        ? await workspace.refreshRepositoryStatus(repositoryId)
+        : await workspace.refreshRepository(repositoryId);
     const repository = state.repositories[repositoryId];
     if (repository?.error) throw new Error(repository.error.message);
     return state;
@@ -1605,4 +1611,12 @@ export class WorkspaceStore {
       detailsWidth: this.detailsWidth,
     });
   }
+}
+
+function isMutationSnapshotResult(
+  value: unknown,
+): value is { repository: RepositorySummary; snapshot: RepositorySnapshot } {
+  if (typeof value !== "object" || value === null) return false;
+  const result = value as Partial<{ repository: RepositorySummary; snapshot: RepositorySnapshot }>;
+  return Boolean(result.repository && result.snapshot);
 }
