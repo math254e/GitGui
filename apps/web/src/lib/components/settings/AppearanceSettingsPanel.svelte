@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
+  import { toast } from "svelte-sonner";
   import {
     applyThemeColorPreview,
     BUILT_IN_THEMES,
@@ -146,6 +147,7 @@
   function confirmRemoveTheme() {
     const target = removeThemeTarget;
     if (!target) return;
+    removeThemeTarget = null;
 
     try {
       const baseIsActive = themeSnapshot.theme === target.id;
@@ -165,10 +167,9 @@
       removeCustomTheme(target.id);
       customThemes = getCustomThemes();
       themeStore.refreshTheme();
-      removeThemeTarget = null;
-      themeNotice = `${target.label} removed.`;
+      toast.success(`${target.label} removed`);
     } catch (error) {
-      themeNotice = error instanceof Error ? error.message : "That theme could not be removed.";
+      toast.error("Could not remove theme", { description: error instanceof Error ? error.message : "That theme could not be removed." });
     }
   }
 
@@ -190,29 +191,31 @@
   }
 
   function saveTheme(theme: RuntimeThemeDefinition) {
+    const updating = editingTheme !== null;
+    showThemeEditor = false;
+    editingTheme = null;
     try {
-      if (editingTheme) updateCustomTheme(theme);
+      if (updating) updateCustomTheme(theme);
       else installCustomTheme(theme);
       customThemes = getCustomThemes();
       themeStore.setTheme(theme.id);
-      showThemeEditor = false;
-      editingTheme = null;
       themeStore.refreshTheme();
-      themeNotice = `${theme.label} saved.`;
+      toast.success(`${theme.label} saved`);
     } catch (error) {
-      themeNotice = error instanceof Error ? error.message : "That theme could not be saved.";
+      themeStore.refreshTheme();
+      toast.error("Could not save theme", { description: error instanceof Error ? error.message : "That theme could not be saved." });
     }
   }
 
   function importTheme(theme: RuntimeThemeDefinition) {
+    showThemeImport = false;
     try {
       installCustomTheme(theme);
       customThemes = getCustomThemes();
       themeStore.setTheme(theme.id);
-      showThemeImport = false;
-      themeNotice = `${theme.label} imported.`;
+      toast.success(`${theme.label} imported`);
     } catch (error) {
-      themeNotice = error instanceof Error ? error.message : "That theme could not be imported.";
+      toast.error("Could not import theme", { description: error instanceof Error ? error.message : "That theme could not be imported." });
     }
   }
 </script>

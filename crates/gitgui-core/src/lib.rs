@@ -9,4 +9,5 @@ pub mod git {
     pub mod repository;
     pub mod watch;
     pub mod working_tree;
+    pub mod worktrees;
 }

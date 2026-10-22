@@ -40,6 +40,13 @@ development command is now `npm run dev`.
 
 ## Recent product work
 
+- Local branch context menus offer rename and reviewed deletion, including a
+  separate confirmation for unmerged branches. Commit context menus can create
+  a branch at that commit, with checkout enabled by default. Branches checked out
+  in linked worktrees offer removal with or without branch deletion in both
+  branch and worktree menus. See
+  [branch workflows](branch-workflows.md).
+
 - Working-tree hunk stage/unstage, reviewed discard, and commit amendment are
   complete; see [working-tree workflow](working-tree-workflow.md).
 - Native repository watching now sends scoped status/snapshot invalidations.

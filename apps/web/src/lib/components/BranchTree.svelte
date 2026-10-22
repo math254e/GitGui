@@ -2,8 +2,10 @@
   import { FileTree } from "@pierre/trees";
   import { onMount } from "svelte";
   import { BRANCH_ICON_PATH, BRANCH_ICON_TRANSFORM } from "$lib/icons/branch";
-  import type { CommitRef, CommitRefType } from "$lib/types/repository";
+  import type { CommitRef, CommitRefType, WorktreeInfo } from "$lib/types/repository";
   import { graphRefKey, isCurrentBranchRef } from "$lib/types/branch-visibility";
+  import { dismissContextMenu, showContextMenu } from "$lib/contextMenu";
+  import { branchMenuItems } from "$lib/workspace/branch-menu";
 
   type Props = {
     refs: CommitRef[];
@@ -15,6 +17,15 @@
     onSelectRef?: (ref: CommitRef) => void;
     onSwitchBranch?: (branchName: string) => void;
     onToggleRefs?: (refs: CommitRef[], visible: boolean) => void;
+    contextKey?: string | null;
+    canRenameBranch?: boolean;
+    canDeleteBranch?: boolean;
+    checkedOutBranches?: ReadonlySet<string>;
+    onRenameBranch?: (branch: CommitRef) => void;
+    onDeleteBranch?: (branch: CommitRef) => void;
+    worktrees?: WorktreeInfo[];
+    canRemoveWorktree?: boolean;
+    onRemoveWorktree?: (worktree: WorktreeInfo, deleteBranch: boolean) => void;
   };
 
   let {
@@ -27,6 +38,15 @@
     onSelectRef,
     onSwitchBranch,
     onToggleRefs,
+    contextKey = null,
+    canRenameBranch = false,
+    canDeleteBranch = false,
+    checkedOutBranches = new Set<string>(),
+    onRenameBranch,
+    onDeleteBranch,
+    worktrees = [],
+    canRemoveWorktree = false,
+    onRemoveWorktree,
   }: Props = $props();
 
   let host = $state<HTMLDivElement | null>(null);
@@ -35,6 +55,12 @@
   let lastTreeSignature = $state("");
   let branchByPath = new Map<string, CommitRef>();
   let syncingSelection = false;
+  const contextMenuOwner = {};
+
+  $effect(() => {
+    void contextKey;
+    dismissContextMenu(contextMenuOwner);
+  });
 
   const branchSpriteSheet = `
     <svg aria-hidden="true" width="0" height="0">
@@ -191,6 +217,7 @@
     const unsubscribe = tree.subscribe(() => syncTreeHeight(tree!));
 
     return () => {
+      dismissContextMenu(contextMenuOwner);
       unsubscribe();
       tree?.cleanUp();
       tree = null;
@@ -392,6 +419,61 @@
     onSwitchBranch?.(ref.shortName);
   }
 
+  function contextMenuRow(event: Event) {
+    return event.composedPath().find((value): value is HTMLElement =>
+      value instanceof HTMLElement && value.getAttribute("data-type") === "item" && value.getAttribute("data-item-type") === "file",
+    );
+  }
+
+  function openBranchContextMenu(row: HTMLElement, position: { x: number; y: number }) {
+    if (refType !== "localBranch") return;
+    const branch = branchByPath.get(normalizePath(row.getAttribute("data-item-path") ?? ""));
+    if (!branch) return;
+    const key = contextKey;
+    const worktree = worktrees.find((entry) => entry.branch === branch.shortName);
+    const menu = showContextMenu(branchMenuItems(branch, {
+      canRename: canRenameBranch,
+      canDelete: canDeleteBranch,
+      checkedOut: currentBranch === branch.shortName || checkedOutBranches.has(branch.shortName),
+      worktree,
+      canRemoveWorktree,
+    }), position, contextMenuOwner, worktree?.isMain === false ? { width: 320 } : undefined);
+    // Keep the menu target visible through refreshes and virtualized row replacements.
+    const treePath = row.dataset.itemPath ?? "";
+    const highlight = document.createElement("style");
+    highlight.textContent = `[data-type="item"][data-item-path="${CSS.escape(treePath)}"] {
+      background-color: var(--trees-bg-muted);
+      --truncate-marker-background-overlay-color: var(--trees-bg-muted);
+    }`;
+    host?.shadowRoot?.appendChild(highlight);
+
+    void menu.then((selected) => {
+      highlight.remove();
+      if (key !== contextKey) return;
+      if (selected === `rename:${branch.name}`) onRenameBranch?.(branch);
+      if (selected === `delete:${branch.name}`) onDeleteBranch?.(branch);
+      if (worktree && selected === `remove-worktree:${branch.name}`) onRemoveWorktree?.(worktree, false);
+      if (worktree && selected === `remove-worktree-branch:${branch.name}`) onRemoveWorktree?.(worktree, true);
+    });
+  }
+
+  function handleContextMenu(event: MouseEvent) {
+    const row = contextMenuRow(event);
+    if (!row || refType !== "localBranch") return;
+    event.preventDefault();
+    openBranchContextMenu(row, { x: event.clientX, y: event.clientY });
+  }
+
+  function handleContextMenuKey(event: KeyboardEvent) {
+    if (event.key !== "ContextMenu" && event.key !== "Apps" && !(event.shiftKey && event.key === "F10")) return;
+    const row = contextMenuRow(event) ?? host?.querySelector<HTMLElement>('[data-item-focused="true"][data-item-type="file"]');
+    if (!row || refType !== "localBranch") return;
+    event.preventDefault();
+    event.stopPropagation();
+    const rect = row.getBoundingClientRect();
+    openBranchContextMenu(row, { x: rect.left, y: rect.bottom });
+  }
+
   function isDecorationEvent(path: EventTarget[]) {
     return path.some(
       (value) => value instanceof Element && value.getAttribute("data-item-section") === "decoration",
@@ -447,5 +529,7 @@
   onpointerdowncapture={handleDecorationPointerDown}
   onclickcapture={handleTreeClick}
   ondblclickcapture={handleTreeDoubleClick}
+  oncontextmenu={handleContextMenu}
+  onkeydowncapture={handleContextMenuKey}
   style={`height: ${treeHeight}px; --trees-bg-override: var(--app-theme-sidebar); --trees-fg-override: var(--app-theme-sidebar-foreground); --trees-fg-muted-override: var(--app-theme-sidebar-muted-foreground); --trees-border-color-override: var(--app-theme-sidebar-border); --trees-selected-bg-override: var(--app-theme-sidebar-row-selected); --trees-selected-fg-override: var(--app-theme-accent-surface-foreground); --trees-accent-override: var(--app-theme-accent); --trees-focus-ring-color-override: var(--app-theme-focus); --trees-border-radius-override: 4px; --trees-font-family-override: inherit; --trees-font-size-override: 13px; --trees-padding-inline-override: 0px; --trees-item-padding-x-override: 3px; --trees-item-row-gap-override: 3px; --trees-level-gap-override: 6px; --trees-item-height: 26px;`}
 ></div>

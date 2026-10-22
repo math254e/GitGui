@@ -71,7 +71,8 @@ use gitgui_protocol::{
     ResponseEnvelope, ServerInfo, ServerLifecycle, ServerReadiness, ServerStatus,
     StashInfo as ProtocolStashInfo, WelcomeMessage, WorktreeInfo as ProtocolWorktreeInfo,
     CAPABILITY_GIT_AMEND, CAPABILITY_GIT_BRANCH_CREATE, CAPABILITY_GIT_BRANCH_LIST,
-    CAPABILITY_GIT_BRANCH_SWITCH, CAPABILITY_GIT_COMMIT, CAPABILITY_GIT_COMMIT_FILES,
+    CAPABILITY_GIT_BRANCH_SWITCH, CAPABILITY_GIT_BRANCH_RENAME, CAPABILITY_GIT_BRANCH_DELETE,
+    CAPABILITY_GIT_COMMIT, CAPABILITY_GIT_COMMIT_FILES,
     CAPABILITY_GIT_COMMIT_FILE_DIFF, CAPABILITY_GIT_COMMIT_WORKING_TREE_FILES,
     CAPABILITY_GIT_COMMIT_WORKING_TREE_FILE_DIFF, CAPABILITY_GIT_DISCARD, CAPABILITY_GIT_FETCH,
     CAPABILITY_GIT_HUNKS, CAPABILITY_GIT_PREFETCH_COMMIT_DIFFS,
@@ -84,7 +85,8 @@ use gitgui_protocol::{
     CAPABILITY_SERVER_INFO, CAPABILITY_SERVER_STATUS, MAX_GRAPH_TARGETS,
     MAX_PREFETCH_COMMIT_DIFF_TARGETS, MAX_PREFETCH_COMMIT_HASHES, METHOD_GIT_AMEND,
     METHOD_GIT_AMEND_INFO, METHOD_GIT_APPLY_HUNKS, METHOD_GIT_BRANCH_CREATE,
-    METHOD_GIT_BRANCH_LIST, METHOD_GIT_BRANCH_SWITCH, METHOD_GIT_COMMIT, METHOD_GIT_COMMIT_FILES,
+    METHOD_GIT_BRANCH_LIST, METHOD_GIT_BRANCH_SWITCH, METHOD_GIT_BRANCH_RENAME,
+    METHOD_GIT_BRANCH_DELETE, METHOD_GIT_WORKTREE_REMOVE, METHOD_GIT_COMMIT, METHOD_GIT_COMMIT_FILES,
     METHOD_GIT_COMMIT_FILE_DIFF, METHOD_GIT_DISCARD, METHOD_GIT_DISCARD_PREVIEW, METHOD_GIT_FETCH,
     METHOD_GIT_HUNK_PREVIEW, METHOD_GIT_PREFETCH_COMMIT_DIFFS, METHOD_GIT_PREFETCH_COMMIT_FILES,
     METHOD_GIT_PULL, METHOD_GIT_PUSH, METHOD_GIT_STAGE, METHOD_GIT_STASH_POP,
@@ -947,6 +949,9 @@ fn required_scope_for_method(method: &str) -> Option<&'static str> {
         | METHOD_GIT_PUSH
         | METHOD_GIT_BRANCH_CREATE
         | METHOD_GIT_BRANCH_SWITCH
+        | METHOD_GIT_BRANCH_RENAME
+        | METHOD_GIT_BRANCH_DELETE
+        | METHOD_GIT_WORKTREE_REMOVE
         | METHOD_GIT_STASH_PUSH
         | METHOD_GIT_STASH_POP => Some(SCOPE_REPOSITORY_OPERATE),
         METHOD_SERVER_GET_INFO
@@ -1025,6 +1030,10 @@ async fn dispatch(request: RequestEnvelope, state: &ServerState) -> ResponseEnve
         METHOD_GIT_BRANCH_LIST => git_branch_list(request.id, request.params, state).await,
         METHOD_GIT_BRANCH_CREATE => git_branch_create(request.id, request.params, state).await,
         METHOD_GIT_BRANCH_SWITCH => git_branch_switch(request.id, request.params, state).await,
+        METHOD_GIT_BRANCH_RENAME | METHOD_GIT_BRANCH_DELETE => {
+            git_branch_mutation(request.id, &request.method, request.params, state).await
+        }
+        METHOD_GIT_WORKTREE_REMOVE => git_worktree_remove(request.id, request.params, state).await,
         METHOD_GIT_STASH_PUSH => git_stash_push(request.id, request.params, state).await,
         METHOD_GIT_STASH_POP => git_stash_pop(request.id, request.params, state).await,
         _ => ResponseEnvelope::error(
@@ -1883,6 +1892,137 @@ async fn git_branch_switch(
                 snapshot,
             },
         ),
+        Err(error) => ResponseEnvelope::error(request_id, error),
+    }
+}
+
+async fn git_branch_mutation(
+    request_id: String,
+    method: &str,
+    params: Value,
+    state: &ServerState,
+) -> ResponseEnvelope {
+    use gitgui_core::git::operations::{delete_branch, rename_branch, BranchDeleteOutcome};
+    let result: Result<Value, ProtocolError> = async {
+        if method == METHOD_GIT_BRANCH_RENAME {
+            let p = parse_params::<gitgui_protocol::GitBranchRenameParams>(params, method)?;
+            validate_branch_argument(&p.name, "name")?;
+            validate_branch_argument(&p.new_name, "newName")?;
+            validate_object_id(&p.expected_target)?;
+            reviewed_git_operation(state, &p.repository_id, move |root| {
+                rename_branch(root, &p.name, &p.new_name, &p.expected_target)
+            })
+            .await?;
+        } else {
+            let p = parse_params::<gitgui_protocol::GitBranchDeleteParams>(params, method)?;
+            validate_branch_argument(&p.name, "name")?;
+            validate_object_id(&p.expected_target)?;
+            let outcome = reviewed_git_operation(state, &p.repository_id, move |root| {
+                delete_branch(root, &p.name, &p.expected_target, p.force)
+            })
+            .await?;
+            if outcome == BranchDeleteOutcome::NotMerged {
+                return Err(ProtocolError::new(
+                    error_codes::BRANCH_NOT_MERGED,
+                    "This branch contains commits that are not fully merged. Deleting it may make that work difficult to recover.",
+                ));
+            }
+        }
+        Ok(Value::Null)
+    }
+    .await;
+    match result {
+        Ok(value) => response_success(request_id, value),
+        Err(error) => ResponseEnvelope::error(request_id, error),
+    }
+}
+
+async fn git_worktree_remove(
+    request_id: String,
+    params: Value,
+    state: &ServerState,
+) -> ResponseEnvelope {
+    use gitgui_core::git::worktrees::{remove, RemoveOutcome};
+    use gitgui_protocol::{GitWorktreeRemoveParams, GitWorktreeRemoveResult};
+    let result: Result<GitWorktreeRemoveResult, ProtocolError> = async {
+        let p = parse_params::<GitWorktreeRemoveParams>(params, METHOD_GIT_WORKTREE_REMOVE)?;
+        validate_repository_id(&p.repository_id)?;
+        validate_object_id(&p.expected_head)?;
+        validate_optional_text(&p.worktree_path, "worktreePath", 32768)?;
+        if p.worktree_path.is_empty() || !Path::new(&p.worktree_path).is_absolute() {
+            return Err(ProtocolError::new(
+                error_codes::INVALID_PARAMS,
+                "worktreePath must be an absolute path",
+            ));
+        }
+        if let Some(branch) = &p.expected_branch {
+            validate_branch_argument(branch, "expectedBranch")?;
+        }
+        let repository = state
+            .repository(&p.repository_id)
+            .await
+            .ok_or_else(|| repository_not_configured_error(&p.repository_id))?;
+        let target_key = path_key(&canonicalize_path(&p.worktree_path));
+        let removed_ids: Vec<_> = state
+            .repository_summaries()
+            .await
+            .into_iter()
+            .filter(|entry| path_key(&canonicalize_path(&entry.root)) == target_key)
+            .map(|entry| entry.id)
+            .collect();
+        // A worktree may also be an open catalog repository. Hold both locks
+        // in a stable order so its in-flight Git operations finish first.
+        let mut lock_ids = removed_ids.clone();
+        lock_ids.push(p.repository_id.clone());
+        lock_ids.sort();
+        lock_ids.dedup();
+        let mut guards = Vec::new();
+        for id in lock_ids {
+            guards.push(state.git_mutation_lock(&id).await.lock_owned().await);
+        }
+        let outcome = spawn_blocking(move || {
+            remove(
+                &repository.operation_path,
+                &p.worktree_path,
+                &p.expected_head,
+                p.expected_branch.as_deref(),
+                p.delete_branch,
+                p.force_branch_deletion,
+            )
+        })
+        .await
+        .map_err(|_| git_failure_error("Worktree removal worker failed"))?
+        .map_err(git_operation_error)?;
+        let (branch_deleted, mut warning) = match outcome {
+            RemoveOutcome::NotMerged => {
+                return Err(ProtocolError::new(
+                    error_codes::BRANCH_NOT_MERGED,
+                    "This branch contains unmerged commits. The worktree has not been removed.",
+                ))
+            }
+            RemoveOutcome::Removed {
+                branch_deleted,
+                warning,
+            } => (branch_deleted, warning),
+        };
+        for id in &removed_ids {
+            if state.remove_repository(id).await.is_err() {
+                let message = "Worktree removed; the repository catalog could not be saved.";
+                warning = Some(match warning {
+                    Some(prior) => format!("{prior} {message}"),
+                    None => message.to_string(),
+                });
+            }
+        }
+        Ok(GitWorktreeRemoveResult {
+            branch_deleted,
+            removed_repository_ids: removed_ids,
+            warning,
+        })
+    }
+    .await;
+    match result {
+        Ok(outcome) => response_success(request_id, outcome),
         Err(error) => ResponseEnvelope::error(request_id, error),
     }
 }
@@ -3446,6 +3586,9 @@ fn implemented_capabilities() -> Vec<String> {
         CAPABILITY_GIT_BRANCH_LIST,
         CAPABILITY_GIT_BRANCH_CREATE,
         CAPABILITY_GIT_BRANCH_SWITCH,
+        CAPABILITY_GIT_BRANCH_RENAME,
+        CAPABILITY_GIT_BRANCH_DELETE,
+        gitgui_protocol::CAPABILITY_GIT_WORKTREE_REMOVE,
         CAPABILITY_GIT_STASH_PUSH,
         CAPABILITY_GIT_STASH_POP,
     ]
@@ -3631,6 +3774,7 @@ fn protocol_worktree_info(
         head_oid: worktree.head_oid,
         branch: worktree.branch,
         current: worktree.current,
+        is_main: Some(worktree.is_main),
     }
 }
 

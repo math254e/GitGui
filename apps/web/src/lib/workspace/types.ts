@@ -48,6 +48,9 @@ export type GitActionKind =
   | "push"
   | "switchBranch"
   | "createBranch"
+  | "renameBranch"
+  | "deleteBranch"
+  | "removeWorktree"
   | "stash"
   | "stashPop";
 
@@ -58,7 +61,11 @@ export type GitActionRequest = {
   affectedPaths?: string[];
   successMessage?: string;
   notifySuccess?: boolean;
-  onApplied?: () => void;
+  onApplied?: (result?: unknown) => void | Promise<void>;
+  /** Present a custom result after refresh completes and pending status clears. */
+  onSucceeded?: (result: unknown) => void;
+  /** Return true when the caller has presented its own notification. */
+  onFailed?: (error: unknown) => boolean;
 };
 
 export type PendingGitAction = GitActionRequest & {

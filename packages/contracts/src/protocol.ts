@@ -41,6 +41,9 @@ export const WS_METHOD_NAMES = [
   "git.branch.list",
   "git.branch.create",
   "git.branch.switch",
+  "git.branch.rename",
+  "git.branch.delete",
+  "git.worktree.remove",
   "git.stash.push",
   "git.stash.pop",
 ] as const;
@@ -618,6 +621,22 @@ merge: boolean, };
 
 export type GitBranchSwitchResult = { repository: RepositorySummary, snapshot: RepositorySnapshot, };
 
+export type GitBranchRenameParams = { repositoryId: string, name: string, newName: string, expectedTarget: string, };
+
+export type GitBranchDeleteParams = { repositoryId: string, name: string, expectedTarget: string,
+/**
+ * Requires an explicit second confirmation after safe deletion is refused.
+ */
+force: boolean, };
+
+export type GitWorktreeRemoveParams = { repositoryId: string, worktreePath: string, expectedHead: string, expectedBranch: string | null, deleteBranch: boolean,
+/**
+ * Permits unmerged branch deletion, never forced worktree removal.
+ */
+forceBranchDeletion: boolean, };
+
+export type GitWorktreeRemoveResult = { branchDeleted: boolean, removedRepositoryIds: Array<string>, warning: string | null, };
+
 export type GitStashPushParams = { repositoryId: string,
 /**
  * Optional stash message.
@@ -850,7 +869,11 @@ branch: string | null,
 /**
  * Whether this is the worktree represented by the current snapshot.
  */
-current: boolean, };
+current: boolean,
+/**
+ * Older servers omit this field and do not advertise worktree removal.
+ */
+isMain?: boolean, };
 
 export type CommitGraph = { commits: Array<GraphCommit>, edges: Array<GraphEdge>, width: number, headLane: number | null, };
 

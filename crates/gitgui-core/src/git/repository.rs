@@ -94,6 +94,7 @@ pub struct WorktreeInfo {
     pub head_oid: Option<String>,
     pub branch: Option<String>,
     pub current: bool,
+    pub is_main: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -828,6 +829,7 @@ fn parse_worktrees(output: &str, current_root: &Path) -> Vec<WorktreeInfo> {
                 path,
                 head_oid: None,
                 branch: None,
+                is_main: worktrees.is_empty(),
             });
             continue;
         }

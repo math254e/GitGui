@@ -2,11 +2,19 @@
   import { FileTree } from "@pierre/trees";
   import { onMount } from "svelte";
   import type { WorktreeInfo } from "$lib/types/repository";
+  import { dismissContextMenu, showContextMenu } from "$lib/contextMenu";
+  import { worktreeMenuItems } from "$lib/workspace/worktree-menu";
 
   type Props = {
     worktrees: WorktreeInfo[];
     treeId: string;
     onSwitchWorktree?: (path: string) => void;
+    contextKey?: string | null;
+    canRenameBranch?: boolean;
+    canDeleteBranch?: boolean;
+    canRemoveWorktree?: boolean;
+    onRenameWorktreeBranch?: (worktree: WorktreeInfo) => void;
+    onRemoveWorktree?: (worktree: WorktreeInfo, deleteBranch: boolean) => void;
   };
 
   type WorktreeEntry = {
@@ -18,6 +26,12 @@
     worktrees,
     treeId,
     onSwitchWorktree,
+    contextKey = null,
+    canRenameBranch = false,
+    canDeleteBranch = false,
+    canRemoveWorktree = false,
+    onRenameWorktreeBranch,
+    onRemoveWorktree,
   }: Props = $props();
 
   let host = $state<HTMLDivElement | null>(null);
@@ -25,6 +39,8 @@
   let treeHeight = $state(26);
   let lastTreeSignature = $state("");
   let worktreeByPath = new Map<string, WorktreeInfo>();
+  const contextMenuOwner = {};
+  $effect(() => { void contextKey; dismissContextMenu(contextMenuOwner); });
 
   const worktreeSpriteSheet = `
     <svg aria-hidden="true" width="0" height="0">
@@ -147,6 +163,7 @@
     const unsubscribe = tree.subscribe(() => syncTreeHeight(tree!));
 
     return () => {
+      dismissContextMenu(contextMenuOwner);
       unsubscribe();
       tree?.cleanUp();
       tree = null;
@@ -215,6 +232,50 @@
     onSwitchWorktree?.(worktree.path);
   }
 
+  function contextRow(event: Event) {
+    return event.composedPath().find((value): value is HTMLElement => value instanceof HTMLElement && value.getAttribute("data-type") === "item" && value.getAttribute("data-item-type") === "file");
+  }
+
+  function openContextMenu(row: HTMLElement, position: { x: number; y: number }) {
+    const worktree = worktreeByPath.get(normalizePath(row.getAttribute("data-item-path") ?? ""));
+    if (!worktree) return;
+    const key = contextKey;
+    const menu = showContextMenu(worktreeMenuItems(worktree, { canRename: canRenameBranch, canRemove: canRemoveWorktree, canDeleteBranch }), position, contextMenuOwner, { width: 320 });
+    // Keep the menu target visible through refreshes and virtualized row replacements.
+    const treePath = row.dataset.itemPath ?? "";
+    const highlight = document.createElement("style");
+    highlight.textContent = `[data-type="item"][data-item-path="${CSS.escape(treePath)}"] {
+      background-color: var(--trees-bg-muted);
+      --truncate-marker-background-overlay-color: var(--trees-bg-muted);
+    }`;
+    host?.shadowRoot?.appendChild(highlight);
+
+    void menu.then((selected) => {
+      highlight.remove();
+      if (key !== contextKey) return;
+      if (selected === "rename") onRenameWorktreeBranch?.(worktree);
+      if (selected === "remove-worktree") onRemoveWorktree?.(worktree, false);
+      if (selected === "remove-worktree-branch") onRemoveWorktree?.(worktree, true);
+    });
+  }
+
+  function handleContextMenu(event: MouseEvent) {
+    const row = contextRow(event);
+    if (!row) return;
+    event.preventDefault();
+    openContextMenu(row, { x: event.clientX, y: event.clientY });
+  }
+
+  function handleContextKey(event: KeyboardEvent) {
+    if (event.key !== "ContextMenu" && event.key !== "Apps" && !(event.shiftKey && event.key === "F10")) return;
+    const row = contextRow(event) ?? host?.querySelector<HTMLElement>('[data-item-focused="true"][data-item-type="file"]');
+    if (!row) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const rect = row.getBoundingClientRect();
+    openContextMenu(row, { x: rect.left, y: rect.bottom });
+  }
+
   function normalizePath(path: string) {
     return path.replace(/\/$/, "");
   }
@@ -263,5 +324,7 @@
   role="group"
   aria-label="Worktrees"
   ondblclickcapture={handleTreeDoubleClick}
+  oncontextmenu={handleContextMenu}
+  onkeydowncapture={handleContextKey}
   style={`height: ${treeHeight}px; --trees-bg-override: var(--app-theme-sidebar); --trees-fg-override: var(--app-theme-sidebar-foreground); --trees-fg-muted-override: var(--app-theme-sidebar-muted-foreground); --trees-border-color-override: var(--app-theme-sidebar-border); --trees-selected-bg-override: var(--app-theme-sidebar-row-active); --trees-selected-fg-override: var(--app-theme-accent-surface-foreground); --trees-accent-override: var(--app-theme-accent); --trees-focus-ring-color-override: var(--app-theme-focus); --trees-font-family-override: inherit; --trees-font-size-override: 13px; --trees-padding-inline-override: 0px; --trees-item-padding-x-override: 3px; --trees-item-row-gap-override: 3px; --trees-level-gap-override: 6px; --trees-item-height: 26px;`}
 ></div>

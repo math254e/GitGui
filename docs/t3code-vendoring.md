@@ -28,6 +28,17 @@ The checks themselves have isolated fixture tests in
 
 ## What is vendored
 
+The GitGui RPC registry also includes reviewed local branch rename/delete
+methods. Their parameters come from Rust and include the expected branch tip;
+mutation outcomes return before repository refresh. This extends the existing
+GitGui method-table divergence in `rpc/protocol.ts` without changing session,
+connection, or retry ownership.
+
+The same GitGui method-table divergence includes `git.worktree.remove`, with
+reviewed path/HEAD/branch inputs and explicit partial-success outcomes. Its
+catalog cleanup remains server-owned; the application workspace forgets entries
+the server has already removed without changing the connection runtime.
+
 Issue #4 extends the adapted `rpc/session.ts` request lifetime: interruption and
 timeout notify capable Rust servers using the generated `CancelRequest`, pending
 registration/cleanup is protected from interruption, and responses remain

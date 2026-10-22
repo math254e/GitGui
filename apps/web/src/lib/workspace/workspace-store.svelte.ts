@@ -22,6 +22,8 @@ import type {
   GitAmendInfo,
   GitApplyHunksParams,
   GitDiscardFile,
+  GitDiscardResult,
+  GitWorktreeRemoveResult,
   RepositorySummary,
 } from "@gitgui/contracts";
 import { type ClientWorkspace, type ClientWorkspaceState } from "$lib/client-runtime";
@@ -30,7 +32,8 @@ import { readDesktopBridge } from "$lib/connection/platform";
 import type { WebApplicationRuntime, WebApplicationRuntimeState } from "$lib/connection/runtime";
 import { readBranchSwitchMergePreference, resolveProjectsLocation } from "$lib/preferences";
 import { graphRefKey, isCurrentBranchRef } from "$lib/types/branch-visibility";
-import type { CommitFile, CommitInfo, CommitRef, RepositorySnapshot } from "$lib/types/repository";
+import type { CommitFile, CommitInfo, CommitRef, RepositorySnapshot, WorktreeInfo } from "$lib/types/repository";
+import { removableWorktree } from "./worktree-menu";
 import type { RepoTab } from "$lib/components/TopMenu.svelte";
 import type { ResizablePane } from "$lib/components/ResizablePaneGroup.svelte";
 import type {
@@ -136,9 +139,31 @@ export class WorkspaceStore {
   repositoryPathDialogOpen = $state(false);
   repositoryPathValue = $state("");
   repositoryPathError = $state("");
-  gitNameDialogKind = $state<"branch" | "stash" | null>(null);
+  gitNameDialogKind = $state<"branch" | "renameBranch" | "stash" | null>(null);
   gitNameDialogValue = $state("");
   gitNameDialogError = $state("");
+  gitNameDialogCheckout = $state(true);
+  gitNameDialogContext = $state<{
+    repositoryId: string;
+    environmentId: string;
+    startPoint?: string;
+    branch?: CommitRef;
+  } | null>(null);
+  deleteBranchDialog = $state<{
+    repositoryId: string;
+    environmentId: string;
+    branch: CommitRef;
+    force: boolean;
+    error: string;
+  } | null>(null);
+  removeWorktreeDialog = $state<{
+    repositoryId: string;
+    environmentId: string;
+    worktree: WorktreeInfo;
+    deleteBranch: boolean;
+    forceBranchDeletion: boolean;
+    error: string;
+  } | null>(null);
 
   /* ---------------------------------------------------------------------- */
   /* Create repository                                                       */
@@ -170,6 +195,9 @@ export class WorkspaceStore {
   );
   snapshot = $derived(this.activeRepository?.snapshot ?? null);
   gitActionPending = $derived(this.gitAction !== null);
+  canRenameBranch = $derived(!this.gitActionPending && (this.client?.serverWelcome.capabilities.includes("git.branch.rename") ?? false));
+  canDeleteBranch = $derived(!this.gitActionPending && (this.client?.serverWelcome.capabilities.includes("git.branch.delete") ?? false));
+  canRemoveWorktree = $derived(!this.gitActionPending && (this.client?.serverWelcome.capabilities.includes("git.worktree.remove") ?? false));
   activeWorkingTreeAction = $derived(
     this.gitAction?.repositoryId === this.activeRepositoryId ? this.gitAction : null,
   );
@@ -393,6 +421,18 @@ export class WorkspaceStore {
           dialog.environmentId !== this.workspaceState?.environmentId)
       ) {
         this.discardDialog = null;
+      }
+      const nameContext = this.gitNameDialogContext;
+      if (nameContext && (nameContext.repositoryId !== this.activeRepositoryId || nameContext.environmentId !== this.workspaceState?.environmentId)) {
+        this.clearGitNameDialog();
+      }
+      const branchDialog = this.deleteBranchDialog;
+      if (branchDialog && (branchDialog.repositoryId !== this.activeRepositoryId || branchDialog.environmentId !== this.workspaceState?.environmentId)) {
+        this.deleteBranchDialog = null;
+      }
+      const worktreeDialog = this.removeWorktreeDialog;
+      if (worktreeDialog && (worktreeDialog.repositoryId !== this.activeRepositoryId || worktreeDialog.environmentId !== this.workspaceState?.environmentId)) {
+        this.removeWorktreeDialog = null;
       }
     });
 
@@ -718,7 +758,7 @@ export class WorkspaceStore {
    */
   private async runWorkspaceCommand(
     action: () => Promise<unknown>,
-    options: { navigate?: boolean } = {},
+    options: { navigate?: boolean; successMessage?: string; errorMessage?: string } = {},
   ): Promise<boolean> {
     const request = ++this.activeWorkspaceRequest;
     this.operationPending = true;
@@ -729,8 +769,12 @@ export class WorkspaceStore {
       if (request === this.activeWorkspaceRequest && options.navigate !== false) {
         await this.navigateToActiveRepository();
       }
+      if (request === this.activeWorkspaceRequest) this.operationPending = false;
+      if (options.successMessage) toast.success(options.successMessage);
       return true;
     } catch (caught) {
+      if (request === this.activeWorkspaceRequest) this.operationPending = false;
+      if (options.errorMessage) toast.error(options.errorMessage, { description: formatError(caught) });
       if (request === this.activeWorkspaceRequest) {
         this.startError = formatError(caught);
         if (isConnectionError(caught)) {
@@ -780,10 +824,13 @@ export class WorkspaceStore {
       const selectedPath = await this.runtime.pickFolder();
 
       if (typeof selectedPath === "string") {
-        await this.runWorkspaceCommand(() => this.requireWorkspace().openRepositoryPath(selectedPath));
+        await this.runWorkspaceCommand(() => this.requireWorkspace().openRepositoryPath(selectedPath), {
+          successMessage: "Repository opened",
+          errorMessage: "Could not open repository",
+        });
       }
     } catch (caught) {
-      this.startError = formatError(caught);
+      toast.error("Could not choose repository", { description: formatError(caught) });
     }
   }
 
@@ -849,16 +896,15 @@ export class WorkspaceStore {
       return;
     }
 
+    const workspace = this.workspace;
+    if (!workspace || this.operationPending) return;
+    this.repositoryPathDialogOpen = false;
     this.repositoryPathError = "";
-    const opened = await this.runWorkspaceCommand(() =>
-      this.requireWorkspace().openRepositoryPath(path),
-    );
-    if (opened) {
-      this.repositoryPathDialogOpen = false;
-      this.repositoryPathValue = "";
-    } else {
-      this.repositoryPathError = this.startError || "The repository could not be opened.";
-    }
+    this.repositoryPathValue = "";
+    await this.runWorkspaceCommand(() => workspace.openRepositoryPath(path), {
+      successMessage: "Repository opened",
+      errorMessage: "Could not open repository",
+    });
   }
 
   /* ---------------------------------------------------------------------- */
@@ -1172,10 +1218,14 @@ export class WorkspaceStore {
       const mutationResult = await request.action(request.repositoryId);
       applied = true;
       if (request.affectedPaths?.length) workspace.invalidateFileContent(request.repositoryId, request.affectedPaths);
-      request.onApplied?.();
+      await request.onApplied?.(mutationResult);
       const refreshedState = await this.refreshAfterMutation(workspace, request.repositoryId, request.kind, mutationResult);
+      // End pending UI before publishing the result, including custom toasts.
+      this.gitAction = null;
       if (request.kind === "switchBranch" && this.hasUnmergedFiles(request.repositoryId, refreshedState)) {
         toast.warning("Switched with conflicts", { description: "Resolve the highlighted conflicts." });
+      } else if (request.onSucceeded) {
+        request.onSucceeded(mutationResult);
       } else if (request.notifySuccess !== false && request.successMessage) {
         toast.success(request.successMessage);
       }
@@ -1189,8 +1239,9 @@ export class WorkspaceStore {
       if (applied || serverApplied) {
         if (!applied) {
           if (request.affectedPaths?.length) workspace.invalidateFileContent(request.repositoryId, request.affectedPaths);
-          request.onApplied?.();
+          await request.onApplied?.();
         }
+        this.gitAction = null;
         toast.warning("Changes applied; refresh failed", {
           description: summarizeGitError(caught),
           action: {
@@ -1204,7 +1255,10 @@ export class WorkspaceStore {
         });
       } else {
         await workspace.refreshRepository(request.repositoryId).catch(() => undefined);
-        toast.error(`${request.label} failed`, { description: summarizeGitError(caught) });
+        this.gitAction = null;
+        if (!request.onFailed?.(caught)) {
+          toast.error(`${request.label} failed`, { description: summarizeGitError(caught) });
+        }
       }
     } finally {
       this.gitAction = null;
@@ -1438,7 +1492,8 @@ export class WorkspaceStore {
       }
     } catch (caught) {
       if (this.discardDialog?.repositoryId === repositoryId && this.discardDialog.environmentId === environmentId) {
-        this.discardDialog = { ...dialog, loading: false, error: summarizeGitError(caught) };
+        this.discardDialog = null;
+        toast.error("Could not review changes", { description: summarizeGitError(caught) });
       }
     }
   }
@@ -1446,34 +1501,20 @@ export class WorkspaceStore {
   confirmDiscard(files: GitDiscardFile[], deleteUntracked: boolean): void {
     const dialog = this.discardDialog;
     if (!dialog || this.gitActionPending || !files.length) return;
-    this.discardDialog = { ...dialog, loading: true, error: "" };
+    this.discardDialog = null;
     this.requestGitAction({
       kind: "discard",
       label: "Discarding",
       notifySuccess: false,
-      action: async (repositoryId) => {
-        try {
-          const outcome = await dialog.client.discard({ repositoryId, files, deleteUntracked });
-          this.discardDialog = null;
-          if (outcome.error) {
-            toast.error("Discard stopped", {
-              description: `${outcome.error}\nChanged: ${outcome.completedPaths.join(", ") || "none"}\nRemaining: ${outcome.remainingPaths.join(", ")}`,
-            });
-          } else {
-            toast.success(`Discarded changes in ${outcome.completedPaths.length} files`);
-          }
-        } catch (caught) {
-          if (
-            this.discardDialog?.repositoryId === repositoryId &&
-            this.discardDialog.environmentId === dialog.environmentId
-          ) {
-            this.discardDialog = {
-              ...dialog,
-              loading: false,
-              error: `${summarizeGitError(caught)} Close this dialog and review the updated changes.`,
-            };
-          }
-          throw caught;
+      action: (repositoryId) => dialog.client.discard({ repositoryId, files, deleteUntracked }),
+      onSucceeded: (result) => {
+        const outcome = result as GitDiscardResult;
+        if (outcome.error) {
+          toast.error("Discard stopped", {
+            description: `${outcome.error}\nChanged: ${outcome.completedPaths.join(", ") || "none"}\nRemaining: ${outcome.remainingPaths.join(", ")}`,
+          });
+        } else {
+          toast.success(`Discarded changes in ${outcome.completedPaths.length} files`);
         }
       },
     });
@@ -1491,52 +1532,69 @@ export class WorkspaceStore {
     });
   }
 
-  openBranchDialog(): void {
-    if (!this.activeRepositoryId || !this.client || this.gitActionPending) {
-      return;
-    }
-
+  private prepareGitNameDialog(kind: "branch" | "renameBranch" | "stash"): boolean {
+    const repositoryId = this.activeRepositoryId;
+    const environmentId = this.workspaceState?.environmentId;
+    if (!repositoryId || !environmentId || !this.client || this.gitActionPending) return false;
+    this.gitNameDialogContext = { repositoryId, environmentId };
+    this.gitNameDialogKind = kind;
     this.gitNameDialogValue = "";
     this.gitNameDialogError = "";
-    this.gitNameDialogKind = "branch";
+    this.gitNameDialogCheckout = true;
+    return true;
+  }
+
+  openBranchDialog(commit?: CommitInfo): void {
+    if (this.prepareGitNameDialog("branch") && commit) {
+      this.gitNameDialogContext = { ...this.gitNameDialogContext!, startPoint: commit.hash };
+    }
+  }
+
+  openRenameBranchDialog(branch: CommitRef): void {
+    if (!this.canRenameBranch || branch.refType !== "localBranch") return;
+    if (this.prepareGitNameDialog("renameBranch")) {
+      this.gitNameDialogContext = { ...this.gitNameDialogContext!, branch };
+      this.gitNameDialogValue = branch.shortName;
+    }
   }
 
   openStashDialog(): void {
-    if (!this.activeRepositoryId || !this.client || this.gitActionPending) {
-      return;
-    }
+    this.prepareGitNameDialog("stash");
+  }
 
+  private clearGitNameDialog(): void {
+    this.gitNameDialogKind = null;
+    this.gitNameDialogContext = null;
     this.gitNameDialogValue = "";
     this.gitNameDialogError = "";
-    this.gitNameDialogKind = "stash";
   }
 
   closeGitNameDialog(): void {
-    if (!this.gitActionPending) {
-      this.gitNameDialogKind = null;
-      this.gitNameDialogValue = "";
-      this.gitNameDialogError = "";
-    }
+    if (!this.gitActionPending) this.clearGitNameDialog();
   }
 
   submitGitNameDialog(): void {
     const name = this.gitNameDialogValue.trim();
-    if (!this.gitNameDialogKind) {
-      return;
-    }
+    const context = this.gitNameDialogContext;
+    const client = this.client;
+    if (!context || !client || this.gitActionPending || context.repositoryId !== this.activeRepositoryId || context.environmentId !== this.workspaceState?.environmentId) return;
 
-    if (this.gitNameDialogKind === "branch") {
+    if (this.gitNameDialogKind === "branch" || this.gitNameDialogKind === "renameBranch") {
       if (!name) {
         this.gitNameDialogError = "Enter a branch name to continue.";
         return;
       }
 
-      this.closeGitNameDialog();
+      const branch = context.branch;
+      const checkout = this.gitNameDialogCheckout;
+      this.clearGitNameDialog();
       this.requestGitAction({
-        kind: "createBranch",
-        label: "Creating branch",
-        successMessage: `Created and switched to ${name}`,
-        action: (repositoryId) => this.client!.createBranch({ repositoryId, name, checkout: true }),
+        kind: branch ? "renameBranch" : "createBranch",
+        label: branch ? "Renaming branch" : "Creating branch",
+        successMessage: branch ? `Renamed ${branch.shortName} to ${name}` : checkout ? `Created and switched to ${name}` : `Created branch ${name}`,
+        action: (repositoryId) => branch
+          ? client.renameBranch({ repositoryId, name: branch.shortName, newName: name, expectedTarget: branch.target })
+          : client.createBranch({ repositoryId, name, startPoint: context.startPoint, checkout }),
       });
       return;
     }
@@ -1547,12 +1605,112 @@ export class WorkspaceStore {
       label: "Stashing",
       successMessage: "Changes stashed",
       action: (repositoryId) =>
-        this.client!.stashPush({
+        client.stashPush({
           repositoryId,
           message: name || undefined,
           includeUntracked: true,
         }),
     });
+  }
+
+  openDeleteBranchDialog(branch: CommitRef): void {
+    const repositoryId = this.activeRepositoryId;
+    const environmentId = this.workspaceState?.environmentId;
+    if (!repositoryId || !environmentId || !this.canDeleteBranch || branch.refType !== "localBranch") return;
+    if (this.snapshot?.status.currentBranch === branch.shortName || this.snapshot?.worktrees.some((worktree) => worktree.branch === branch.shortName)) return;
+    this.deleteBranchDialog = { repositoryId, environmentId, branch, force: false, error: "" };
+  }
+
+  confirmDeleteBranch(): void {
+    const dialog = this.deleteBranchDialog;
+    const client = this.client;
+    if (!dialog || !client || this.gitActionPending || dialog.repositoryId !== this.activeRepositoryId || dialog.environmentId !== this.workspaceState?.environmentId) return;
+    this.deleteBranchDialog = null;
+    this.requestGitAction({
+      kind: "deleteBranch",
+      label: "Deleting branch",
+      successMessage: `Deleted branch ${dialog.branch.shortName}`,
+      action: (repositoryId) => client.deleteBranch({ repositoryId, name: dialog.branch.shortName, expectedTarget: dialog.branch.target, force: dialog.force }),
+      onFailed: (error) => this.offerUnmergedDeletionReview(error, dialog, () => {
+        this.deleteBranchDialog = { ...dialog, force: true, error: "" };
+      }),
+    });
+  }
+
+  openRenameWorktreeBranchDialog(worktree: WorktreeInfo): void {
+    const branch = this.snapshot?.refs.find((ref) => ref.refType === "localBranch" && ref.shortName === worktree.branch);
+    if (branch) this.openRenameBranchDialog(branch);
+  }
+
+  openRemoveWorktreeDialog(worktree: WorktreeInfo, deleteBranch: boolean): void {
+    const repositoryId = this.activeRepositoryId;
+    const environmentId = this.workspaceState?.environmentId;
+    if (!repositoryId || !environmentId || !this.canRemoveWorktree || !removableWorktree(worktree)) return;
+    if (deleteBranch && (!worktree.branch || !this.canDeleteBranch)) return;
+    this.removeWorktreeDialog = { repositoryId, environmentId, worktree, deleteBranch, forceBranchDeletion: false, error: "" };
+  }
+
+  confirmRemoveWorktree(): void {
+    const dialog = this.removeWorktreeDialog;
+    const client = this.client;
+    const workspace = this.workspace;
+    if (!dialog || !client || !workspace || this.gitActionPending || dialog.repositoryId !== this.activeRepositoryId || dialog.environmentId !== this.workspaceState?.environmentId) return;
+    this.removeWorktreeDialog = null;
+    this.requestGitAction({
+      kind: "removeWorktree",
+      label: "Removing worktree",
+      notifySuccess: false,
+      action: (repositoryId) => client.removeWorktree({
+        repositoryId,
+        worktreePath: dialog.worktree.path,
+        expectedHead: dialog.worktree.headOid!,
+        expectedBranch: dialog.worktree.branch,
+        deleteBranch: dialog.deleteBranch,
+        forceBranchDeletion: dialog.forceBranchDeletion,
+      }),
+      onApplied: async (result) => {
+        const outcome = result as GitWorktreeRemoveResult | undefined;
+        if (!outcome) return;
+        for (const id of outcome.removedRepositoryIds) {
+          delete this.commitDrafts[`${dialog.environmentId}:${id}`];
+          if (this.workspace === workspace) this.repositoryCatalog = this.repositoryCatalog.filter((repo) => repo.id !== id);
+          await workspace.forgetRepository(id);
+        }
+      },
+      onSucceeded: (result) => {
+        const outcome = result as GitWorktreeRemoveResult;
+        if (outcome.warning) toast.warning("Worktree removal needs attention", { description: outcome.warning });
+        else toast.success(outcome.branchDeleted ? "Worktree and branch removed" : "Worktree removed");
+      },
+      onFailed: (error) => this.offerUnmergedDeletionReview(error, dialog, () => {
+        this.removeWorktreeDialog = { ...dialog, forceBranchDeletion: true, error: "" };
+      }),
+    });
+  }
+
+  private offerUnmergedDeletionReview(
+    error: unknown,
+    context: { repositoryId: string; environmentId: string },
+    onReview: () => void,
+  ): boolean {
+    if (typeof error !== "object" || error === null || !("code" in error) || error.code !== "branch_not_merged") return false;
+    toast.warning("Branch has unmerged commits", {
+      description: "Nothing was removed. Review the warning before choosing Delete anyway.",
+      duration: 15000,
+      action: {
+        label: "Review deletion",
+        onClick: () => {
+          if (context.repositoryId !== this.activeRepositoryId || context.environmentId !== this.workspaceState?.environmentId) {
+            toast.error("Open the original repository to review deletion.");
+          } else if (this.gitActionPending || this.gitNameDialogKind || this.deleteBranchDialog || this.removeWorktreeDialog || this.discardDialog || this.repositoryPathDialogOpen) {
+            toast.error("Finish the current action before reviewing deletion.");
+          } else {
+            onReview();
+          }
+        },
+      },
+    });
+    return true;
   }
 
   popStash(): void {

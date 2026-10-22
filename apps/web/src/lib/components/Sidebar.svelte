@@ -2,7 +2,7 @@
   import BranchTree from "$lib/components/BranchTree.svelte";
   import FileTreeChevron from "$lib/components/FileTreeChevron.svelte";
   import WorktreeTree from "$lib/components/WorktreeTree.svelte";
-  import type { CommitInfo, CommitRef, RepositorySnapshot, StashInfo } from "$lib/types/repository";
+  import type { CommitInfo, CommitRef, RepositorySnapshot, StashInfo, WorktreeInfo } from "$lib/types/repository";
 
   type Props = {
     snapshot: RepositorySnapshot | null;
@@ -13,6 +13,13 @@
     onSwitchBranch?: (branchName: string) => void;
     onSwitchWorktree?: (path: string) => void;
     onToggleRefs?: (refs: CommitRef[], visible: boolean) => void;
+    canRenameBranch?: boolean;
+    canDeleteBranch?: boolean;
+    onRenameBranch?: (branch: CommitRef) => void;
+    onDeleteBranch?: (branch: CommitRef) => void;
+    canRemoveWorktree?: boolean;
+    onRemoveWorktree?: (worktree: WorktreeInfo, deleteBranch: boolean) => void;
+    onRenameWorktreeBranch?: (worktree: WorktreeInfo) => void;
   };
 
   type SidebarSections = {
@@ -39,6 +46,13 @@
     onSwitchBranch,
     onSwitchWorktree,
     onToggleRefs,
+    canRenameBranch = false,
+    canDeleteBranch = false,
+    onRenameBranch,
+    onDeleteBranch,
+    canRemoveWorktree = false,
+    onRemoveWorktree,
+    onRenameWorktreeBranch,
   }: Props = $props();
 
   let open = $state<SidebarSections>({ ...defaultOpen });
@@ -46,6 +60,7 @@
 
   const localBranches = $derived(snapshot?.refs.filter((ref) => ref.refType === "localBranch") ?? []);
   const remoteBranches = $derived(snapshot?.refs.filter((ref) => ref.refType === "remoteBranch") ?? []);
+  const checkedOutBranches = $derived(new Set(snapshot?.worktrees.flatMap((worktree) => worktree.branch ? [worktree.branch] : []) ?? []));
 
   function toggle(section: keyof typeof open) {
     open[section] = !open[section];
@@ -135,6 +150,15 @@
               refs={localBranches}
               refType="localBranch"
               treeId="gitgui-local-branches"
+              contextKey={stateKey}
+              {canRenameBranch}
+              {canDeleteBranch}
+              {checkedOutBranches}
+              worktrees={snapshot?.worktrees ?? []}
+              {canRemoveWorktree}
+              {onRemoveWorktree}
+              {onRenameBranch}
+              {onDeleteBranch}
               currentBranch={snapshot?.status.currentBranch}
               selectedCommitHash={selectedCommit?.hash ?? null}
               {visibleRefKeys}
@@ -189,7 +213,8 @@
       {#if open.Worktrees}
         <div class="min-h-0 flex-1 overflow-auto">
           {#if snapshot?.worktrees?.length}
-            <WorktreeTree worktrees={snapshot.worktrees} treeId="gitgui-worktrees" {onSwitchWorktree} />
+            <WorktreeTree worktrees={snapshot.worktrees} treeId="gitgui-worktrees" contextKey={stateKey} {onSwitchWorktree}
+              {canRenameBranch} {canDeleteBranch} {canRemoveWorktree} {onRenameWorktreeBranch} {onRemoveWorktree} />
           {:else}
             <p class="px-2 py-1 text-sm text-[var(--app-theme-text-subtle)]">No worktrees.</p>
           {/if}

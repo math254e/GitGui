@@ -17,6 +17,9 @@ import type {
   GitAmendParams,
   GitApplyHunksParams,
   GitBranchCreateParams,
+  GitBranchRenameParams,
+  GitBranchDeleteParams,
+  GitWorktreeRemoveParams,
   GitBranchSwitchParams,
   GitCommitParams,
   GitDiscardParams,
@@ -349,6 +352,18 @@ export class GitGuiClient {
       ...params,
       repositoryId: assertRepositoryId(params.repositoryId),
     });
+  }
+
+  renameBranch(params: GitBranchRenameParams) {
+    return this.call("git.branch.rename", { ...params, repositoryId: assertRepositoryId(params.repositoryId) });
+  }
+
+  deleteBranch(params: GitBranchDeleteParams) {
+    return this.call("git.branch.delete", { ...params, repositoryId: assertRepositoryId(params.repositoryId) });
+  }
+
+  removeWorktree(params: GitWorktreeRemoveParams) {
+    return this.call("git.worktree.remove", { ...params, repositoryId: assertRepositoryId(params.repositoryId) });
   }
 
   stashPush(params: GitStashPushParams) {

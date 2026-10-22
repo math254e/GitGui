@@ -15,6 +15,9 @@
  *   checked against the server's own definitions. `WS_METHOD_NAMES` is
  *   generated from the same crate and the test in `protocol.test.ts` fails if
  *   the registry and this table drift apart.
+ * - GitGui-owned branch rename/delete methods use reviewed local ref targets
+ *   and return mutation outcomes before the client refreshes repository state.
+ * - Reviewed worktree removal also reports branch and catalog cleanup outcomes.
  */
 import type {
   CommitFileDiffParams,
@@ -28,6 +31,10 @@ import type {
   GitApplyHunksParams,
   GitBranchCreateParams,
   GitBranchCreateResult,
+  GitBranchRenameParams,
+  GitBranchDeleteParams,
+  GitWorktreeRemoveParams,
+  GitWorktreeRemoveResult,
   GitBranchListParams,
   GitBranchListResult,
   GitBranchSwitchParams,
@@ -151,6 +158,9 @@ export interface GitGuiRpcMethods {
     readonly input: GitBranchSwitchParams;
     readonly output: GitBranchSwitchResult;
   };
+  "git.branch.rename": { readonly input: GitBranchRenameParams; readonly output: null };
+  "git.branch.delete": { readonly input: GitBranchDeleteParams; readonly output: null };
+  "git.worktree.remove": { readonly input: GitWorktreeRemoveParams; readonly output: GitWorktreeRemoveResult };
   "git.stash.push": { readonly input: GitStashPushParams; readonly output: GitStashPushResult };
   "git.stash.pop": { readonly input: GitStashPopParams; readonly output: GitStashPopResult };
 }
@@ -194,6 +204,9 @@ export const WS_METHOD_NAMES = [
   "git.branch.list",
   "git.branch.create",
   "git.branch.switch",
+  "git.branch.rename",
+  "git.branch.delete",
+  "git.worktree.remove",
   "git.stash.push",
   "git.stash.pop",
 ] as const satisfies ReadonlyArray<keyof GitGuiRpcMethods>;
@@ -249,6 +262,9 @@ export const WS_METHODS = {
   gitBranchList: "git.branch.list",
   gitBranchCreate: "git.branch.create",
   gitBranchSwitch: "git.branch.switch",
+  gitBranchRename: "git.branch.rename",
+  gitBranchDelete: "git.branch.delete",
+  gitWorktreeRemove: "git.worktree.remove",
   gitStashPush: "git.stash.push",
   gitStashPop: "git.stash.pop",
 } as const satisfies Record<string, GitGuiRpcMethod>;

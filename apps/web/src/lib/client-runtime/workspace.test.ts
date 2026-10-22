@@ -37,6 +37,22 @@ async function fixture(environmentId = "one", watching = true) {
 }
 
 describe("repository invalidations", () => {
+  it("forgets a server-removed worktree without requesting another catalog deletion", async () => {
+    const f = await fixture();
+    const remove = vi.fn();
+    Object.assign(f.client, { removeRepository: remove });
+    await f.workspace.forgetRepository("repo-one");
+    expect(remove).not.toHaveBeenCalled();
+    expect(f.workspace.state.openRepositoryIds).toEqual([]);
+    expect(f.workspace.state.activeRepositoryId).toBeNull();
+    expect(f.workspace.state.repositories["repo-one"]).toBeUndefined();
+    expect(f.workspace.state.recentRepositories.some((entry) => entry.repositoryId === "repo-one")).toBe(false);
+    f.emit("snapshot");
+    await vi.advanceTimersByTimeAsync(100);
+    expect(f.client.refreshRepositories).not.toHaveBeenCalled();
+    f.workspace.dispose();
+  });
+
   it("coalesces edits into status reads and retains history identity", async () => {
     const f = await fixture();
     f.emit("status"); f.emit("status"); f.emit("status", "closed-repo");

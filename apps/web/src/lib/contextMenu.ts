@@ -232,6 +232,7 @@ export function showContextMenu<T extends string>(
   items: readonly ContextMenuItem<T>[],
   position?: { x: number; y: number },
   owner?: object,
+  options?: { width: number },
 ): Promise<T | null> {
   dismissContextMenu();
   return new Promise<T | null>((resolve) => {
@@ -321,6 +322,12 @@ export function showContextMenu<T extends string>(
         "position:fixed;z-index:10000;width:13rem;min-width:13rem;max-width:13rem;overflow:hidden;border-radius:2px;background-clip:padding-box;background:color-mix(in srgb,var(--app-theme-surface-raised) 18%,color-mix(in srgb,var(--app-theme-surface-raised) 80%,transparent));-webkit-backdrop-filter:blur(var(--app-theme-glass-blur,16px)) saturate(var(--app-theme-glass-saturation,1.08));backdrop-filter:blur(var(--app-theme-glass-blur,16px)) saturate(var(--app-theme-glass-saturation,1.08));border:1px solid color-mix(in srgb,var(--app-theme-text) 10%,transparent);color:var(--app-theme-text);outline:none;pointer-events:auto;";
       menu.style.left = `${preferredLeft}px`;
       menu.style.top = `${preferredTop}px`;
+      if (options) {
+        const width = `${Math.min(Math.max(208, options.width), window.innerWidth - 16)}px`;
+        menu.style.width = width;
+        menu.style.minWidth = width;
+        menu.style.maxWidth = width;
+      }
       menu.dataset.level = String(level);
 
       const inner = document.createElement("div");
@@ -328,6 +335,7 @@ export function showContextMenu<T extends string>(
         "max-h-[min(24rem,70vh)] min-w-0 max-w-sm overflow-y-auto overflow-x-hidden p-1";
       inner.style.cssText =
         "max-height:min(24rem,70vh);min-width:0;max-width:13rem;overflow-x:hidden;overflow-y:auto;padding:0.25rem;";
+      if (options) inner.style.maxWidth = "100%";
 
       for (const item of entries) {
         if (item.separatorBefore === true && inner.children.length > 0) {

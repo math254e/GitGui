@@ -9,6 +9,8 @@
     REPOSITORY_ROUTE_ID,
   } from "$lib/workspace/routes";
   import DiscardChangesDialog from "$lib/components/DiscardChangesDialog.svelte";
+  import DeleteBranchDialog from "$lib/components/DeleteBranchDialog.svelte";
+  import RemoveWorktreeDialog from "$lib/components/RemoveWorktreeDialog.svelte";
   import GitActionStatusBar from "$lib/components/GitActionStatusBar.svelte";
   import GitNameDialog from "$lib/components/GitNameDialog.svelte";
   import RepositoryPathDialog from "$lib/components/RepositoryPathDialog.svelte";
@@ -108,10 +110,35 @@
   value={store.gitNameDialogValue}
   loading={store.gitActionPending}
   error={store.gitNameDialogError}
+  startPoint={store.gitNameDialogContext?.startPoint}
+  checkout={store.gitNameDialogCheckout}
+  onCheckoutChange={(checked) => { store.gitNameDialogCheckout = checked; }}
   onValueChange={(value) => {
     store.gitNameDialogValue = value;
     store.gitNameDialogError = "";
   }}
   onSubmit={() => store.submitGitNameDialog()}
   onCancel={() => store.closeGitNameDialog()}
+/>
+
+<DeleteBranchDialog
+  open={store.deleteBranchDialog !== null}
+  branchName={store.deleteBranchDialog?.branch.shortName ?? ""}
+  force={store.deleteBranchDialog?.force ?? false}
+  loading={store.gitActionPending}
+  error={store.deleteBranchDialog?.error ?? ""}
+  onConfirm={() => store.confirmDeleteBranch()}
+  onCancel={() => { if (!store.gitActionPending) store.deleteBranchDialog = null; }}
+/>
+
+<RemoveWorktreeDialog
+  open={store.removeWorktreeDialog !== null}
+  path={store.removeWorktreeDialog?.worktree.path ?? ""}
+  branch={store.removeWorktreeDialog?.worktree.branch ?? null}
+  deleteBranch={store.removeWorktreeDialog?.deleteBranch ?? false}
+  forceBranchDeletion={store.removeWorktreeDialog?.forceBranchDeletion ?? false}
+  loading={store.gitActionPending}
+  error={store.removeWorktreeDialog?.error ?? ""}
+  onConfirm={() => store.confirmRemoveWorktree()}
+  onCancel={() => { if (!store.gitActionPending) store.removeWorktreeDialog = null; }}
 />

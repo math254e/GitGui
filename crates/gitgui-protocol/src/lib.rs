@@ -110,6 +110,11 @@ pub const METHOD_GIT_BRANCH_LIST: &str = "git.branch.list";
 pub const METHOD_GIT_BRANCH_CREATE: &str = "git.branch.create";
 /// Canonical method for switching the current branch.
 pub const METHOD_GIT_BRANCH_SWITCH: &str = "git.branch.switch";
+/// Canonical method for renaming a reviewed local branch.
+pub const METHOD_GIT_BRANCH_RENAME: &str = "git.branch.rename";
+/// Canonical method for deleting a reviewed local branch.
+pub const METHOD_GIT_BRANCH_DELETE: &str = "git.branch.delete";
+pub const METHOD_GIT_WORKTREE_REMOVE: &str = "git.worktree.remove";
 /// Canonical method for creating a stash.
 pub const METHOD_GIT_STASH_PUSH: &str = "git.stash.push";
 /// Canonical method for applying and removing the latest stash.
@@ -153,6 +158,9 @@ pub const WS_METHOD_NAMES: &[&str] = &[
     METHOD_GIT_BRANCH_LIST,
     METHOD_GIT_BRANCH_CREATE,
     METHOD_GIT_BRANCH_SWITCH,
+    METHOD_GIT_BRANCH_RENAME,
+    METHOD_GIT_BRANCH_DELETE,
+    METHOD_GIT_WORKTREE_REMOVE,
     METHOD_GIT_STASH_PUSH,
     METHOD_GIT_STASH_POP,
 ];
@@ -243,6 +251,9 @@ pub const CAPABILITY_GIT_BRANCH_LIST: &str = "git.branch.list";
 pub const CAPABILITY_GIT_BRANCH_CREATE: &str = "git.branch.create";
 /// Capability advertised when branch switching is available.
 pub const CAPABILITY_GIT_BRANCH_SWITCH: &str = "git.branch.switch";
+pub const CAPABILITY_GIT_BRANCH_RENAME: &str = "git.branch.rename";
+pub const CAPABILITY_GIT_BRANCH_DELETE: &str = "git.branch.delete";
+pub const CAPABILITY_GIT_WORKTREE_REMOVE: &str = "git.worktree.remove";
 /// Capability advertised when stash creation is available.
 pub const CAPABILITY_GIT_STASH_PUSH: &str = "git.stash.push";
 /// Capability advertised when stash popping is available.
@@ -276,6 +287,8 @@ pub mod error_codes {
     pub const REPOSITORY_CREATE_FAILED: &str = "repository_create_failed";
     /// A Git operation failed after request and repository validation succeeded.
     pub const GIT_OPERATION_FAILED: &str = "git_operation_failed";
+    /// Safe deletion refused a branch whose commits are not fully merged.
+    pub const BRANCH_NOT_MERGED: &str = "branch_not_merged";
     /// An internal server failure occurred while handling a request.
     pub const INTERNAL: &str = "internal_error";
 }
@@ -1091,6 +1104,50 @@ pub struct GitBranchSwitchResult {
     pub snapshot: RepositorySnapshot,
 }
 
+/// Rename only the local branch and commit the client reviewed.
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GitBranchRenameParams {
+    pub repository_id: String,
+    pub name: String,
+    pub new_name: String,
+    pub expected_target: String,
+}
+
+/// Delete only the local branch and commit the client reviewed.
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GitBranchDeleteParams {
+    pub repository_id: String,
+    pub name: String,
+    pub expected_target: String,
+    /// Requires an explicit second confirmation after safe deletion is refused.
+    #[serde(default)]
+    pub force: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GitWorktreeRemoveParams {
+    pub repository_id: String,
+    pub worktree_path: String,
+    pub expected_head: String,
+    pub expected_branch: Option<String>,
+    #[serde(default)]
+    pub delete_branch: bool,
+    /// Permits unmerged branch deletion, never forced worktree removal.
+    #[serde(default)]
+    pub force_branch_deletion: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GitWorktreeRemoveResult {
+    pub branch_deleted: bool,
+    pub removed_repository_ids: Vec<String>,
+    pub warning: Option<String>,
+}
+
 /// Parameters for creating a stash.
 #[derive(Clone, Debug, Deserialize, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -1343,6 +1400,10 @@ pub struct WorktreeInfo {
     pub branch: Option<String>,
     /// Whether this is the worktree represented by the current snapshot.
     pub current: bool,
+    /// Older servers omit this field and do not advertise worktree removal.
+    #[serde(default)]
+    #[ts(optional)]
+    pub is_main: Option<bool>,
 }
 
 /// Layout and connections for the rendered commit graph.

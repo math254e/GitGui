@@ -438,34 +438,43 @@ export class ClientWorkspace {
 
     try {
       await this.client.removeRepository(id);
-      this.lifecycleGeneration += 1;
-      this.requestGenerations.delete(id);
-
-      const openRepositoryIds = this._state.openRepositoryIds.filter((candidate) => candidate !== id);
-      const repositories = { ...this._state.repositories };
-      delete repositories[id];
-      const recentRepositories = this._state.recentRepositories.filter((recent) => recent.repositoryId !== id);
-      const activeRepositoryId = this._state.activeRepositoryId === id
-        ? openRepositoryIds[0] ?? null
-        : this._state.activeRepositoryId;
-
-      this.replace({
-        openRepositoryIds,
-        recentRepositories,
-        repositories,
-        activeRepositoryId,
-        opening: false,
-        refreshing: false,
-        restoring: false,
-      });
-      await this.persist();
-      return this.state;
+      return await this.forgetRepositoryOperation(id);
     } catch (error) {
       this.update({ error: toWorkspaceError(error) });
       throw error;
     } finally {
       this.update({ opening: false });
     }
+  }
+
+  /** The server already removed this catalog entry with its worktree. */
+  forgetRepository(repositoryId: string): Promise<ClientWorkspaceState> {
+    return this.serializeStateOperation(() => this.forgetRepositoryOperation(assertRepositoryId(repositoryId)));
+  }
+
+  private async forgetRepositoryOperation(id: string): Promise<ClientWorkspaceState> {
+    this.lifecycleGeneration += 1;
+    this.requestGenerations.delete(id);
+
+    const openRepositoryIds = this._state.openRepositoryIds.filter((candidate) => candidate !== id);
+    const repositories = { ...this._state.repositories };
+    delete repositories[id];
+    const recentRepositories = this._state.recentRepositories.filter((recent) => recent.repositoryId !== id);
+    const activeRepositoryId = this._state.activeRepositoryId === id
+      ? openRepositoryIds[0] ?? null
+      : this._state.activeRepositoryId;
+
+    this.replace({
+      openRepositoryIds,
+      recentRepositories,
+      repositories,
+      activeRepositoryId,
+      opening: false,
+      refreshing: false,
+      restoring: false,
+    });
+    await this.persist();
+    return this.state;
   }
 
   removeRecentRepository(repositoryId: string): Promise<void> {

@@ -76,11 +76,18 @@
   <div class="grid h-full min-h-0 grid-cols-1 overflow-hidden">
     {#if store.snapshot && store.selectedFile && (store.selectedCommit || store.changesSelected)}
       <Sidebar
+        onRenameWorktreeBranch={(worktree) => store.openRenameWorktreeBranchDialog(worktree)}
         snapshot={store.snapshot}
         selectedCommit={store.selectedCommit}
         stateKey={store.sidebarStateKey}
         visibleRefKeys={store.visibleGraphRefKeys}
         onSelectRef={(ref) => store.selectRef(ref)}
+        canRenameBranch={store.canRenameBranch}
+        canDeleteBranch={store.canDeleteBranch}
+        canRemoveWorktree={store.canRemoveWorktree}
+        onRemoveWorktree={(worktree, deleteBranch) => store.openRemoveWorktreeDialog(worktree, deleteBranch)}
+        onRenameBranch={(ref) => store.openRenameBranchDialog(ref)}
+        onDeleteBranch={(ref) => store.openDeleteBranchDialog(ref)}
         onSwitchBranch={(branchName) => store.switchBranch(branchName)}
         onSwitchWorktree={(path) => void store.switchWorktree(path)}
         onToggleRefs={(refs, visible) => store.toggleGraphRefs(refs, visible)}
@@ -101,11 +108,18 @@
       </div>
     {:else}
       <Sidebar
+        onRenameWorktreeBranch={(worktree) => store.openRenameWorktreeBranchDialog(worktree)}
         snapshot={store.snapshot}
         selectedCommit={store.selectedCommit}
         stateKey={store.sidebarStateKey}
         visibleRefKeys={store.visibleGraphRefKeys}
         onSelectRef={(ref) => store.selectRef(ref)}
+        canRenameBranch={store.canRenameBranch}
+        canDeleteBranch={store.canDeleteBranch}
+        canRemoveWorktree={store.canRemoveWorktree}
+        onRemoveWorktree={(worktree, deleteBranch) => store.openRemoveWorktreeDialog(worktree, deleteBranch)}
+        onRenameBranch={(ref) => store.openRenameBranchDialog(ref)}
+        onDeleteBranch={(ref) => store.openDeleteBranchDialog(ref)}
         onSwitchWorktree={(path) => void store.switchWorktree(path)}
         onToggleRefs={(refs, visible) => store.toggleGraphRefs(refs, visible)}
       />
@@ -123,6 +137,7 @@
         <div class="min-h-0 flex-1">
           {#key store.activeRepositoryId}
             <GitGraph
+              contextKey={store.sidebarStateKey}
               snapshot={store.graphSnapshot}
               repositoryId={store.activeRepositoryId}
               getRestoredScrollTop={(repositoryId) => store.graphScrollTopFor(repositoryId)}
@@ -134,6 +149,14 @@
               onSelectChanges={() => store.selectChanges()}
               onSelectCommit={(commit) => store.selectCommit(commit)}
               onCompareCommitToWorkingTree={(commit) => store.compareCommitToWorkingTree(commit)}
+              onCreateBranch={(commit) => store.openBranchDialog(commit)}
+              canRenameBranch={store.canRenameBranch}
+              canDeleteBranch={store.canDeleteBranch}
+              canRemoveWorktree={store.canRemoveWorktree}
+              onRemoveWorktree={(worktree, deleteBranch) => store.openRemoveWorktreeDialog(worktree, deleteBranch)}
+              onRenameBranch={(ref) => store.openRenameBranchDialog(ref)}
+              onDeleteBranch={(ref) => store.openDeleteBranchDialog(ref)}
+              pending={store.gitActionPending}
             />
           {/key}
         </div>
@@ -201,11 +224,18 @@
           />
         {:else}
           <Sidebar
+            onRenameWorktreeBranch={(worktree) => store.openRenameWorktreeBranchDialog(worktree)}
             snapshot={store.snapshot}
             selectedCommit={store.selectedCommit}
             stateKey={store.sidebarStateKey}
             visibleRefKeys={store.visibleGraphRefKeys}
             onSelectRef={(ref) => store.selectRef(ref)}
+            canRenameBranch={store.canRenameBranch}
+            canDeleteBranch={store.canDeleteBranch}
+            canRemoveWorktree={store.canRemoveWorktree}
+            onRemoveWorktree={(worktree, deleteBranch) => store.openRemoveWorktreeDialog(worktree, deleteBranch)}
+            onRenameBranch={(ref) => store.openRenameBranchDialog(ref)}
+            onDeleteBranch={(ref) => store.openDeleteBranchDialog(ref)}
             onSwitchBranch={(branchName) => store.switchBranch(branchName)}
             onSwitchWorktree={(path) => void store.switchWorktree(path)}
             onToggleRefs={(refs, visible) => store.toggleGraphRefs(refs, visible)}
@@ -231,6 +261,7 @@
             <div class="min-h-0 flex-1">
               {#key store.activeRepositoryId}
                 <GitGraph
+                  contextKey={store.sidebarStateKey}
                   snapshot={store.graphSnapshot}
                   repositoryId={store.activeRepositoryId}
                   getRestoredScrollTop={(repositoryId) => store.graphScrollTopFor(repositoryId)}
@@ -242,6 +273,14 @@
                   onSelectChanges={() => store.selectChanges()}
                   onSelectCommit={(commit) => store.selectCommit(commit)}
                   onCompareCommitToWorkingTree={(commit) => store.compareCommitToWorkingTree(commit)}
+                  onCreateBranch={(commit) => store.openBranchDialog(commit)}
+                  canRenameBranch={store.canRenameBranch}
+                  canDeleteBranch={store.canDeleteBranch}
+                  canRemoveWorktree={store.canRemoveWorktree}
+                  onRemoveWorktree={(worktree, deleteBranch) => store.openRemoveWorktreeDialog(worktree, deleteBranch)}
+                  onRenameBranch={(ref) => store.openRenameBranchDialog(ref)}
+                  onDeleteBranch={(ref) => store.openDeleteBranchDialog(ref)}
+                  pending={store.gitActionPending}
                 />
               {/key}
             </div>

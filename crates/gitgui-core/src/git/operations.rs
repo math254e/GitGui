@@ -133,6 +133,115 @@ pub fn switch_branch(root: &str, name: &str, merge: bool) -> Result<(), GitError
     GitCommand::run_owned(&args, Some(Path::new(root))).map(|_| ())
 }
 
+fn branch_error(message: &str) -> GitError {
+    GitError {
+        message: message.to_string(),
+        stderr: String::new(),
+        status: None,
+    }
+}
+
+/// Use a literal full ref: `check-ref-format --branch` accepts checkout aliases
+/// such as @{-1}, which must never retarget a reviewed rename or deletion.
+pub(super) fn reviewed_branch(
+    root: &str,
+    name: &str,
+    expected_target: &str,
+) -> Result<String, GitError> {
+    let reference = format!("refs/heads/{name}");
+    if name.starts_with('-') {
+        return Err(branch_error("Invalid local branch name"));
+    }
+    GitCommand::run(&["check-ref-format", &reference], Some(Path::new(root)))?;
+    let target = GitCommand::run(
+        &["rev-parse", "--verify", &reference],
+        Some(Path::new(root)),
+    )?;
+    if target.trim() != expected_target {
+        return Err(branch_error(
+            "This branch changed. Close the dialog and review it again.",
+        ));
+    }
+    Ok(reference)
+}
+
+pub fn rename_branch(
+    root: &str,
+    name: &str,
+    new_name: &str,
+    expected_target: &str,
+) -> Result<(), GitError> {
+    reviewed_branch(root, name, expected_target)?;
+    // Validate the literal destination as well; never overwrite an existing ref.
+    if new_name.starts_with('-') {
+        return Err(branch_error("Invalid local branch name"));
+    }
+    GitCommand::run(
+        &["check-ref-format", &format!("refs/heads/{new_name}")],
+        Some(Path::new(root)),
+    )?;
+    GitCommand::run(
+        &["branch", "--move", "--", name, new_name],
+        Some(Path::new(root)),
+    )
+    .map(|_| ())
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum BranchDeleteOutcome {
+    Deleted,
+    NotMerged,
+}
+
+pub fn delete_branch(
+    root: &str,
+    name: &str,
+    expected_target: &str,
+    force: bool,
+) -> Result<BranchDeleteOutcome, GitError> {
+    let reference = reviewed_branch(root, name, expected_target)?;
+    let cwd = Some(Path::new(root));
+    let worktrees = GitCommand::run(&["worktree", "list", "--porcelain"], cwd)?;
+    if worktrees
+        .lines()
+        .any(|line| line.strip_prefix("branch ") == Some(reference.as_str()))
+    {
+        return Err(branch_error("This branch is checked out in a worktree. Switch that worktree to another branch first."));
+    }
+    if !force && !branch_is_merged(root, &reference)? {
+        return Ok(BranchDeleteOutcome::NotMerged);
+    }
+    GitCommand::run(
+        &["branch", if force { "-D" } else { "-d" }, "--", name],
+        cwd,
+    )?;
+    Ok(BranchDeleteOutcome::Deleted)
+}
+
+pub(super) fn branch_is_merged(root: &str, reference: &str) -> Result<bool, GitError> {
+    // Match Git's safe-delete rule: the resolved upstream, otherwise HEAD.
+    // Exit status, rather than translated stderr, identifies ancestry.
+    let cwd = Some(Path::new(root));
+    let upstream = GitCommand::run(&["for-each-ref", "--format=%(upstream)", reference], cwd)?;
+    let upstream = upstream.trim();
+    let base = if !upstream.is_empty()
+        && GitCommand::run(
+            &["rev-parse", "--verify", &format!("{upstream}^{{commit}}")],
+            cwd,
+        )
+        .is_ok()
+    {
+        upstream
+    } else {
+        "HEAD"
+    };
+    match GitCommand::run(&["merge-base", "--is-ancestor", reference, base], cwd) {
+        Ok(_) => Ok(true),
+        Err(error) if error.status == Some(1) => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
 pub fn stash_push(
     root: &str,
     message: Option<&str>,
@@ -151,4 +260,178 @@ pub fn stash_push(
 
 pub fn stash_pop(root: &str) -> Result<(), GitError> {
     GitCommand::run(&["stash", "pop"], Some(Path::new(root))).map(|_| ())
+}
+
+#[cfg(test)]
+mod branch_tests {
+    use super::*;
+
+    fn git(root: &Path, args: &[&str]) -> String {
+        GitCommand::run(args, Some(root))
+            .unwrap()
+            .trim()
+            .to_string()
+    }
+
+    fn repository() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        git(dir.path(), &["init", "-q", "-b", "main"]);
+        git(dir.path(), &["config", "user.name", "GitGui Test"]);
+        git(dir.path(), &["config", "user.email", "test@example.com"]);
+        git(dir.path(), &["config", "core.autocrlf", "false"]);
+        git(dir.path(), &["commit", "--allow-empty", "-qm", "base"]);
+        dir
+    }
+
+    #[test]
+    fn rename_preserves_tip_and_upstream_and_refuses_existing_names() {
+        let repo = repository();
+        let root = repo.path().to_str().unwrap();
+        git(repo.path(), &["branch", "feature/old"]);
+        git(
+            repo.path(),
+            &["branch", "--set-upstream-to=main", "feature/old"],
+        );
+        let tip = git(repo.path(), &["rev-parse", "HEAD"]);
+        rename_branch(root, "feature/old", "feature/ny-æøå", &tip).unwrap();
+        assert_eq!(git(repo.path(), &["rev-parse", "feature/ny-æøå"]), tip);
+        assert_eq!(
+            git(repo.path(), &["config", "branch.feature/ny-æøå.merge"]),
+            "refs/heads/main"
+        );
+        assert!(rename_branch(root, "feature/ny-æøå", "main", &tip).is_err());
+        assert_eq!(git(repo.path(), &["rev-parse", "main"]), tip);
+        rename_branch(root, "main", "renamed-main", &tip).unwrap();
+        assert_eq!(
+            git(repo.path(), &["branch", "--show-current"]),
+            "renamed-main"
+        );
+    }
+
+    #[test]
+    fn delete_requires_separate_force_for_unmerged_commits() {
+        let repo = repository();
+        let root = repo.path().to_str().unwrap();
+        git(repo.path(), &["switch", "-c", "feature/unmerged"]);
+        git(repo.path(), &["commit", "--allow-empty", "-qm", "unmerged"]);
+        let tip = git(repo.path(), &["rev-parse", "HEAD"]);
+        git(repo.path(), &["switch", "main"]);
+        assert_eq!(
+            delete_branch(root, "feature/unmerged", &tip, false).unwrap(),
+            BranchDeleteOutcome::NotMerged
+        );
+        assert_eq!(git(repo.path(), &["rev-parse", "feature/unmerged"]), tip);
+        assert_eq!(
+            delete_branch(root, "feature/unmerged", &tip, true).unwrap(),
+            BranchDeleteOutcome::Deleted
+        );
+        assert!(GitCommand::run(
+            &["show-ref", "--verify", "refs/heads/feature/unmerged"],
+            Some(repo.path())
+        )
+        .is_err());
+        let main = git(repo.path(), &["rev-parse", "main"]);
+        git(repo.path(), &["branch", "merged"]);
+        assert_eq!(
+            delete_branch(root, "merged", &main, false).unwrap(),
+            BranchDeleteOutcome::Deleted
+        );
+    }
+
+    #[test]
+    fn deletion_matches_git_upstream_merge_rules() {
+        let repo = repository();
+        let root = repo.path().to_str().unwrap();
+        git(repo.path(), &["switch", "-c", "feature"]);
+        git(repo.path(), &["commit", "--allow-empty", "-qm", "new"]);
+        let tip = git(repo.path(), &["rev-parse", "HEAD"]);
+        git(repo.path(), &["branch", "published"]);
+        git(repo.path(), &["branch", "--set-upstream-to=published"]);
+        git(repo.path(), &["switch", "main"]);
+        assert_eq!(
+            delete_branch(root, "feature", &tip, false).unwrap(),
+            BranchDeleteOutcome::Deleted
+        );
+        git(repo.path(), &["branch", "feature", &tip]);
+        git(repo.path(), &["config", "branch.feature.remote", "."]);
+        git(
+            repo.path(),
+            &["config", "branch.feature.merge", "refs/heads/missing"],
+        );
+        assert_eq!(
+            delete_branch(root, "feature", &tip, false).unwrap(),
+            BranchDeleteOutcome::NotMerged
+        );
+    }
+
+    #[test]
+    fn reviewed_actions_reject_stale_tips_aliases_and_invalid_names() {
+        let repo = repository();
+        let root = repo.path().to_str().unwrap();
+        let old = git(repo.path(), &["rev-parse", "HEAD"]);
+        git(repo.path(), &["branch", "feature"]);
+        git(repo.path(), &["commit", "--allow-empty", "-qm", "next"]);
+        git(repo.path(), &["branch", "-f", "feature", "HEAD"]);
+        assert!(rename_branch(root, "feature", "renamed", &old).is_err());
+        assert!(delete_branch(root, "feature", &old, true).is_err());
+        let tip = git(repo.path(), &["rev-parse", "feature"]);
+        for name in [
+            "@{-1}",
+            "--all",
+            "refs/remotes/origin/main",
+            "bad..name",
+            "bad name",
+        ] {
+            assert!(delete_branch(root, name, &tip, true).is_err());
+        }
+        assert!(rename_branch(root, "feature", "bad..name", &tip).is_err());
+        assert_eq!(git(repo.path(), &["rev-parse", "feature"]), tip);
+    }
+
+    #[test]
+    fn checked_out_branches_cannot_be_deleted_even_with_force() {
+        let repo = repository();
+        let root = repo.path().to_str().unwrap();
+        let tip = git(repo.path(), &["rev-parse", "HEAD"]);
+        assert!(delete_branch(root, "main", &tip, true).is_err());
+        let linked = tempfile::tempdir().unwrap();
+        let linked_path = linked.path().join("linked");
+        git(
+            repo.path(),
+            &[
+                "worktree",
+                "add",
+                "-b",
+                "linked",
+                linked_path.to_str().unwrap(),
+            ],
+        );
+        for force in [false, true] {
+            assert!(delete_branch(root, "linked", &tip, force).is_err());
+        }
+        assert_eq!(git(repo.path(), &["rev-parse", "linked"]), tip);
+    }
+
+    #[test]
+    fn create_from_commit_respects_checkout_and_preserves_dirty_changes() {
+        let repo = repository();
+        let root = repo.path().to_str().unwrap();
+        let base = git(repo.path(), &["rev-parse", "HEAD"]);
+        git(repo.path(), &["commit", "--allow-empty", "-qm", "next"]);
+        std::fs::write(repo.path().join("untracked.txt"), "keep me").unwrap();
+        create_branch(root, "from-base", Some(&base), false).unwrap();
+        assert_eq!(git(repo.path(), &["rev-parse", "from-base"]), base);
+        assert_eq!(git(repo.path(), &["branch", "--show-current"]), "main");
+        create_branch(root, "checkout-base", Some(&base), true).unwrap();
+        assert_eq!(
+            git(repo.path(), &["branch", "--show-current"]),
+            "checkout-base"
+        );
+        assert_eq!(
+            std::fs::read_to_string(repo.path().join("untracked.txt")).unwrap(),
+            "keep me"
+        );
+        assert!(create_branch(root, "from-base", Some(&base), true).is_err());
+        assert!(create_branch(root, "bad..name", Some(&base), false).is_err());
+    }
 }

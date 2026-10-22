@@ -5,6 +5,136 @@ use tokio_tungstenite::{
 
 type Client = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
 
+#[tokio::test]
+async fn worktree_removal_is_scoped_and_cleans_its_catalog_entry() {
+    let root = repository();
+    // The fixture has a modified tracked file in the main worktree only.
+    let linked_parent = tempfile::tempdir().unwrap();
+    let linked = linked_parent.path().join("linked tree");
+    git(
+        root.path(),
+        &["worktree", "add", "-b", "linked", linked.to_str().unwrap()],
+    );
+    let head = git(root.path(), &["rev-parse", "HEAD"]);
+    let state = state(root.path());
+    let id = state.repositories.read().await[0].summary.id.clone();
+    let linked_entry = build_repository_catalog(&[linked.display().to_string()])
+        .pop()
+        .unwrap();
+    let linked_id = linked_entry.summary.id.clone();
+    state.upsert_repository(linked_entry).await.unwrap();
+    let params = json!({"repositoryId": id, "worktreePath": linked, "expectedHead": head, "expectedBranch": "linked", "deleteBranch": false});
+    let (mut reader, _, reader_server) =
+        socket(state.clone(), vec![SCOPE_REPOSITORY_READ.into()]).await;
+    send(
+        &mut reader,
+        "denied",
+        METHOD_GIT_WORKTREE_REMOVE,
+        params.clone(),
+    )
+    .await;
+    assert_eq!(
+        receive(&mut reader).await["error"]["code"],
+        error_codes::FORBIDDEN
+    );
+    assert!(linked.exists());
+    reader.close(None).await.unwrap();
+    reader_server.abort();
+
+    let (mut client, _, server) =
+        socket(state.clone(), vec![SCOPE_REPOSITORY_OPERATE.into()]).await;
+    let mut bad = params.clone();
+    bad["worktreePath"] = json!("relative/path");
+    send(&mut client, "invalid", METHOD_GIT_WORKTREE_REMOVE, bad).await;
+    assert_eq!(
+        receive(&mut client).await["error"]["code"],
+        error_codes::INVALID_PARAMS
+    );
+    send(&mut client, "remove", METHOD_GIT_WORKTREE_REMOVE, params).await;
+    let response = receive(&mut client).await;
+    assert_eq!(response["ok"], true, "{response}");
+    assert_eq!(response["result"]["branchDeleted"], false);
+    assert_eq!(
+        response["result"]["removedRepositoryIds"],
+        json!([linked_id])
+    );
+    assert!(state.repository(&linked_id).await.is_none());
+    assert!(state.repository(&id).await.is_some());
+    assert!(!linked.exists());
+    assert_eq!(git(root.path(), &["rev-parse", "linked"]), head);
+    client.close(None).await.unwrap();
+    server.abort();
+}
+
+#[tokio::test]
+async fn branch_mutations_are_scoped_reviewed_and_require_explicit_force() {
+    let root = repository();
+    git(root.path(), &["switch", "-c", "feature"]);
+    git(root.path(), &["commit", "-am", "Feature work"]);
+    let tip = git(root.path(), &["rev-parse", "HEAD"]);
+    git(root.path(), &["switch", "main"]);
+    let state = state(root.path());
+    let id = state.repositories.read().await[0].summary.id.clone();
+    let (mut reader, _, reader_server) =
+        socket(state.clone(), vec![SCOPE_REPOSITORY_READ.into()]).await;
+    for method in [METHOD_GIT_BRANCH_RENAME, METHOD_GIT_BRANCH_DELETE] {
+        send(&mut reader, "denied", method, json!({"repositoryId": id, "name": "feature", "newName": "renamed", "expectedTarget": tip})).await;
+        assert_eq!(
+            receive(&mut reader).await["error"]["code"],
+            error_codes::FORBIDDEN
+        );
+    }
+    reader.close(None).await.unwrap();
+    reader_server.abort();
+    let (mut client, _, server) = socket(state, vec![SCOPE_REPOSITORY_OPERATE.into()]).await;
+    send(&mut client, "invalid", METHOD_GIT_BRANCH_RENAME, json!({"repositoryId": id, "name": "feature", "newName": "renamed", "expectedTarget": "not-an-oid"})).await;
+    assert_eq!(
+        receive(&mut client).await["error"]["code"],
+        error_codes::INVALID_PARAMS
+    );
+    send(
+        &mut client,
+        "rename",
+        METHOD_GIT_BRANCH_RENAME,
+        json!({"repositoryId": id, "name": "feature", "newName": "renamed", "expectedTarget": tip}),
+    )
+    .await;
+    assert_eq!(receive(&mut client).await["ok"], true);
+    assert_eq!(git(root.path(), &["rev-parse", "renamed"]), tip);
+    send(
+        &mut client,
+        "safe",
+        METHOD_GIT_BRANCH_DELETE,
+        json!({"repositoryId": id, "name": "renamed", "expectedTarget": tip}),
+    )
+    .await;
+    assert_eq!(
+        receive(&mut client).await["error"]["code"],
+        error_codes::BRANCH_NOT_MERGED
+    );
+    assert_eq!(git(root.path(), &["rev-parse", "renamed"]), tip);
+    send(
+        &mut client,
+        "force",
+        METHOD_GIT_BRANCH_DELETE,
+        json!({"repositoryId": id, "name": "renamed", "expectedTarget": tip, "force": true}),
+    )
+    .await;
+    assert_eq!(receive(&mut client).await["ok"], true);
+    let main = git(root.path(), &["rev-parse", "main"]);
+    send(
+        &mut client,
+        "current",
+        METHOD_GIT_BRANCH_DELETE,
+        json!({"repositoryId": id, "name": "main", "expectedTarget": main, "force": true}),
+    )
+    .await;
+    assert_eq!(receive(&mut client).await["ok"], false);
+    assert_eq!(git(root.path(), &["branch", "--show-current"]), "main");
+    client.close(None).await.unwrap();
+    server.abort();
+}
+
 fn git(root: &Path, args: &[&str]) -> String {
     let output = std::process::Command::new("git")
         .current_dir(root)

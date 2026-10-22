@@ -1,11 +1,12 @@
 <script lang="ts">
   import { Cloud, Monitor } from "@lucide/svelte";
   import { onDestroy, tick, untrack } from "svelte";
-  import { dismissContextMenu, showContextMenu } from "$lib/contextMenu";
+  import { dismissContextMenu, showContextMenu, type ContextMenuItem } from "$lib/contextMenu";
+  import { branchMenuItems } from "$lib/workspace/branch-menu";
   import { GraphRenderIndex, visibleRowRange, captureHistoryAnchor, restoreHistoryAnchor } from "$lib/git-graph/viewport";
   import { drawGitGraphCanvas } from "$lib/git-graph/canvas-renderer";
   import { APP_THEME_VARIABLES, GRAPH_THEME_COLOR_ROLES } from "$lib/theme/types";
-  import type { CommitInfo, CommitRef, GraphCommit, RepositorySnapshot, StashInfo } from "$lib/types/repository";
+  import type { CommitInfo, CommitRef, GraphCommit, RepositorySnapshot, StashInfo, WorktreeInfo } from "$lib/types/repository";
 
   type ColumnId = "branch" | "graph" | "message";
   type HistoryColumn = {
@@ -36,6 +37,15 @@
     onSelectChanges: () => void;
     onSelectCommit: (commit: CommitInfo) => void;
     onCompareCommitToWorkingTree: (commit: CommitInfo) => void;
+    onCreateBranch?: (commit: CommitInfo) => void;
+    onRenameBranch?: (branch: CommitRef) => void;
+    onDeleteBranch?: (branch: CommitRef) => void;
+    canRenameBranch?: boolean;
+    canDeleteBranch?: boolean;
+    pending?: boolean;
+    contextKey?: string | null;
+    canRemoveWorktree?: boolean;
+    onRemoveWorktree?: (worktree: WorktreeInfo, deleteBranch: boolean) => void;
   };
 
   const rowHeight = 34;
@@ -58,6 +68,15 @@
     onSelectChanges,
     onSelectCommit,
     onCompareCommitToWorkingTree,
+    onCreateBranch,
+    onRenameBranch,
+    onDeleteBranch,
+    canRenameBranch = false,
+    canDeleteBranch = false,
+    pending = false,
+    contextKey = null,
+    canRemoveWorktree = false,
+    onRemoveWorktree,
   }: Props = $props();
   let columns = $state<HistoryColumn[]>([
     { id: "branch", label: "Branch", width: 118, visible: true },
@@ -67,7 +86,12 @@
   let resizeState = $state<ResizeState | null>(null);
   let restoredColumns = false;
   let hoveredRowHash = $state<string | null>(null);
+  let contextMenuTarget = $state.raw<{ hash: string } | null>(null);
   const contextMenuOwner = {};
+  $effect(() => {
+    void contextKey;
+    dismissContextMenu(contextMenuOwner);
+  });
   let graphViewport = $state<HTMLDivElement | null>(null);
   let graphCanvas = $state<HTMLCanvasElement | null>(null);
   let graphScrollTop = $state(0);
@@ -111,21 +135,55 @@
     resizeState = null;
   });
 
-  function openCommitContextMenu(commit: CommitInfo, position: { x: number; y: number }) {
-    void showContextMenu(
-      [{ id: "compare", label: "Compare to working tree", icon: "git-branch" }],
+  function openCommitContextMenu(commit: CommitInfo, position: { x: number; y: number }, clickedBranch?: CommitRef) {
+    const key = contextKey;
+    const branches = clickedBranch ? [clickedBranch] : snapshot?.refs.filter((ref) => ref.refType === "localBranch" && ref.target === commit.hash) ?? [];
+    const actionsFor = (branch: CommitRef) => branchMenuItems(branch, {
+      canRename: canRenameBranch,
+      canDelete: canDeleteBranch,
+      canRemoveWorktree,
+      worktree: snapshot?.worktrees.find((entry) => entry.branch === branch.shortName),
+      checkedOut: snapshot?.status.currentBranch === branch.shortName || (snapshot?.worktrees.some((worktree) => worktree.branch === branch.shortName) ?? false),
+    });
+    const items: ContextMenuItem[] = [
+      { id: "create", label: "Create branch here…", icon: "git-branch", disabled: pending || !onCreateBranch },
+      { id: "compare", label: "Compare to working tree", icon: "git-branch" },
+    ];
+    if (clickedBranch) {
+      items.push({ id: "branch-heading", label: clickedBranch.shortName, header: true, separatorBefore: true }, ...actionsFor(clickedBranch));
+    } else {
+      items.push(...branches.map((branch) => ({ id: branch.name, label: branch.shortName, icon: "git-branch", children: actionsFor(branch) })));
+    }
+    const menu = showContextMenu(
+      items,
       position,
       contextMenuOwner,
-    ).then((selected) => {
+      branches.some((branch) => snapshot?.worktrees.some((entry) => entry.branch === branch.shortName && entry.isMain === false)) ? { width: 320 } : undefined,
+    );
+    const target = { hash: commit.hash };
+    contextMenuTarget = target;
+    void menu.then((selected) => {
+      if (contextMenuTarget === target) contextMenuTarget = null;
+      if (key !== contextKey) return;
       if (selected === "compare") {
         onCompareCommitToWorkingTree(commit);
+      }
+      if (selected === "create") onCreateBranch?.(commit);
+      for (const branch of branches) {
+        if (selected === `rename:${branch.name}`) onRenameBranch?.(branch);
+        if (selected === `delete:${branch.name}`) onDeleteBranch?.(branch);
+        const worktree = snapshot?.worktrees.find((entry) => entry.branch === branch.shortName);
+        if (worktree && selected === `remove-worktree:${branch.name}`) onRemoveWorktree?.(worktree, false);
+        if (worktree && selected === `remove-worktree-branch:${branch.name}`) onRemoveWorktree?.(worktree, true);
       }
     });
   }
 
   function handleCommitContextMenu(event: MouseEvent, commit: CommitInfo) {
     event.preventDefault();
-    openCommitContextMenu(commit, { x: event.clientX, y: event.clientY });
+    const branchName = event.target instanceof Element ? event.target.closest("[data-local-branch]")?.getAttribute("data-local-branch") : null;
+    const branch = branchName ? snapshot?.refs.find((ref) => ref.refType === "localBranch" && ref.name === branchName) : undefined;
+    openCommitContextMenu(commit, { x: event.clientX, y: event.clientY }, branch);
   }
 
   function handleCommitKeydown(event: KeyboardEvent, commit: CommitInfo) {
@@ -270,7 +328,7 @@
     groupBranchRefByMergeTargetCommit(historySnapshot, branchRefByFirstParentCommit, branchRefByLaneCommit),
   );
   const nearestDescendantRefs = $derived.by(() => {
-    const hashes = [hoveredRowHash, selectedCommit?.hash].filter((hash): hash is string => Boolean(hash) && !branchRefByLineCommit.has(hash!));
+    const hashes = [contextMenuTarget?.hash ?? hoveredRowHash, selectedCommit?.hash].filter((hash): hash is string => Boolean(hash) && !branchRefByLineCommit.has(hash!));
     return groupBranchRefByNearestDescendantCommit(historySnapshot, graphCommitByHash, refsByTarget, hashes);
   });
   const commitInfoByHash = $derived(new Map((historySnapshot?.commits ?? []).map((commit) => [commit.hash, commit])));
@@ -345,7 +403,7 @@
     const width = graphRequiredWidth;
     const dpr = graphDevicePixelRatio;
     const selectedHash = selectedCommit?.hash ?? null;
-    const hoveredHash = hoveredRowHash;
+    const hoveredHash = contextMenuTarget?.hash ?? hoveredRowHash;
     const currentStashHashes = stashHashes;
     graphThemeRevision;
 
@@ -1055,7 +1113,9 @@
                 class={`grid w-full items-center border-b border-[var(--app-theme-border)] text-left transition focus-visible:outline-2 focus-visible:outline-[var(--app-theme-focus)] ${
                   selectedCommit?.hash === commit.hash
                     ? "bg-[var(--app-theme-accent-surface)]"
-                    : "bg-[var(--app-theme-surface)] hover:bg-[var(--app-theme-sidebar-row-hover)]"
+                    : contextMenuTarget?.hash === commit.hash
+                      ? "bg-[var(--app-theme-sidebar-row-hover)]"
+                      : "bg-[var(--app-theme-surface)] hover:bg-[var(--app-theme-sidebar-row-hover)]"
                 }`}
                 data-commit-hash={commit.hash}
                 onkeydown={(event) => handleCommitKeydown(event, commit)}
@@ -1068,12 +1128,13 @@
               >
                 <span
                   class={`relative flex min-w-0 items-center gap-0.5 overflow-visible px-0.5 ${
-                    hoveredRowHash === commit.hash || selectedCommit?.hash === commit.hash ? "z-[120]" : "z-[80]"
+                    hoveredRowHash === commit.hash || contextMenuTarget?.hash === commit.hash || selectedCommit?.hash === commit.hash ? "z-[120]" : "z-[80]"
                   }`}
                 >
                     {#if !stash}
                       {#each commitRefs as ref (refKey(ref))}
                         <span
+                          data-local-branch={ref.refType === "localBranch" ? ref.name : undefined}
                           class="relative z-30 flex max-w-full items-center gap-0.5 rounded-[2px] border px-0.5 py-0 text-[10px] font-semibold leading-3.5 hover:z-[100] hover:max-w-none hover:whitespace-nowrap"
                           style={refBadgeStyle(ref.refType, graphCommit)}
                         >
@@ -1086,7 +1147,7 @@
                         </span>
                       {/each}
                     {/if}
-                    {#if !stash && !commitRefs.length && (hoveredRowHash === commit.hash || selectedCommit?.hash === commit.hash)}
+                    {#if !stash && !commitRefs.length && (hoveredRowHash === commit.hash || contextMenuTarget?.hash === commit.hash || selectedCommit?.hash === commit.hash)}
                       {#if ghostRef}
                         <span
                           class="relative z-30 flex max-w-full items-center gap-0.5 rounded-[2px] border border-dashed px-0.5 py-0 text-[10px] font-semibold leading-3.5 opacity-50 hover:z-[100] hover:max-w-none hover:whitespace-nowrap"
