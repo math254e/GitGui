@@ -179,6 +179,10 @@ pub enum RepositoryChangeKind {
 pub struct RepositoryChanged {
     pub repository_id: String,
     pub kind: RepositoryChangeKind,
+    /// Worktree paths affected by a status invalidation when the watcher can identify them.
+    /// Missing paths means the invalidation is broad or originated outside the worktree.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paths: Option<Vec<String>>,
 }
 /// Capability advertised when Git status is available.
 pub const CAPABILITY_GIT_STATUS: &str = "git.status";

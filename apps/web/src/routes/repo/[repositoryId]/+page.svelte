@@ -84,6 +84,7 @@
           diffSource={store.changesSelected ? store.selectedFileSource : "commit"}
           selectedCommit={store.selectedCommit}
           selectedFile={store.selectedFile}
+          contentRevision={store.workspaceState?.fileContentRevisions[store.activeRepositoryId!]?.[store.selectedFile.path] ?? 0}
           onClose={() => store.closeDiff()}
           onApplyHunks={(params) => store.applySelectedHunks(params)}
           pending={store.gitActionPending}
@@ -182,6 +183,7 @@
             diffSource={store.changesSelected ? store.selectedFileSource : "commit"}
             selectedCommit={store.selectedCommit}
             selectedFile={store.selectedFile}
+            contentRevision={store.workspaceState?.fileContentRevisions[store.activeRepositoryId!]?.[store.selectedFile.path] ?? 0}
             onClose={() => store.closeDiff()}
             onApplyHunks={(params) => store.applySelectedHunks(params)}
             pending={store.gitActionPending}

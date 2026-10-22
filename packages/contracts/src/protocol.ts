@@ -167,7 +167,12 @@ payload: JsonValue, };
 
 export type RepositoryChangeKind = "status" | "snapshot";
 
-export type RepositoryChanged = { repositoryId: string, kind: RepositoryChangeKind, };
+export type RepositoryChanged = { repositoryId: string, kind: RepositoryChangeKind,
+/**
+ * Worktree paths affected by a status invalidation when the watcher can identify them.
+ * Missing paths means the invalidation is broad or originated outside the worktree.
+ */
+paths?: Array<string> | null, };
 
 export type ServerLifecycle = "starting" | "ready" | "stopping" | "stopped" | "failed";
 

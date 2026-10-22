@@ -55,6 +55,7 @@ export type GitActionRequest = {
   kind: GitActionKind;
   label: string;
   action: (repositoryId: string) => Promise<unknown>;
+  affectedPaths?: string[];
   successMessage?: string;
   notifySuccess?: boolean;
   onApplied?: () => void;

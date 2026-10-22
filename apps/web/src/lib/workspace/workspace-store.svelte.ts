@@ -1197,6 +1197,7 @@ export class WorkspaceStore {
     try {
       const mutationResult = await request.action(request.repositoryId);
       applied = true;
+      if (request.affectedPaths?.length) workspace.invalidateFileContent(request.repositoryId, request.affectedPaths);
       request.onApplied?.();
       const refreshedState = await this.refreshAfterMutation(workspace, request.repositoryId, request.kind, mutationResult);
       if (request.kind === "switchBranch" && this.hasUnmergedFiles(request.repositoryId, refreshedState)) {
@@ -1212,7 +1213,10 @@ export class WorkspaceStore {
         "mutationSucceeded" in details &&
         details.mutationSucceeded === true;
       if (applied || serverApplied) {
-        if (!applied) request.onApplied?.();
+        if (!applied) {
+          if (request.affectedPaths?.length) workspace.invalidateFileContent(request.repositoryId, request.affectedPaths);
+          request.onApplied?.();
+        }
         toast.warning("Changes applied; refresh failed", {
           description: summarizeGitError(caught),
           action: {
@@ -1338,6 +1342,7 @@ export class WorkspaceStore {
         kind: "stage",
         label: "Staging",
         notifySuccess: false,
+        affectedPaths: [file.path],
         action: (repositoryId) => this.client!.stage(repositoryId, [file.path]),
       },
       true,
@@ -1354,6 +1359,7 @@ export class WorkspaceStore {
         kind: "stage",
         label: "Staging",
         notifySuccess: false,
+        affectedPaths: paths,
         action: (repositoryId) => this.client!.stage(repositoryId, paths),
       },
       true,
@@ -1366,6 +1372,7 @@ export class WorkspaceStore {
         kind: "unstage",
         label: "Unstaging",
         notifySuccess: false,
+        affectedPaths: [file.path],
         action: (repositoryId) => this.client!.unstage(repositoryId, [file.path]),
       },
       true,
@@ -1382,6 +1389,7 @@ export class WorkspaceStore {
         kind: "unstage",
         label: "Unstaging",
         notifySuccess: false,
+        affectedPaths: paths,
         action: (repositoryId) => this.client!.unstage(repositoryId, paths),
       },
       true,
@@ -1504,6 +1512,7 @@ export class WorkspaceStore {
       kind: params.staged ? "unstage" : "stage",
       label: params.staged ? "Unstaging hunks" : "Staging hunks",
       notifySuccess: false,
+      affectedPaths: [params.filePath],
       action: () => client.applyHunks(params),
     });
   }

@@ -288,8 +288,11 @@ pub(super) async fn run(state: Weak<ServerState>) {
         }
         for (repository_id, root, kind, paths) in changes {
             if kind == RepositoryChangeKind::Status {
-                if let Some(paths) = paths {
-                    if tokio::task::spawn_blocking(move || only_ignored(Path::new(&root), &paths))
+                if let Some(ref paths) = paths {
+                    if tokio::task::spawn_blocking({
+                        let paths = paths.clone();
+                        move || only_ignored(Path::new(&root), &paths)
+                    })
                         .await
                         .unwrap_or(false)
                     {
@@ -301,6 +304,7 @@ pub(super) async fn run(state: Weak<ServerState>) {
             let payload = serde_json::to_value(RepositoryChanged {
                 repository_id,
                 kind,
+                paths: paths.map(|paths| paths.into_iter().map(|path| path.to_string_lossy().into_owned()).collect()),
             })
             .expect("serializable invalidation");
             let _ = state.repository_events.send(OrderedEventEnvelope::new(
@@ -546,6 +550,7 @@ mod tests {
         let changed: RepositoryChanged = serde_json::from_value(event.payload).unwrap();
         assert_eq!(event.event, EVENT_REPOSITORY_CHANGED);
         assert_eq!(changed.kind, RepositoryChangeKind::Status);
+        assert_eq!(changed.paths.as_deref(), Some(["tracked.txt".to_string()].as_slice()));
         assert!(event.sequence > initial.sequence);
         socket.send(Message::Close(None)).await.unwrap();
         server.shutdown().await.unwrap();

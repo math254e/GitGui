@@ -31,8 +31,8 @@ async function fixture(environmentId = "one", watching = true) {
   workspace.startUpdates();
   await workspace.restore();
   client.refreshRepositories.mockClear();
-  return { workspace, client, snapshot, emit(kind: "status" | "snapshot", repositoryId = repository.id) {
-    event?.({ type: "event", sequence: 1, event: "repository.changed", payload: { repositoryId, kind } });
+  return { workspace, client, snapshot, emit(kind: "status" | "snapshot", repositoryId = repository.id, paths?: string[]) {
+    event?.({ type: "event", sequence: 1, event: "repository.changed", payload: { repositoryId, kind, ...(paths ? { paths } : {}) } });
   }, gap: () => gap?.() };
 }
 
@@ -45,6 +45,18 @@ describe("repository invalidations", () => {
     expect(f.client.refreshRepositories).not.toHaveBeenCalled();
     expect(f.workspace.state.repositories["repo-one"].snapshot).not.toBe(f.snapshot);
     expect(f.workspace.state.repositories["repo-one"].snapshot?.graph).toBe(f.snapshot.graph);
+    f.workspace.dispose();
+  });
+
+  it("tracks same-status file invalidations only for affected paths", async () => {
+    const f = await fixture();
+    f.emit("status", "repo-one", ["src/open.ts"]);
+    await vi.advanceTimersByTimeAsync(100);
+    const revisions = f.workspace.state.fileContentRevisions["repo-one"];
+    expect(revisions).toEqual({ "src/open.ts": 1 });
+    f.emit("status", "repo-one", ["src/other.ts"]);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(f.workspace.state.fileContentRevisions["repo-one"]).toEqual({ "src/open.ts": 1, "src/other.ts": 1 });
     f.workspace.dispose();
   });
 

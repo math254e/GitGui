@@ -37,6 +37,7 @@ export interface ClientWorkspaceState {
   recentRepositories: WorkspaceRecentMetadata[];
   activeRepositoryId: string | null;
   repositories: Record<string, WorkspaceRepositoryState>;
+  fileContentRevisions: Record<string, Record<string, number>>;
   restoring: boolean;
   opening: boolean;
   refreshing: boolean;
@@ -67,6 +68,7 @@ export class ClientWorkspace {
   private lifecycleGeneration = 0;
   private nextRequestGeneration = 0;
   private readonly pendingChanges = new Map<string, RepositoryChangeKind>();
+  private readonly pendingStatusPaths = new Map<string, Set<string>>();
   private updateSubscriptions: Unsubscribe[] = [];
   private updateTimer?: ReturnType<typeof setTimeout>;
   private recoveryTimer?: ReturnType<typeof setInterval>;
@@ -88,6 +90,7 @@ export class ClientWorkspace {
       recentRepositories: [],
       activeRepositoryId: null,
       repositories: {},
+      fileContentRevisions: {},
       restoring: false,
       opening: false,
       refreshing: false,
@@ -110,9 +113,9 @@ export class ClientWorkspace {
     this.updateSubscriptions = [
       this.client.on("repository.changed", ({ payload }) => {
         if (!payload || typeof payload !== "object" || Array.isArray(payload)) return;
-        const { repositoryId, kind } = payload;
+        const { repositoryId, kind, paths } = payload;
         if (typeof repositoryId === "string" && (kind === "status" || kind === "snapshot")) {
-          this.invalidate(repositoryId, kind);
+          this.invalidate(repositoryId, kind, Array.isArray(paths) ? paths.filter((path): path is string => typeof path === "string") : []);
         }
       }),
       this.client.onSequenceGap(() => this.revalidate()),
@@ -141,11 +144,17 @@ export class ClientWorkspace {
     this.updateTimer = undefined;
     clearInterval(this.recoveryTimer);
     this.pendingChanges.clear();
+    this.pendingStatusPaths.clear();
   }
 
-  private invalidate(repositoryId: string, kind: RepositoryChangeKind): void {
+  private invalidate(repositoryId: string, kind: RepositoryChangeKind, paths: string[] = []): void {
     if (this.disposed || !this.updateSubscriptions.length || !this._state.openRepositoryIds.includes(repositoryId)) return;
     this.pendingChanges.set(repositoryId, this.pendingChanges.get(repositoryId) === "snapshot" ? "snapshot" : kind);
+    if (paths.length) {
+      const pending = this.pendingStatusPaths.get(repositoryId) ?? new Set<string>();
+      for (const path of paths) pending.add(path);
+      this.pendingStatusPaths.set(repositoryId, pending);
+    }
     this.scheduleChanges();
   }
 
@@ -157,9 +166,13 @@ export class ClientWorkspace {
       void this.serializeStateOperation(async () => {
         if (this.disposed) return;
         const changes = new Map(this.pendingChanges);
+        const paths = new Map(this.pendingStatusPaths);
         this.pendingChanges.clear();
+        this.pendingStatusPaths.clear();
         for (const [id, kind] of changes) {
           if (!this._state.openRepositoryIds.includes(id)) continue;
+          const changedPaths = [...(paths.get(id) ?? [])];
+          this.bumpFileContentRevisions(id, changedPaths);
           if (kind === "snapshot" || !this._state.repositories[id]?.snapshot) {
             await this.refreshRepositories([id], { persist: false });
           } else {
@@ -184,14 +197,25 @@ export class ClientWorkspace {
         await this.refreshRepositories([id], { persist: false });
         return;
       }
-      // Replace the snapshot to invalidate mutable file/hunk previews even when
-      // Git's status letters remain identical. History objects keep their identity.
+      // Keep history identity stable while replacing the status view.
       this.updateRepository(id, (repository) => ({
         ...repository, repository: result.repository, snapshot: { ...snapshot, status: result.status }, error: undefined,
       }));
     } catch (error) {
       if (this.isCurrentRequest(id, generation, lifecycle)) this.setRepositoryError(id, toWorkspaceError(error));
     }
+  }
+
+  /** Invalidates a mutable file preview after a local operation such as partial staging. */
+  invalidateFileContent(repositoryId: string, paths: string[]): void {
+    this.bumpFileContentRevisions(repositoryId, paths);
+  }
+
+  private bumpFileContentRevisions(repositoryId: string, paths: string[]): void {
+    if (!paths.length) return;
+    const revisions = { ...(this._state.fileContentRevisions[repositoryId] ?? {}) };
+    for (const path of paths) revisions[path] = (revisions[path] ?? 0) + 1;
+    this.update({ fileContentRevisions: { ...this._state.fileContentRevisions, [repositoryId]: revisions } });
   }
 
   restore(): Promise<ClientWorkspaceState> {
@@ -768,6 +792,7 @@ function cloneState(state: ClientWorkspaceState): ClientWorkspaceState {
     openRepositoryIds: [...state.openRepositoryIds],
     recentRepositories: state.recentRepositories.map((recent) => ({ ...recent })),
     repositories,
+    fileContentRevisions: Object.fromEntries(Object.entries(state.fileContentRevisions).map(([id, revisions]) => [id, { ...revisions }])),
     error: state.error ? { ...state.error } : undefined,
   };
 }

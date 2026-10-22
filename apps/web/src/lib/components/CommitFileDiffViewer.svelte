@@ -8,6 +8,7 @@
   import { themeStore } from "$lib/theme/useTheme";
   import type { ThemeAppearance } from "$lib/theme/types";
   import type { CommitFile, CommitFileDiff, CommitInfo, RepositorySnapshot } from "$lib/types/repository";
+  import { buildFileDiffRequestKey } from "./file-diff-request-key";
 
   type HunkAnnotation = { id: number; header: string; request: number; revision: string };
   type Diffs = typeof import("@pierre/diffs");
@@ -31,12 +32,13 @@
     diffSource: DiffSource;
     selectedCommit: CommitInfo | null;
     selectedFile: CommitFile;
+    contentRevision?: number;
     onClose: () => void;
     onApplyHunks?: (params: GitApplyHunksParams) => void;
     pending?: boolean;
   };
 
-  let { client, repositoryId, snapshot, diffSource, selectedCommit, selectedFile, onClose, onApplyHunks, pending = false }: Props = $props();
+  let { client, repositoryId, snapshot, diffSource, selectedCommit, selectedFile, contentRevision = 0, onClose, onApplyHunks, pending = false }: Props = $props();
   let viewerContainer: HTMLDivElement;
   let renderer = $state.raw<{ library: Diffs; viewer: CodeView<HunkAnnotation> } | null>(null);
   let parsedDiff: { source: CommitFileDiff; preview: GitHunkPreview | null; metadata: FileDiffMetadata } | null = null;
@@ -57,7 +59,7 @@
   let renderVersion = 0;
   let activeDiffRequestKey = "";
   let destroyed = false;
-  const diffRequestKey = $derived(buildDiffRequestKey(repositoryId, snapshot, diffSource, selectedCommit, selectedFile));
+  const diffRequestKey = $derived(buildFileDiffRequestKey(repositoryId, snapshot, diffSource, selectedCommit, selectedFile, contentRevision));
   const noContentChanges = $derived(diff !== null && diff.originalContent === diff.modifiedContent);
   const showingDeletedFile = $derived(statusLabel(selectedFile) === "D");
   const displayedFileIsEmpty = $derived(diff !== null &&
@@ -198,28 +200,6 @@
     } catch (caught) {
       if (!destroyed && request === activeRequest) hunkError = formatError(caught);
     }
-  }
-
-  function buildDiffRequestKey(
-    currentRepositoryId: string,
-    currentSnapshot: RepositorySnapshot,
-    source: DiffSource,
-    commit: CommitInfo | null,
-    file: CommitFile,
-  ) {
-    const commitHash = source === "commit" ? commit?.hash ?? "" : currentSnapshot.status.headOid ?? "";
-    const parentHash = source === "commit" ? commit?.parents[0] ?? "" : "";
-    const originalPath = file.originalPath ?? "";
-
-    return [
-      currentRepositoryId,
-      source,
-      commitHash,
-      parentHash,
-      file.path,
-      originalPath,
-      file.status,
-    ].join("\0");
   }
 
   function renderView(
