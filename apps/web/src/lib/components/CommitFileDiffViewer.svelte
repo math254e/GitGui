@@ -183,16 +183,18 @@
               ...(headHash ? { headHash } : {}),
               filePath: file.path,
               staged: source === "staged",
+              prepareHunks: true,
             }, signal);
 
-      // Hunk actions are supplementary. A slow preview must not keep already
-      // loaded file contents behind the loading overlay after a mutation.
-      if (source === "workingTree" || source === "staged") {
-        void loadHunkPreview(request, repositoryId, source, file.path, signal);
-      }
       const result = await resultPromise;
       if (!destroyed && request === activeRequest) {
         diff = result.diff;
+        // Contents are ready before the Git patch. The continuation shares
+        // their status/index snapshot and first full-file read with preview.
+        if (source === "workingTree" || source === "staged") {
+          if (result.hunkError) hunkError = result.hunkError;
+          else void loadHunkPreview(request, repositoryId, source, file.path, signal, result.hunkContextId);
+        }
       }
     } catch (caught) {
       if (!destroyed && request === activeRequest) {
@@ -205,9 +207,9 @@
     }
   }
 
-  async function loadHunkPreview(request: number, repositoryId: string, source: DiffSource, filePath: string, signal: AbortSignal) {
+  async function loadHunkPreview(request: number, repositoryId: string, source: DiffSource, filePath: string, signal: AbortSignal, contextId?: string) {
     try {
-      const preview = await client.getHunkPreview({ repositoryId, filePath, staged: source === "staged" }, signal);
+      const preview = await client.getHunkPreview({ repositoryId, filePath, staged: source === "staged", ...(contextId ? { contextId } : {}) }, signal);
       if (!destroyed && request === activeRequest) hunkPreview = preview;
     } catch (caught) {
       if (!destroyed && request === activeRequest) hunkError = formatError(caught);

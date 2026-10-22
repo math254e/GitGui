@@ -352,10 +352,28 @@ pub fn load_working_tree_file_diff(
     file: &CommitFile,
     staged: bool,
 ) -> Result<CommitFileDiff, GitError> {
+    load_working_tree_file_diff_with_content(repo_root, head_hash, file, staged, None)
+}
+
+pub(crate) fn load_working_tree_file_diff_with_content(
+    repo_root: &str,
+    head_hash: Option<&str>,
+    file: &CommitFile,
+    staged: bool,
+    worktree_content: Option<Vec<u8>>,
+) -> Result<CommitFileDiff, GitError> {
     let root = Path::new(repo_root);
+    super::working_tree::safe_path(root, &file.path)?;
+    if let Some(path) = &file.original_path {
+        super::working_tree::safe_path(root, path)?;
+    }
     let index_status = file.status.chars().next().unwrap_or('.');
     let worktree_status = file.status.chars().nth(1).unwrap_or('.');
-    let status = if staged { index_status } else { worktree_status };
+    let status = if staged {
+        index_status
+    } else {
+        worktree_status
+    };
     let original_path = file.original_path.as_deref().unwrap_or(&file.path);
 
     let original_content = if staged {
@@ -376,6 +394,8 @@ pub fn load_working_tree_file_diff(
         FileContent::Text(String::new())
     } else if staged {
         load_file_from_index(root, &file.path)
+    } else if let Some(bytes) = worktree_content {
+        file_content_from_bytes(bytes)
     } else {
         load_file_from_working_tree(root, &file.path)
     };
@@ -788,7 +808,10 @@ fn parse_worktrees(output: &str, current_root: &Path) -> Vec<WorktreeInfo> {
                 worktree.head_oid = Some(head_oid.to_string());
             }
         } else if let Some(branch) = line.strip_prefix("branch ") {
-            let branch = branch.trim().strip_prefix("refs/heads/").unwrap_or(branch.trim());
+            let branch = branch
+                .trim()
+                .strip_prefix("refs/heads/")
+                .unwrap_or(branch.trim());
             if !branch.is_empty() {
                 worktree.branch = Some(branch.to_string());
             }
@@ -804,7 +827,8 @@ fn same_path(left: &Path, right: &Path) -> bool {
 
     #[cfg(windows)]
     {
-        left.to_string_lossy().eq_ignore_ascii_case(&right.to_string_lossy())
+        left.to_string_lossy()
+            .eq_ignore_ascii_case(&right.to_string_lossy())
     }
 
     #[cfg(not(windows))]
@@ -937,6 +961,10 @@ fn load_file_from_git_spec(root: &Path, spec: &str) -> FileContent {
 
 fn load_file_from_working_tree(root: &Path, file_path: &str) -> FileContent {
     let full_path = root.join(file_path);
+    // Displaying a final symlink must not follow it outside the repository.
+    if fs::symlink_metadata(&full_path).is_ok_and(|meta| meta.file_type().is_symlink()) {
+        return FileContent::Missing("Symlinks use whole-file actions.".to_string());
+    }
     let bytes = match fs::read(&full_path) {
         Ok(bytes) => bytes,
         Err(error) => {
@@ -947,6 +975,13 @@ fn load_file_from_working_tree(root: &Path, file_path: &str) -> FileContent {
         }
     };
 
+    #[cfg(test)]
+    super::command::test_metrics::read(bytes.len());
+
+    file_content_from_bytes(bytes)
+}
+
+fn file_content_from_bytes(bytes: Vec<u8>) -> FileContent {
     if bytes.contains(&0) {
         return FileContent::Binary;
     }

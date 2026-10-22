@@ -2,7 +2,10 @@
 //! clients send hunk indices and fingerprints, never executable patches.
 use super::{
     command::{GitCommand, GitError},
-    repository::load_repository_status,
+    repository::{
+        load_repository_status, load_working_tree_file_diff_with_content, ChangedFile, CommitFile,
+        CommitFileDiff,
+    },
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -67,7 +70,7 @@ fn error(message: impl Into<String>) -> GitError {
 
 // Parent symlinks must never turn a repository-relative request into filesystem
 // access outside the repository. A final symlink may be restored/deleted itself.
-fn safe_path(root: &Path, path: &str) -> Result<(), GitError> {
+pub(crate) fn safe_path(root: &Path, path: &str) -> Result<(), GitError> {
     if path.is_empty()
         || path.starts_with(['/', '\\'])
         || path.as_bytes().get(1) == Some(&b':')
@@ -113,12 +116,23 @@ fn index_entry(root: &Path, path: &str) -> Result<String, GitError> {
 
 fn revision(root: &Path, path: &str) -> Result<String, GitError> {
     safe_path(root, path)?;
+    let head = GitCommand::run(&["rev-parse", "--verify", "HEAD"], Some(root)).unwrap_or_default();
+    let entry = index_entry(root, path)?;
+    revision_with_inputs(root, path, head.trim(), &entry, None)
+}
+
+fn revision_with_inputs(
+    root: &Path,
+    path: &str,
+    head: &str,
+    entry: &str,
+    mut contents: Option<&mut Vec<u8>>,
+) -> Result<String, GitError> {
+    safe_path(root, path)?;
     let mut hash = Sha256::new();
-    hash.update(
-        GitCommand::run(&["rev-parse", "--verify", "HEAD"], Some(root)).unwrap_or_default(),
-    );
+    hash.update(head);
     hash.update([0]);
-    hash.update(index_entry(root, path)?);
+    hash.update(entry);
     hash.update([0]);
     match fs::symlink_metadata(root.join(path)) {
         Ok(meta) if meta.is_dir() => {
@@ -139,6 +153,8 @@ fn revision(root: &Path, path: &str) -> Result<String, GitError> {
             hash.update(b"file");
             hash.update(format!("{:?}", meta.permissions()));
             let mut file = fs::File::open(root.join(path)).map_err(|e| error(e.to_string()))?;
+            #[cfg(test)]
+            super::command::test_metrics::read(meta.len() as usize);
             let mut buffer = [0; 65536];
             loop {
                 let count = file.read(&mut buffer).map_err(|e| error(e.to_string()))?;
@@ -146,6 +162,9 @@ fn revision(root: &Path, path: &str) -> Result<String, GitError> {
                     break;
                 }
                 hash.update(&buffer[..count]);
+                if let Some(bytes) = contents.as_mut() {
+                    bytes.extend_from_slice(&buffer[..count]);
+                }
             }
         }
         Ok(_) => return Err(error("Unsupported filesystem entry")),
@@ -158,15 +177,170 @@ fn revision(root: &Path, path: &str) -> Result<String, GitError> {
 }
 
 pub fn preview_hunks(root: &str, path: &str, staged: bool) -> Result<HunkPreview, GitError> {
-    let root_path = Path::new(root);
-    let revision_before = revision(root_path, path)?;
-    let status = load_repository_status(root)?.status;
-    let file = status
+    Ok(prepare_hunks(root, path, staged)?.preview)
+}
+
+/// Server-owned Git patch and its content-based precondition. Never deserialize
+/// this from the client: only IDs and the opaque preview revision cross back.
+#[derive(Clone, Debug)]
+pub struct ReviewedHunks {
+    pub preview: HunkPreview,
+    pub context: HunkContext,
+}
+
+/// A short-lived continuation of the file-content request. It retains only
+/// this path's status/index preconditions, never the file contents.
+#[derive(Clone, Debug)]
+pub struct HunkContext {
+    root: String,
+    revision_before: String,
+    file: ChangedFile,
+    entry: String,
+    staged: bool,
+}
+
+impl HunkContext {
+    pub fn id(&self) -> String {
+        let mut hash = Sha256::new();
+        for part in [
+            self.root.as_str(),
+            self.file.path.as_str(),
+            self.revision_before.as_str(),
+            self.file.index_status.as_str(),
+            self.file.worktree_status.as_str(),
+            self.file.original_path.as_deref().unwrap_or(""),
+        ] {
+            hash.update(part.as_bytes());
+            hash.update([0]);
+        }
+        hash.update([u8::from(self.staged)]);
+        format!("{:x}", hash.finalize())
+    }
+
+    pub fn matches(&self, path: &str, staged: bool) -> bool {
+        self.file.path == path && self.staged == staged
+    }
+
+    pub fn byte_size(&self) -> usize {
+        self.root.len()
+            + self.revision_before.len()
+            + self.file.path.len()
+            + self.file.index_status.len()
+            + self.file.worktree_status.len()
+            + self.file.original_path.as_ref().map_or(0, String::len)
+            + self.entry.len()
+    }
+
+    pub fn complete(&self) -> Result<ReviewedHunks, GitError> {
+        build_hunk_review(self)
+    }
+}
+
+pub fn prepare_hunks(root: &str, path: &str, staged: bool) -> Result<ReviewedHunks, GitError> {
+    safe_path(Path::new(root), path)?;
+    let snapshot = load_repository_status(root)?;
+    let root_path = Path::new(&snapshot.info.root);
+    let entry = index_entry(root_path, path)?;
+    let before = revision_with_inputs(
+        root_path,
+        path,
+        snapshot.status.head_oid.as_deref().unwrap_or(""),
+        &entry,
+        None,
+    )?;
+    let file = snapshot
+        .status
+        .changed_files
+        .into_iter()
+        .find(|file| file.path == path)
+        .ok_or_else(|| error("File has no changes; refresh the diff"))?;
+    HunkContext {
+        root: snapshot.info.root,
+        revision_before: before,
+        file,
+        entry,
+        staged,
+    }
+    .complete()
+}
+
+/// Prepares one file selection's status/index/content preconditions. Preview
+/// can continue this operation later, but must revalidate the entire revision.
+pub fn load_working_tree_file_view(
+    root: &str,
+    head: Option<&str>,
+    path: &str,
+    staged: bool,
+) -> Result<(CommitFileDiff, Result<HunkContext, GitError>), GitError> {
+    safe_path(Path::new(root), path)?;
+    let snapshot = load_repository_status(root)?;
+    let root_path = Path::new(&snapshot.info.root);
+    let changed = snapshot
+        .status
         .changed_files
         .iter()
-        .find(|f| f.path == path)
-        .ok_or_else(|| error("File has no changes; refresh the diff"))?;
+        .find(|file| file.path == path || file.original_path.as_deref() == Some(path));
+    let file = changed
+        .map(|f| CommitFile {
+            path: f.path.clone(),
+            original_path: f.original_path.clone(),
+            status: format!("{}{}", f.index_status, f.worktree_status),
+        })
+        .unwrap_or_else(|| CommitFile {
+            path: path.into(),
+            original_path: None,
+            status: "MM".into(),
+        });
+    let path = file.path.as_str();
+    let mut contents = Vec::new();
     let entry = index_entry(root_path, path)?;
+    let before = revision_with_inputs(
+        root_path,
+        path,
+        snapshot.status.head_oid.as_deref().unwrap_or(""),
+        &entry,
+        if staged { None } else { Some(&mut contents) },
+    );
+    let bytes = if !staged
+        && before.is_ok()
+        && fs::symlink_metadata(root_path.join(path)).is_ok_and(|m| m.is_file())
+    {
+        Some(contents)
+    } else {
+        None
+    };
+    let diff = load_working_tree_file_diff_with_content(
+        &snapshot.info.root,
+        head.or(snapshot.status.head_oid.as_deref()),
+        &file,
+        staged,
+        bytes,
+    )?;
+    let context = before.and_then(|before| {
+        if staged && head.is_some() && head != snapshot.status.head_oid.as_deref() {
+            return Err(error("HEAD changed; refresh and review again"));
+        }
+        let file = changed
+            .cloned()
+            .ok_or_else(|| error("File has no changes; refresh the diff"))?;
+        Ok(HunkContext {
+            root: snapshot.info.root.clone(),
+            revision_before: before,
+            file,
+            entry,
+            staged,
+        })
+    });
+    Ok((diff, context))
+}
+
+fn build_hunk_review(context: &HunkContext) -> Result<ReviewedHunks, GitError> {
+    let root_path = Path::new(&context.root);
+    let file = &context.file;
+    let path = file.path.as_str();
+    safe_path(root_path, path)?;
+    let staged = context.staged;
+    let entry = &context.entry;
     let side = if staged {
         &file.index_status
     } else {
@@ -177,7 +351,7 @@ pub fn preview_hunks(root: &str, path: &str, staged: bool) -> Result<HunkPreview
         unavailable = Some("No changes on this side of the diff.".to_string());
     } else if file.index_status == "U"
         || file.worktree_status == "U"
-        || entry.lines().any(|l| {
+        || entry.split('\0').filter(|l| !l.is_empty()).any(|l| {
             l.split_once('\t')
                 .is_some_and(|(fields, _)| !fields.ends_with(" 0"))
         })
@@ -247,21 +421,25 @@ pub fn preview_hunks(root: &str, path: &str, staged: bool) -> Result<HunkPreview
             unavailable = Some("No selectable text hunks; use whole-file actions.".to_string());
         }
     }
-    if revision_before != revision(root_path, path)? {
+    if context.revision_before != revision(root_path, path)? {
         return Err(error(
             "File changed while loading its diff; refresh and review again",
         ));
     }
     let mut hash = Sha256::new();
-    hash.update(revision_before);
+    hash.update(&context.revision_before);
     hash.update(patch.as_bytes());
-    Ok(HunkPreview {
+    let preview = HunkPreview {
         file_path: path.to_string(),
         staged,
         revision: format!("{:x}", hash.finalize()),
         patch,
         hunks,
         unavailable_reason: unavailable,
+    };
+    Ok(ReviewedHunks {
+        preview,
+        context: context.clone(),
     })
 }
 
@@ -272,20 +450,50 @@ pub fn apply_hunks(
     expected_revision: &str,
     ids: &[u32],
 ) -> Result<(), GitError> {
-    let validation_started = std::time::Instant::now();
-    let preview_result = preview_hunks(root, path, staged);
+    let started = std::time::Instant::now();
+    let result = prepare_hunks(root, path, staged);
+    let review = finish_hunk_validation(started, result)?;
+    apply_reviewed_hunks(&review, expected_revision, ids)
+}
+
+/// A continuation reuses the original preconditions, generates a fresh Git
+/// patch (including current filters/attributes), and compares HEAD, all index
+/// stages, permissions, and every worktree byte against the reviewed state.
+pub fn apply_cached_hunks(
+    context: &HunkContext,
+    expected_revision: &str,
+    ids: &[u32],
+) -> Result<(), GitError> {
+    let started = std::time::Instant::now();
+    let result = context.complete();
+    let review = finish_hunk_validation(started, result)?;
+    apply_reviewed_hunks(&review, expected_revision, ids)
+}
+
+fn finish_hunk_validation(
+    started: std::time::Instant,
+    result: Result<ReviewedHunks, GitError>,
+) -> Result<ReviewedHunks, GitError> {
     tracing::info!(
         target: "gitgui::hunk_stage",
         phase = "preview_validation",
-        elapsed_ms = validation_started.elapsed().as_secs_f64() * 1000.0,
+        elapsed_ms = started.elapsed().as_secs_f64() * 1000.0,
         "Hunk stage phase completed"
     );
-    let preview = preview_result?;
+    result
+}
+
+fn apply_reviewed_hunks(
+    review: &ReviewedHunks,
+    expected_revision: &str,
+    ids: &[u32],
+) -> Result<(), GitError> {
+    let preview = &review.preview;
     if preview.revision != expected_revision {
         return Err(error("Selected hunks changed; refresh and review again"));
     }
-    if let Some(reason) = preview.unavailable_reason {
-        return Err(error(reason));
+    if let Some(reason) = &preview.unavailable_reason {
+        return Err(error(reason.clone()));
     }
     let selected: HashSet<u32> = ids.iter().copied().collect();
     if selected.is_empty()
@@ -310,11 +518,12 @@ pub fn apply_hunks(
         }
     }
     let mut args = vec!["apply", "--cached", "--whitespace=nowarn"];
-    if staged {
+    if preview.staged {
         args.push("--reverse");
     }
     let mut check = args.clone();
     check.push("--check");
+    let root = review.context.root.as_str();
     let patch_bytes = patch.len().min(u32::MAX as usize);
     let check_started = std::time::Instant::now();
     let check_result = GitCommand::run_with_stdin(&check, Some(Path::new(root)), patch.as_bytes());
@@ -510,6 +719,7 @@ mod tests {
         git(dir.path(), &["init", "-q", "-b", "main"]);
         git(dir.path(), &["config", "user.name", "GitGui Test"]);
         git(dir.path(), &["config", "user.email", "test@example.com"]);
+        git(dir.path(), &["config", "core.autocrlf", "false"]);
         dir
     }
     fn git(root: &Path, args: &[&str]) -> String {
@@ -593,6 +803,180 @@ mod tests {
         .message
         .contains("changed"));
         assert_eq!(git(root, &["diff", "--cached"]), "");
+    }
+
+    #[test]
+    fn file_view_continuations_stage_and_unstage_text_including_large_and_untracked_files() {
+        for untracked in [false, true] {
+            let repo = repository();
+            let root = repo.path();
+            let r = root.to_str().unwrap();
+            if !untracked {
+                base_file(root, "file [1].txt");
+            }
+            let content = format!("changed\n{}", "long line\n".repeat(150_000));
+            fs::write(root.join("file [1].txt"), &content).unwrap();
+            let (diff, context) =
+                load_working_tree_file_view(r, None, "file [1].txt", false).unwrap();
+            assert_eq!(diff.modified_content, content);
+            assert!(!diff.is_binary);
+            let context = context.unwrap();
+            let review = context.complete().unwrap();
+            assert_eq!(
+                review.preview.patch,
+                preview_hunks(r, "file [1].txt", false).unwrap().patch
+            );
+            apply_cached_hunks(&context, &review.preview.revision, &[0]).unwrap();
+            assert_eq!(git(root, &["show", ":file [1].txt"]), content);
+            let (diff, context) =
+                load_working_tree_file_view(r, None, "file [1].txt", true).unwrap();
+            assert_eq!(diff.modified_content, content);
+            let context = context.unwrap();
+            let review = context.complete().unwrap();
+            apply_cached_hunks(&context, &review.preview.revision, &[0]).unwrap();
+            assert_eq!(git(root, &["diff", "--cached"]), "");
+            assert_eq!(
+                fs::read_to_string(root.join("file [1].txt")).unwrap(),
+                content
+            );
+        }
+    }
+
+    #[test]
+    fn continuations_reject_same_size_timestamp_restored_edits_and_external_index_or_head_changes()
+    {
+        for change in ["bytes", "index", "head"] {
+            let repo = repository();
+            let root = repo.path();
+            let r = root.to_str().unwrap();
+            base_file(root, "file.txt");
+            fs::write(root.join("file.txt"), "reviewed\n").unwrap();
+            let (_, context) = load_working_tree_file_view(r, None, "file.txt", false).unwrap();
+            let context = context.unwrap();
+            let preview = context.complete().unwrap().preview;
+            match change {
+                "bytes" => {
+                    let modified = fs::metadata(root.join("file.txt"))
+                        .unwrap()
+                        .modified()
+                        .unwrap();
+                    fs::write(root.join("file.txt"), "external\n").unwrap();
+                    fs::OpenOptions::new()
+                        .write(true)
+                        .open(root.join("file.txt"))
+                        .unwrap()
+                        .set_times(fs::FileTimes::new().set_modified(modified))
+                        .unwrap();
+                }
+                "index" => {
+                    fs::write(root.join("file.txt"), "indexed\n").unwrap();
+                    git(root, &["add", "file.txt"]);
+                    fs::write(root.join("file.txt"), "reviewed\n").unwrap();
+                }
+                "head" => {
+                    git(root, &["commit", "--allow-empty", "-qm", "external"]);
+                }
+                _ => unreachable!(),
+            }
+            let index_before = git(root, &["ls-files", "--stage"]);
+            assert!(context.complete().unwrap_err().message.contains("changed"));
+            assert!(apply_cached_hunks(&context, &preview.revision, &[0]).is_err());
+            assert_eq!(git(root, &["ls-files", "--stage"]), index_before);
+        }
+    }
+
+    #[test]
+    fn cached_apply_regenerates_git_patch_after_attribute_changes() {
+        let repo = repository();
+        let root = repo.path();
+        let r = root.to_str().unwrap();
+        base_file(root, "file.txt");
+        fs::write(root.join("file.txt"), "reviewed\n").unwrap();
+        let review = prepare_hunks(r, "file.txt", false).unwrap();
+        fs::write(root.join(".gitattributes"), "file.txt -diff\n").unwrap();
+        assert!(apply_cached_hunks(&review.context, &review.preview.revision, &[0]).is_err());
+        assert_eq!(git(root, &["diff", "--cached"]), "");
+    }
+
+    #[test]
+    fn shared_view_preserves_binary_rename_deletion_and_add_add_conflict_behavior() {
+        let repo = repository();
+        let root = repo.path();
+        let r = root.to_str().unwrap();
+        base_file(root, "file.txt");
+        fs::write(root.join("file.txt"), b"binary\0content").unwrap();
+        let (diff, context) = load_working_tree_file_view(r, None, "file.txt", false).unwrap();
+        assert!(diff.is_binary);
+        assert!(context
+            .unwrap()
+            .complete()
+            .unwrap()
+            .preview
+            .unavailable_reason
+            .unwrap()
+            .contains("Binary"));
+        fs::remove_file(root.join("file.txt")).unwrap();
+        let (diff, context) = load_working_tree_file_view(r, None, "file.txt", false).unwrap();
+        assert!(diff.modified_content.is_empty());
+        assert!(diff.message.is_none());
+        assert_eq!(context.unwrap().complete().unwrap().preview.hunks.len(), 1);
+        git(root, &["restore", "file.txt"]);
+        git(root, &["mv", "file.txt", "renamed.txt"]);
+        let (diff, context) = load_working_tree_file_view(r, None, "renamed.txt", true).unwrap();
+        assert_eq!(diff.original_path.as_deref(), Some("file.txt"));
+        assert_eq!(diff.original_content, diff.modified_content);
+        assert!(context
+            .unwrap()
+            .complete()
+            .unwrap()
+            .preview
+            .unavailable_reason
+            .unwrap()
+            .contains("Renames"));
+
+        let oid = git(root, &["rev-parse", "HEAD:file.txt"]);
+        let conflict = format!(
+            "0 {}\trenamed.txt\n100644 {} 2\trenamed.txt\n100644 {} 3\trenamed.txt\n",
+            "0".repeat(40),
+            oid.trim(),
+            oid.trim()
+        );
+        GitCommand::run_with_stdin(
+            &["update-index", "--index-info"],
+            Some(root),
+            conflict.as_bytes(),
+        )
+        .unwrap();
+        let (_, context) = load_working_tree_file_view(r, None, "renamed.txt", false).unwrap();
+        assert!(context
+            .unwrap()
+            .complete()
+            .unwrap()
+            .preview
+            .unavailable_reason
+            .unwrap()
+            .contains("conflicts"));
+    }
+
+    #[test]
+    fn shared_view_rejects_unsafe_paths_and_stale_staged_head() {
+        let repo = repository();
+        let root = repo.path();
+        let r = root.to_str().unwrap();
+        for path in ["../outside", ".git/config", "C:\\outside", "/outside"] {
+            assert!(load_working_tree_file_view(r, None, path, false).is_err());
+        }
+        base_file(root, "file.txt");
+        let old_head = git(root, &["rev-parse", "HEAD"]);
+        fs::write(root.join("file.txt"), "staged\n").unwrap();
+        git(root, &["add", "file.txt"]);
+        git(root, &["commit", "--allow-empty", "-qm", "external"]);
+        fs::write(root.join("file.txt"), "next\n").unwrap();
+        git(root, &["add", "file.txt"]);
+        let (diff, context) =
+            load_working_tree_file_view(r, Some(old_head.trim()), "file.txt", true).unwrap();
+        assert_eq!(diff.modified_content, "next\n");
+        assert!(context.unwrap_err().message.contains("HEAD changed"));
     }
 
     #[test]
@@ -733,6 +1117,17 @@ mod tests {
         std::os::unix::fs::symlink(outside.path(), root.join("link")).unwrap();
         assert!(preview_discard(r, &["link/precious".into()]).is_err());
         assert!(preview_hunks(r, "link/precious", false).is_err());
+        assert!(load_working_tree_file_view(r, None, "link/precious", false).is_err());
+        std::os::unix::fs::symlink(outside.path().join("precious"), root.join("leaf")).unwrap();
+        let (diff, _) = load_working_tree_file_view(r, None, "leaf", false).unwrap();
+        assert!(diff.modified_content.is_empty());
+        assert!(diff.message.unwrap().contains("Symlinks"));
+        fs::create_dir(root.join("nested")).unwrap();
+        fs::write(root.join("nested/precious"), "reviewed\n").unwrap();
+        let (_, context) = load_working_tree_file_view(r, None, "nested/precious", false).unwrap();
+        fs::rename(root.join("nested"), root.join("original-nested")).unwrap();
+        std::os::unix::fs::symlink(outside.path(), root.join("nested")).unwrap();
+        assert!(context.unwrap().complete().is_err());
         fs::write(root.join(".gitignore"), "ignored\n").unwrap();
         fs::write(root.join("ignored"), "keep").unwrap();
         assert!(preview_discard(r, &["ignored".into()]).is_err());
@@ -780,8 +1175,11 @@ mod tests {
         git(root, &["add", "."]);
         git(root, &["commit", "-q", "-m", "base"]);
         fs::write(root.join("crlf.txt"), "after\r\nlast").unwrap();
-        let p = preview_hunks(r, "crlf.txt", false).unwrap();
-        apply_hunks(r, "crlf.txt", false, &p.revision, &[0]).unwrap();
+        let (diff, context) = load_working_tree_file_view(r, None, "crlf.txt", false).unwrap();
+        assert_eq!(diff.modified_content, "after\r\nlast");
+        let context = context.unwrap();
+        let p = context.complete().unwrap().preview;
+        apply_cached_hunks(&context, &p.revision, &[0]).unwrap();
         assert_eq!(git(root, &["show", ":crlf.txt"]), "after\nlast");
         assert_eq!(fs::read(root.join("crlf.txt")).unwrap(), b"after\r\nlast");
     }
@@ -791,24 +1189,31 @@ mod tests {
         let repo = repository();
         let root = repo.path();
         let r = root.to_str().unwrap();
-        for name in [" spaced .txt ", "*.txt", "-option.txt"] {
+        let spaced = if cfg!(windows) {
+            " spaced .txt"
+        } else {
+            " spaced .txt "
+        };
+        let pattern = if cfg!(windows) {
+            "[literal].txt"
+        } else {
+            "*.txt"
+        };
+        for name in [spaced, pattern, "-option.txt"] {
             fs::write(root.join(name), "base\n").unwrap();
         }
         git(root, &["add", "."]);
         git(root, &["commit", "-q", "-m", "base"]);
-        for name in [" spaced .txt ", "*.txt", "-option.txt"] {
+        for name in [spaced, pattern, "-option.txt"] {
             fs::write(root.join(name), "changed\n").unwrap();
         }
-        let p = preview_hunks(r, "*.txt", false).unwrap();
-        apply_hunks(r, "*.txt", false, &p.revision, &[0]).unwrap();
+        let p = preview_hunks(r, pattern, false).unwrap();
+        apply_hunks(r, pattern, false, &p.revision, &[0]).unwrap();
         assert_eq!(git(root, &["show", ":-option.txt"]), "base\n");
-        let p = preview_discard(r, &[" spaced .txt ".into(), "-option.txt".into()]).unwrap();
+        let p = preview_discard(r, &[spaced.into(), "-option.txt".into()]).unwrap();
         discard(r, &p, false).unwrap();
-        assert_eq!(
-            fs::read_to_string(root.join(" spaced .txt ")).unwrap(),
-            "base\n"
-        );
-        assert_eq!(fs::read_to_string(root.join("*.txt")).unwrap(), "changed\n");
+        assert_eq!(fs::read_to_string(root.join(spaced)).unwrap(), "base\n");
+        assert_eq!(fs::read_to_string(root.join(pattern)).unwrap(), "changed\n");
     }
 
     #[test]

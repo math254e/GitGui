@@ -33,7 +33,12 @@ fn lane(request: &RequestEnvelope) -> Lane {
             _ if matches!(
                 method,
                 "git.hunk_preview" | "git.discard_preview" | "git.amend_info"
-            ) =>
+            ) || (method == "git.working_tree_file_diff"
+                && request
+                    .params
+                    .get("prepareHunks")
+                    .and_then(|value| value.as_bool())
+                    == Some(true)) =>
             {
                 Lane::Ordered(
                     request
@@ -167,11 +172,16 @@ mod tests {
         for (id, method, repo) in [
             ("first", "git.stage", "a"),
             ("second", "git.unstage", "a"),
+            ("file", "git.working_tree_file_diff", "a"),
             ("preview", "git.hunk_preview", "a"),
             ("other", "git.stage", "b"),
             ("read", "git.commit_file_diff", "a"),
         ] {
-            q.push(request(id, method, repo)).unwrap();
+            let mut request = request(id, method, repo);
+            if id == "file" {
+                request.params["prepareHunks"] = json!(true);
+            }
+            q.push(request).unwrap();
         }
         assert_eq!(q.next().unwrap().id, "first");
         assert_eq!(q.next().unwrap().id, "other");
@@ -180,6 +190,8 @@ mod tests {
         q.finish("first");
         assert_eq!(q.next().unwrap().id, "second");
         q.finish("second");
+        assert_eq!(q.next().unwrap().id, "file");
+        q.finish("file");
         assert_eq!(q.next().unwrap().id, "preview");
     }
 

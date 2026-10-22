@@ -155,6 +155,8 @@ impl GitCommand {
 }
 
 pub fn git_command() -> Command {
+    #[cfg(test)]
+    test_metrics::git();
     let mut command = Command::new("git");
 
     #[cfg(windows)]
@@ -168,4 +170,29 @@ pub fn git_command() -> Command {
     command.env("GIT_OPTIONAL_LOCKS", "0");
 
     command
+}
+
+// Per-thread counters keep the ignored file-view measurement independent of
+// production instrumentation and of concurrently running tests.
+#[cfg(test)]
+pub(crate) mod test_metrics {
+    use std::cell::Cell;
+    thread_local! {
+        static COUNTS: Cell<(usize, usize, usize)> = const { Cell::new((0, 0, 0)) };
+    }
+    pub fn git() {
+        COUNTS.with(|c| {
+            let (g, r, b) = c.get();
+            c.set((g + 1, r, b));
+        });
+    }
+    pub fn read(bytes: usize) {
+        COUNTS.with(|c| {
+            let (g, r, b) = c.get();
+            c.set((g, r + 1, b + bytes));
+        });
+    }
+    pub fn take() -> (usize, usize, usize) {
+        COUNTS.with(|c| c.replace((0, 0, 0)))
+    }
 }

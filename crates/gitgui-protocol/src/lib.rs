@@ -918,6 +918,10 @@ pub struct GitHunkPreviewParams {
     pub file_path: String,
     #[serde(default)]
     pub staged: bool,
+    /// Optional continuation from the file-content request. A cache miss loads fresh state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub context_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, TS)]
@@ -1190,6 +1194,10 @@ pub struct WorkingTreeFileDiffParams {
     /// When true, compare HEAD with the index; otherwise compare the index with the working tree.
     #[serde(default)]
     pub staged: bool,
+    /// Prepare a short-lived hunk continuation while reading file contents.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub prepare_hunks: Option<bool>,
 }
 
 /// Result shared by committed and working-tree file-diff methods.
@@ -1198,6 +1206,14 @@ pub struct WorkingTreeFileDiffParams {
 pub struct FileDiffResult {
     /// Structured file diff payload.
     pub diff: CommitFileDiff,
+    /// Optional server-owned continuation for the separate hunk-preview request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub hunk_context_id: Option<String>,
+    /// Preview failure does not prevent displaying loaded file contents.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub hunk_error: Option<String>,
 }
 
 /// Parameters for the commit-file-list performance hint.

@@ -91,6 +91,13 @@ Behavior decisions were confirmed by Mathies. Implementation is complete on
 
 ## Design status
 
+Working-tree content requests can prepare a bounded server-owned continuation
+for the separate hunk preview. It shares status/index work and the first
+full-file read while preserving independent content display. Apply reuses the
+reviewed preconditions, regenerates Git's patch, and validates the complete
+current file revision before Git's check/apply. Missing continuations use fresh
+preparation. See [#5 measurements and safety details](file-view-work-measurement.md).
+
 All behavior questions were answered and shared understanding was confirmed.
 The Rust core now produces Git hunk previews and checks revisions before hunk
 application or discard. New protocol methods carry hunk IDs, explicit discard

@@ -26,7 +26,8 @@ The Rust socket loop keeps reading frames and events while dispatches execute.
 Each session admits at most 128 pending/running requests, with eight independent
 reads, eight repository operation lanes, one prefetch, and one control request
 able to run concurrently. Operation lanes preserve arrival order per repository,
-including lock-sensitive hunk/discard/amend previews. The existing server-wide
+including working-tree file diffs that prepare hunk continuations and lock-sensitive
+hunk/discard/amend previews. Ordinary file diffs remain independent reads. The existing server-wide
 repository mutex still serializes operations from different sessions. Ordering
 between different sockets is determined by that mutex, not a global wire order.
 Read snapshots retain their existing semantics when another session mutates.

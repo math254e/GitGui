@@ -548,7 +548,11 @@ commitHash: string, };
 
 export type GitHunk = { id: number, header: string, patch: string, };
 
-export type GitHunkPreviewParams = { repositoryId: string, filePath: string, staged: boolean, };
+export type GitHunkPreviewParams = { repositoryId: string, filePath: string, staged: boolean,
+/**
+ * Optional continuation from the file-content request. A cache miss loads fresh state.
+ */
+contextId?: string, };
 
 export type GitHunkPreview = { filePath: string, staged: boolean, revision: string,
 /**
@@ -684,13 +688,25 @@ filePath: string,
 /**
  * When true, compare HEAD with the index; otherwise compare the index with the working tree.
  */
-staged: boolean, };
+staged: boolean,
+/**
+ * Prepare a short-lived hunk continuation while reading file contents.
+ */
+prepareHunks?: boolean, };
 
 export type FileDiffResult = {
 /**
  * Structured file diff payload.
  */
-diff: CommitFileDiff, };
+diff: CommitFileDiff,
+/**
+ * Optional server-owned continuation for the separate hunk-preview request.
+ */
+hunkContextId?: string,
+/**
+ * Preview failure does not prevent displaying loaded file contents.
+ */
+hunkError?: string, };
 
 export type PrefetchCommitFilesParams = {
 /**

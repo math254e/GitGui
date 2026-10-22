@@ -25,6 +25,7 @@ use gitgui_core::git::{
         SharedCommitFilesCache,
     },
     command::GitError,
+    hunk_cache::SharedHunkReviewCache,
     operations::{
         commit as run_commit, create_branch as run_create_branch, fetch as run_fetch,
         init_repository as run_init_repository, list_local_branches, pull as run_pull,
@@ -1456,8 +1457,28 @@ async fn git_working_tree(
             METHOD_GIT_HUNK_PREVIEW => {
                 let p = parse_params::<GitHunkPreviewParams>(params, method)?;
                 validate_relative_file_path(&p.file_path)?;
+                if let Some(id) = &p.context_id {
+                    validate_revision(id)?;
+                }
+                let cache = state.hunk_cache.clone();
                 reviewed_git_operation(state, &p.repository_id, move |root| {
-                    working_tree::preview_hunks(root, &p.file_path, p.staged)
+                    let context = p.context_id.as_deref().and_then(|id| {
+                        cache
+                            .lock()
+                            .ok()
+                            .and_then(|cache| cache.get_context(root, &p.file_path, p.staged, id))
+                    });
+                    let review = match context {
+                        Some(context) => context.complete()?,
+                        None => working_tree::prepare_hunks(root, &p.file_path, p.staged)?,
+                    };
+                    let preview = review.preview;
+                    if preview.unavailable_reason.is_none() {
+                        if let Ok(mut cache) = cache.lock() {
+                            cache.insert(root, review.context, Some(preview.revision.clone()));
+                        }
+                    }
+                    Ok(preview)
                 })
                 .await
                 .and_then(serialize_workflow_result)
@@ -1472,7 +1493,18 @@ async fn git_working_tree(
                         "Select between 1 and 4096 hunks",
                     ));
                 }
+                let cache = state.hunk_cache.clone();
                 reviewed_git_operation(state, &p.repository_id, move |root| {
+                    let cached = cache.lock().ok().and_then(|cache| {
+                        cache.get_review(root, &p.file_path, p.staged, &p.revision)
+                    });
+                    if let Some(context) = cached {
+                        return working_tree::apply_cached_hunks(
+                            &context,
+                            &p.revision,
+                            &p.hunk_ids,
+                        );
+                    }
                     working_tree::apply_hunks(
                         root,
                         &p.file_path,
@@ -2086,6 +2118,8 @@ async fn git_commit_working_tree_file_diff(
             request_id,
             FileDiffResult {
                 diff: protocol_diff(diff),
+                hunk_context_id: None,
+                hunk_error: None,
             },
         ),
         Ok(Ok(None)) => invalid_params(request_id, "file is not part of this comparison"),
@@ -2153,6 +2187,8 @@ async fn git_commit_file_diff(
             request_id,
             FileDiffResult {
                 diff: protocol_diff(diff),
+                hunk_context_id: None,
+                hunk_error: None,
             },
         ),
         Ok(Err(FileDiffLoadError::MissingFile)) => invalid_params(
@@ -2199,12 +2235,46 @@ async fn git_working_tree_file_diff(
     let file_path = params.file_path;
     let head_hash = params.head_hash;
     let staged = params.staged;
+    let prepare_hunks = params.prepare_hunks.unwrap_or(false);
+    let cache = state.hunk_cache.clone();
+    let lock = if prepare_hunks {
+        Some(state.git_mutation_lock(&params.repository_id).await)
+    } else {
+        None
+    };
+    let _guard = match lock.as_ref() {
+        Some(lock) => Some(lock.lock().await),
+        None => None,
+    };
     match spawn_blocking(move || {
-        resolve_repository(&repository.operation_path).map_err(|_| StatusLoadError::NotFound)?;
-        let status = load_core_repository_status(&repository.operation_path)
-            .map_err(StatusLoadError::Git)?
-            .status;
-        let file = status
+        if prepare_hunks {
+            let (diff, context) = gitgui_core::git::working_tree::load_working_tree_file_view(
+                &repository.operation_path,
+                head_hash.as_deref(),
+                &file_path,
+                staged,
+            )
+            .map_err(StatusLoadError::Git)?;
+            let (hunk_context_id, hunk_error) = match context {
+                Ok(context) => {
+                    let id = context.id();
+                    if let Ok(mut cache) = cache.lock() {
+                        cache.insert(&repository.operation_path, context, None);
+                    }
+                    (Some(id), None)
+                }
+                Err(error) => (None, Some(error.message)),
+            };
+            return Ok(FileDiffResult {
+                diff: protocol_diff(diff),
+                hunk_context_id,
+                hunk_error,
+            });
+        }
+        let snapshot = load_core_repository_status(&repository.operation_path)
+            .map_err(StatusLoadError::Git)?;
+        let file = snapshot
+            .status
             .changed_files
             .iter()
             .find(|file| {
@@ -2214,24 +2284,24 @@ async fn git_working_tree_file_diff(
             .unwrap_or_else(|| CoreCommitFile {
                 path: file_path.clone(),
                 original_path: None,
-                status: "M".to_string(),
+                status: "MM".to_string(),
             });
         load_core_working_tree_file_diff(
-            &repository.operation_path,
-            head_hash.as_deref(),
+            &snapshot.info.root,
+            head_hash.as_deref().or(snapshot.status.head_oid.as_deref()),
             &file,
             staged,
         )
+        .map(|diff| FileDiffResult {
+            diff: protocol_diff(diff),
+            hunk_context_id: None,
+            hunk_error: None,
+        })
         .map_err(StatusLoadError::Git)
     })
     .await
     {
-        Ok(Ok(diff)) => response_success(
-            request_id,
-            FileDiffResult {
-                diff: protocol_diff(diff),
-            },
-        ),
+        Ok(Ok(result)) => response_success(request_id, result),
         Ok(Err(StatusLoadError::Git(error))) => {
             warn!(error = %error.message, "working tree file diff operation failed");
             git_failure(request_id, "working tree file diff could not be loaded")
@@ -2621,6 +2691,7 @@ struct ServerState {
     repository_events: broadcast::Sender<gitgui_protocol::OrderedEventEnvelope>,
     data_dir: Option<PathBuf>,
     cache: SharedCommitFilesCache,
+    hunk_cache: SharedHunkReviewCache,
     auth: AuthStore,
     allowed_origins: Vec<String>,
     dev_url: Option<String>,
@@ -2698,6 +2769,7 @@ impl ServerState {
             repository_events: broadcast::channel(256).0,
             data_dir: config.data_dir.clone(),
             cache: SharedCommitFilesCache::default(),
+            hunk_cache: SharedHunkReviewCache::default(),
             auth: AuthStore::new(config.server_id.clone(), config.bootstrap_token.clone()),
             allowed_origins: config.allowed_origins.clone(),
             dev_url: config.dev_url.clone(),
@@ -2824,6 +2896,9 @@ impl ServerState {
         };
 
         if let Ok(mut cache) = self.cache.lock() {
+            cache.evict_repo(&removed_repository.operation_path);
+        }
+        if let Ok(mut cache) = self.hunk_cache.lock() {
             cache.evict_repo(&removed_repository.operation_path);
         }
         self.persist_catalog().await?;
@@ -3628,20 +3703,11 @@ fn protocol_diff(diff: CoreCommitFileDiff) -> ProtocolCommitFileDiff {
 }
 
 fn core_changed_file_to_commit_file(file: &CoreChangedFile) -> CoreCommitFile {
-    let status = first_non_blank_status(&file.index_status)
-        .or_else(|| first_non_blank_status(&file.worktree_status))
-        .unwrap_or('M');
     CoreCommitFile {
         path: file.path.clone(),
         original_path: file.original_path.clone(),
-        status: status.to_string(),
+        status: format!("{}{}", file.index_status, file.worktree_status),
     }
-}
-
-fn first_non_blank_status(status: &str) -> Option<char> {
-    status
-        .chars()
-        .find(|character| !character.is_whitespace() && *character != '.')
 }
 
 fn find_commit_file(files: &[CoreCommitFile], requested_path: &str) -> Option<CoreCommitFile> {
@@ -3867,6 +3933,96 @@ async fn shutdown_signal(state: Arc<ServerState>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    async fn file_view_test_rpc(state: &ServerState, method: &str, params: Value) -> Value {
+        match dispatch(
+            RequestEnvelope {
+                id: "file-view-test".into(),
+                method: method.into(),
+                params,
+            },
+            state,
+        )
+        .await
+        {
+            ResponseEnvelope::Success(response) => response.result,
+            ResponseEnvelope::Error(response) => panic!("{method}: {:?}", response.error),
+        }
+    }
+
+    #[tokio::test]
+    async fn file_view_continuations_and_legacy_requests_apply_safely_with_or_without_cache() {
+        use gitgui_core::git::command::GitCommand;
+        for mode in ["cached", "evicted", "legacy", "stale"] {
+            let repo = tempfile::tempdir().unwrap();
+            let root = repo.path();
+            let git = |args: &[&str]| GitCommand::run(args, Some(root)).unwrap();
+            git(&["init", "-q", "-b", "main"]);
+            git(&["config", "user.name", "Test"]);
+            git(&["config", "user.email", "test@example.com"]);
+            git(&["config", "core.autocrlf", "false"]);
+            fs::write(root.join("file.txt"), "base\n").unwrap();
+            git(&["add", "."]);
+            git(&["commit", "-qm", "base"]);
+            fs::write(root.join("file.txt"), "reviewed\n").unwrap();
+            let catalog = build_repository_catalog(&[root.to_str().unwrap().into()]);
+            let repository_id = catalog[0].summary.id.clone();
+            let state = ServerState::new(
+                &ServerConfig::default(),
+                "127.0.0.1:0".parse().unwrap(),
+                catalog,
+            );
+            let mut params =
+                json!({ "repositoryId": repository_id, "filePath": "file.txt", "staged": false });
+            if mode != "legacy" {
+                params["prepareHunks"] = json!(true);
+            }
+            let diff =
+                file_view_test_rpc(&state, METHOD_GIT_WORKING_TREE_FILE_DIFF, params.clone()).await;
+            assert_eq!(diff["diff"]["modifiedContent"], "reviewed\n");
+            assert!(diff.get("hunkError").is_none());
+            if mode == "evicted" {
+                *state.hunk_cache.lock().unwrap() = Default::default();
+            }
+            let mut preview_params = params.clone();
+            if let Some(id) = diff.get("hunkContextId") {
+                preview_params["contextId"] = id.clone();
+            }
+            let preview = file_view_test_rpc(&state, METHOD_GIT_HUNK_PREVIEW, preview_params).await;
+            assert_eq!(preview["hunks"].as_array().unwrap().len(), 1);
+            if mode == "evicted" {
+                *state.hunk_cache.lock().unwrap() = Default::default();
+            }
+            if mode == "stale" {
+                fs::write(root.join("file.txt"), "externally indexed\n").unwrap();
+                git(&["add", "file.txt"]);
+                fs::write(root.join("file.txt"), "reviewed\n").unwrap();
+            }
+            let apply = json!({ "repositoryId": repository_id, "filePath": "file.txt", "staged": false, "revision": preview["revision"], "hunkIds": [0] });
+            if mode == "stale" {
+                assert!(matches!(
+                    dispatch(
+                        RequestEnvelope {
+                            id: "stale".into(),
+                            method: METHOD_GIT_APPLY_HUNKS.into(),
+                            params: apply
+                        },
+                        &state
+                    )
+                    .await,
+                    ResponseEnvelope::Error(_)
+                ));
+                assert_eq!(git(&["show", ":file.txt"]), "externally indexed\n");
+            } else {
+                file_view_test_rpc(&state, METHOD_GIT_APPLY_HUNKS, apply).await;
+                assert_eq!(git(&["show", ":file.txt"]), "reviewed\n");
+            }
+            assert_eq!(
+                fs::read_to_string(root.join("file.txt")).unwrap(),
+                "reviewed\n"
+            );
+        }
+    }
 
     #[test]
     fn reviewed_working_tree_methods_require_explicit_scopes() {
