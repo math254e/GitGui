@@ -104,7 +104,41 @@ export class RpcSessionFactory extends Context.Service<
 
 interface PendingRequest {
   readonly deferred: Deferred.Deferred<unknown, GitGuiRpcError>;
+  readonly method: GitGuiRpcMethod;
+  readonly startedAt: number;
+  readonly inFlightBeforeSend: number;
+  writeStartedAt?: number;
+  sentAt?: number;
 }
+
+const measuredMethods = new Set<GitGuiRpcMethod>([
+  "git.commit_file_diff",
+  "git.working_tree_file_diff",
+  "git.hunk_preview",
+  "git.apply_hunks",
+  "git.stage",
+  "git.unstage",
+  "repositories.refresh",
+]);
+
+const monotonicNow = () => globalThis.performance?.now?.() ?? Date.now();
+const utf8ByteLength = (text: string) => {
+  let bytes = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    const code = text.charCodeAt(index);
+    if (code <= 0x7f) bytes += 1;
+    else if (code <= 0x7ff) bytes += 2;
+    else if (code >= 0xd800 && code <= 0xdbff && index + 1 < text.length) {
+      const next = text.charCodeAt(index + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        bytes += 4;
+        index += 1;
+      } else bytes += 3;
+    } else bytes += 3;
+    if (bytes >= 0x7fffffff) return 0x7fffffff;
+  }
+  return bytes;
+};
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null;
@@ -274,6 +308,18 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
           if (entry === undefined) {
             return yield* Effect.void;
           }
+          if (measuredMethods.has(entry.method)) {
+            const receivedAt = monotonicNow();
+            const responseBytes = utf8ByteLength(text);
+            console.debug("[GitGui RPC diagnostic]", {
+              method: entry.method,
+              writerWaitMs: Math.max(0, (entry.sentAt ?? receivedAt) - (entry.writeStartedAt ?? entry.startedAt)),
+              roundTripMs: Math.max(0, receivedAt - entry.startedAt),
+              responseBytes,
+              inFlightBeforeSend: entry.inFlightBeforeSend,
+              ok: message["ok"] === true,
+            });
+          }
           yield* Ref.update(pending, (current) => {
             const next = new Map(current);
             next.delete(id);
@@ -364,16 +410,21 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
         }
         requestCounter += 1;
         const id = `request-${requestCounter}`;
+        const startedAt = monotonicNow();
+        const inFlightBeforeSend = (yield* Ref.get(pending)).size;
         const deferred = yield* Deferred.make<unknown, GitGuiRpcError>();
         yield* Ref.update(pending, (current) => {
           const next = new Map(current);
-          next.set(id, { deferred });
+          next.set(id, { deferred, method, startedAt, inFlightBeforeSend });
           return next;
         });
         // The entry is removed on every exit: a response, a rejection, a
         // timeout, an interruption, or a failed write.
         const result = yield* Effect.ensuring(
           Effect.gen(function* () {
+            const writeStartedAt = monotonicNow();
+            const entryBeforeWrite = (yield* Ref.get(pending)).get(id);
+            if (entryBeforeWrite) entryBeforeWrite.writeStartedAt = writeStartedAt;
             yield* writer
               .write(JSON.stringify({ id, method, params: input }))
               .pipe(
@@ -387,6 +438,8 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
                     }),
                 ),
               );
+            const entry = (yield* Ref.get(pending)).get(id);
+            if (entry) entry.sentAt = monotonicNow();
             return yield* Deferred.await(deferred).pipe(
               Effect.timeoutOption(requestTimeout),
               Effect.flatMap(

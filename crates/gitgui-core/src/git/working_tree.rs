@@ -272,7 +272,15 @@ pub fn apply_hunks(
     expected_revision: &str,
     ids: &[u32],
 ) -> Result<(), GitError> {
-    let preview = preview_hunks(root, path, staged)?;
+    let validation_started = std::time::Instant::now();
+    let preview_result = preview_hunks(root, path, staged);
+    tracing::info!(
+        target: "gitgui::hunk_stage",
+        phase = "preview_validation",
+        elapsed_ms = validation_started.elapsed().as_secs_f64() * 1000.0,
+        "Hunk stage phase completed"
+    );
+    let preview = preview_result?;
     if preview.revision != expected_revision {
         return Err(error("Selected hunks changed; refresh and review again"));
     }
@@ -307,8 +315,29 @@ pub fn apply_hunks(
     }
     let mut check = args.clone();
     check.push("--check");
-    GitCommand::run_with_stdin(&check, Some(Path::new(root)), patch.as_bytes())?;
-    GitCommand::run_with_stdin(&args, Some(Path::new(root)), patch.as_bytes()).map(|_| ())
+    let patch_bytes = patch.len().min(u32::MAX as usize);
+    let check_started = std::time::Instant::now();
+    let check_result = GitCommand::run_with_stdin(&check, Some(Path::new(root)), patch.as_bytes());
+    tracing::info!(
+        target: "gitgui::hunk_stage",
+        phase = "patch_check",
+        elapsed_ms = check_started.elapsed().as_secs_f64() * 1000.0,
+        patch_bytes,
+        succeeded = check_result.is_ok(),
+        "Hunk stage phase completed"
+    );
+    check_result?;
+    let apply_started = std::time::Instant::now();
+    let apply_result = GitCommand::run_with_stdin(&args, Some(Path::new(root)), patch.as_bytes());
+    tracing::info!(
+        target: "gitgui::hunk_stage",
+        phase = "patch_apply",
+        elapsed_ms = apply_started.elapsed().as_secs_f64() * 1000.0,
+        patch_bytes,
+        succeeded = apply_result.is_ok(),
+        "Hunk stage phase completed"
+    );
+    apply_result.map(|_| ())
 }
 
 pub fn preview_discard(root: &str, paths: &[String]) -> Result<Vec<DiscardFile>, GitError> {

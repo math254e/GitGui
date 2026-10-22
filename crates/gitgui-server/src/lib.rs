@@ -806,8 +806,34 @@ async fn process_request_result(
 ) -> Result<(), ()> {
     match result {
         Ok(request) => {
+            let method = request.method.clone();
+            let measure = matches!(
+                method.as_str(),
+                "git.commit_file_diff"
+                    | "git.working_tree_file_diff"
+                    | "git.hunk_preview"
+                    | "git.apply_hunks"
+                    | "git.stage"
+                    | "git.unstage"
+                    | "repositories.refresh"
+            );
+            let started = std::time::Instant::now();
             let response = dispatch_authorized(request, state, session).await;
-            send_json(socket, &response).await
+            if measure {
+                let text = serde_json::to_string(&response).map_err(|error| {
+                    warn!(error = %error, "failed to serialize WebSocket response");
+                })?;
+                tracing::info!(
+                    target: "gitgui::rpc",
+                    method,
+                    dispatch_ms = started.elapsed().as_secs_f64() * 1000.0,
+                    response_bytes = text.len().min(u32::MAX as usize),
+                    "RPC dispatch completed"
+                );
+                send_text(socket, text).await
+            } else {
+                send_json(socket, &response).await
+            }
         }
         Err(error) => match request_id {
             Some(id) => send_json(socket, &ResponseEnvelope::error(id, error)).await,
@@ -3626,6 +3652,10 @@ where
     let text = serde_json::to_string(value).map_err(|error| {
         warn!(error = %error, "failed to serialize WebSocket response");
     })?;
+    send_text(socket, text).await
+}
+
+async fn send_text(socket: &mut WebSocket, text: String) -> Result<(), ()> {
     socket
         .send(Message::Text(text.into()))
         .await

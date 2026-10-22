@@ -3,6 +3,7 @@ use std::{
     io::Write,
     path::Path,
     process::{Command, Stdio},
+    time::Instant,
 };
 
 #[cfg(windows)]
@@ -49,6 +50,7 @@ impl GitCommand {
         stdin: Option<&[u8]>,
         diff_exit_code: bool,
     ) -> Result<String, GitError> {
+        let started = Instant::now();
         let mut command = git_command();
         command.args(args);
         command.stdout(Stdio::piped()).stderr(Stdio::piped());
@@ -84,6 +86,44 @@ impl GitCommand {
             stderr: String::new(),
             status: None,
         })?;
+
+        // Record only a coarse verb, elapsed time, byte counts, and exit code.
+        // Arguments can contain repository paths or user supplied values.
+        let category = match args.first().copied() {
+            Some("status") => "status",
+            Some("diff") => "diff",
+            Some("show") => "show",
+            Some("rev-parse") => "rev-parse",
+            Some("hash-object") => "hash-object",
+            Some("ls-files") => "ls-files",
+            Some("cat-file") => "cat-file",
+            Some("apply") => "apply",
+            Some("add") => "add",
+            Some("reset") => "reset",
+            Some("commit") => "commit",
+            Some("branch") => "branch",
+            Some("worktree") => "worktree",
+            Some("stash") => "stash",
+            Some("fetch") => "fetch",
+            Some("pull") => "pull",
+            Some("push") => "push",
+            Some("remote") => "remote",
+            Some("config") => "config",
+            Some("merge-base") => "merge-base",
+            Some("for-each-ref") => "for-each-ref",
+            Some("tag") => "tag",
+            Some("init") => "init",
+            _ => "other",
+        };
+        tracing::info!(
+            target: "gitgui::git_command",
+            category,
+            elapsed_ms = started.elapsed().as_secs_f64() * 1000.0,
+            stdout_bytes = output.stdout.len().min(u32::MAX as usize),
+            stderr_bytes = output.stderr.len().min(u32::MAX as usize),
+            exit_code = output.status.code(),
+            "Git subprocess completed"
+        );
 
         if !output.status.success() && !(diff_exit_code && output.status.code() == Some(1)) {
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();

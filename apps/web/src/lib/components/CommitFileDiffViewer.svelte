@@ -78,7 +78,12 @@
   });
 
   $effect(() => {
-    renderView(renderer, diff, contentViewMode, diffViewMode, wordWrap, appearance);
+    const currentDiff = diff;
+    const startedAt = performance.now();
+    renderView(renderer, currentDiff, contentViewMode, diffViewMode, wordWrap, appearance);
+    if (renderer && currentDiff && !currentDiff.isBinary) {
+      recordDiffDiagnostic("render", performance.now() - startedAt, currentDiff);
+    }
   });
 
   $effect(() => {
@@ -271,6 +276,7 @@
 
       // Reuse the parsed diff when changing layout or wrapping a large file.
       if (parsedDiff?.source !== currentDiff || parsedDiff.preview !== hunkPreview) {
+        const parseStartedAt = performance.now();
         const originalFile: FileContents | null = currentDiff.originalPath === null
           ? null
           : { name: currentDiff.originalPath, contents: currentDiff.originalContent };
@@ -281,6 +287,7 @@
             ? library.parsePatchFiles(hunkPreview.patch, hunkPreview.revision, true)[0].files[0]
             : library.parseDiffFromFile(originalFile, modifiedFile, { context: 3 }, true),
         };
+        recordDiffDiagnostic("parse", performance.now() - parseStartedAt, currentDiff);
       }
 
       const preview = hunkPreview;
@@ -299,6 +306,21 @@
     } catch (caught) {
       renderError = formatError(caught);
     }
+  }
+
+  function recordDiffDiagnostic(phase: "parse" | "render", durationMs: number, currentDiff: CommitFileDiff) {
+    // Character counts are an inexpensive bounded proxy; contents and paths
+    // are deliberately excluded from diagnostics.
+    const contentBytes = Math.min(
+      (currentDiff.originalContent.length + currentDiff.modifiedContent.length) * 2,
+      0x7fffffff,
+    );
+    console.debug("[GitGui diff diagnostic]", {
+      phase,
+      source: diffSource,
+      durationMs: Math.max(0, durationMs),
+      contentBytes,
+    });
   }
 
   function toggleHunk(id: number) {

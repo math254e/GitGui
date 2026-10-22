@@ -7,6 +7,7 @@
  */
 import { EnvironmentId } from "@gitgui/contracts/environment";
 import { describe, expect, it } from "@effect/vitest";
+import { vi } from "vitest";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -166,6 +167,75 @@ const welcome = (protocolVersion = 2) => ({
 });
 
 describe("the GitGui RPC session", () => {
+  it.effect("records bounded, content-free measurements for file view RPCs", () =>
+    Effect.gen(function* () {
+      const { socket, session } = yield* makeSession();
+      const diagnostic = vi.spyOn(console, "debug").mockImplementation(() => undefined);
+      try {
+        socket.deliver(welcome());
+        yield* session.ready;
+
+        const call = Effect.runPromise(session.client.call("git.working_tree_file_diff", {
+          repositoryId: "repository-1",
+          filePath: "private/source.ts",
+          staged: false,
+        }));
+        yield* waitFor(() => socket.requestsFor("git.working_tree_file_diff").length > 0);
+        const request = socket.requestsFor("git.working_tree_file_diff")[0];
+        socket.deliver({
+          type: "response",
+          id: request.id,
+          ok: true,
+          result: { diff: { originalContent: "must not be logged", modifiedContent: "also private" } },
+        });
+        yield* Effect.promise(() => call);
+
+        const entry = diagnostic.mock.calls.find(([label]) => label === "[GitGui RPC diagnostic]");
+        expect(entry).toBeDefined();
+        expect(JSON.stringify(entry)).not.toContain("private/source.ts");
+        expect(JSON.stringify(entry)).not.toContain("must not be logged");
+        expect(entry?.[1]).toMatchObject({ method: "git.working_tree_file_diff", ok: true });
+        expect((entry?.[1] as { responseBytes: number }).responseBytes).toBeGreaterThan(0);
+      } finally {
+        diagnostic.mockRestore();
+      }
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("records timing and response size when a measured RPC fails", () =>
+    Effect.gen(function* () {
+      const { socket, session } = yield* makeSession();
+      const diagnostic = vi.spyOn(console, "debug").mockImplementation(() => undefined);
+      try {
+        socket.deliver(welcome());
+        yield* session.ready;
+
+        const call = Effect.runPromise(session.client.call("git.hunk_preview", {
+          repositoryId: "repository-1",
+          filePath: "private/source.ts",
+          staged: false,
+        }));
+        yield* waitFor(() => socket.requestsFor("git.hunk_preview").length > 0);
+        const request = socket.requestsFor("git.hunk_preview")[0];
+        socket.deliver({
+          type: "response",
+          id: request.id,
+          ok: false,
+          error: { code: "repository_error", message: "safe error" },
+        });
+        const failure = yield* Effect.promise(() => call.catch((error: unknown) => error));
+
+        const entry = diagnostic.mock.calls.find(([label]) => label === "[GitGui RPC diagnostic]");
+        expect(failure).toBeInstanceOf(GitGuiRpcError);
+        expect(entry?.[1]).toMatchObject({ method: "git.hunk_preview", ok: false });
+        expect((entry?.[1] as { responseBytes: number }).responseBytes).toBeGreaterThan(0);
+        expect(JSON.stringify(entry)).not.toContain("private/source.ts");
+      } finally {
+        diagnostic.mockRestore();
+      }
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("greets the server and becomes ready", () =>
     Effect.gen(function* () {
       const { socket, session } = yield* makeSession();

@@ -1,6 +1,6 @@
 # File view loading and staging investigation
 
-**Scope:** Read-only code investigation of slow file-view loads and file/hunk staging refreshes. No runtime profiling was performed, so the code paths below are confirmed while their relative runtime cost remains unmeasured.
+**Scope:** Code investigation and bounded runtime diagnostics for slow file-view loads and file/hunk staging refreshes. The code paths below are confirmed; the diagnostics provide measurements but do not benchmark a repository on their own.
 
 ## Summary
 
@@ -56,7 +56,9 @@ The workspace replaces the snapshot after status refresh even when status letter
 
 The client default request timeout is 30 seconds ([`client.ts`](../packages/client-runtime/src/rpc/client.ts#L63)). The Git command runner spawns a child and waits for it without a deadline or cancellation hook ([`command.rs`](../crates/gitgui-core/src/git/command.rs#L41)). If a Git command stalls, the viewer request can time out on the client while the server remains blocked processing that request and does not reach later requests. Separately, file parsing is synchronous after the data arrives; a large diff can block rendering and timer callbacks ([`CommitFileDiffViewer.svelte`](../apps/web/src/lib/components/CommitFileDiffViewer.svelte#L292)).
 
-No per-RPC or per-Git-command duration instrumentation was found in these paths. The code supports the bottlenecks above, but cannot identify which dominates on a specific repository without runtime measurements.
+At the time of the original investigation, no per-RPC or per-Git-command
+duration instrumentation was present. The diagnostics below add measurements
+for these paths.
 
 ## Recommended tasks
 
@@ -73,8 +75,31 @@ These follow-up tasks were filed as GitHub issues. Priority order is suggested; 
 ## Verification boundary
 
 Issue #6 implements the targeted refresh changes described above. The rest of
-this investigation remains a static code-path analysis; it does not benchmark
-the relative cost of Git, server refresh, transfer, or client rendering.
+The original investigation used static source inspection only and did not benchmark a repository or inspect a live dev session. The diagnostics below add runtime measurements; no baseline repository benchmark is included in this change.
 
-The most important unknown is the measured split between server-side
-Git/status/refresh time and client-side transfer/parse/render time.
+## Runtime diagnostics
+
+The file-view path now emits structured measurements at these boundaries:
+
+- The browser client logs selected RPC method, wait for the socket writer,
+  round-trip duration, response frame bytes, and success/failure. It measures
+  file diffs, hunk previews, stage/unstage, hunk application, and repository
+  refresh. Only the fixed method name and numeric measurements are logged.
+- The Rust server logs dispatch duration and serialized response bytes for the
+  same methods. The Git command runner logs a coarse allowlisted command
+  category, duration, stdout/stderr byte counts, and exit code. It does not log
+  command arguments, paths, stdin patches, or output text.
+- Hunk application additionally logs preview validation, patch check, and patch
+  application durations. Refresh has its own RPC dispatch duration, separating
+  the post-mutation refresh from the hunk mutation.
+- The viewer logs diff parse and render durations separately and a bounded
+  character-size estimate. It does not log diff contents or file paths.
+
+Use the client round-trip duration with the corresponding server dispatch
+duration and response bytes: the time outside dispatch is socket queueing plus
+wire transfer. A nonzero client writer wait identifies local send backpressure;
+large response bytes indicate transfer volume. These signals bound the likely
+cause but do not provide an exact server-side queue duration or network transfer
+duration. Server requests remain serial on one WebSocket, as documented above.
+Diagnostic records are emitted at debug-console / info-tracing levels and do
+not alter RPC responses or behavior.
