@@ -14,6 +14,7 @@
     onSelectionChange: (files: ChangedFile[]) => void;
     onAction: (file: ChangedFile) => void;
     onDiscard?: (file: ChangedFile) => void;
+    onDiscardAll?: () => void;
     disabled?: boolean;
   };
 
@@ -31,6 +32,7 @@
     onSelectionChange,
     onAction,
     onDiscard,
+    onDiscardAll,
     disabled = false,
   }: Props = $props();
 
@@ -45,6 +47,7 @@
   let scrollMutationObserver: MutationObserver | null = null;
   let scrollbarGutter = $state(15);
   let treeHasOverflow = $state(false);
+  let contextMenu = $state<{ x: number; y: number } | null>(null);
 
   const fileIconTokens = [
     "astro",
@@ -275,6 +278,37 @@
     syncScrollMetrics();
   }
 
+  function handleContextMenu(event: MouseEvent) {
+    if (!onDiscardAll || !event.composedPath().some(
+      (target) => target instanceof Element && target.getAttribute("data-type") === "item",
+    )) {
+      return;
+    }
+
+    event.preventDefault();
+    contextMenu = {
+      x: Math.min(event.clientX, window.innerWidth - 196),
+      y: Math.min(event.clientY, window.innerHeight - 48),
+    };
+  }
+
+  function handleWindowClick(event: MouseEvent) {
+    if (!(event.target instanceof Element) || !event.target.closest("[data-working-tree-context-menu]")) {
+      contextMenu = null;
+    }
+  }
+
+  function handleWindowKeydown(event: KeyboardEvent) {
+    if (event.key === "Escape") {
+      contextMenu = null;
+    }
+  }
+
+  function discardAllFromContextMenu() {
+    contextMenu = null;
+    onDiscardAll?.();
+  }
+
   function syncScrollMetrics() {
     if (!scrollElement) {
       treeHasOverflow = false;
@@ -384,7 +418,9 @@
   }
 </script>
 
-<div class="relative h-full min-h-0 w-full overflow-hidden" role="group" aria-label={`${actionLabel} files`}>
+<svelte:window onclick={handleWindowClick} onkeydown={handleWindowKeydown} />
+
+<div class="relative h-full min-h-0 w-full overflow-hidden" role="group" aria-label={`${actionLabel} files`} oncontextmenu={handleContextMenu}>
   <div bind:this={host} class="h-full min-h-0 w-full overflow-hidden" style={`--gitgui-tree-row-margin-right: ${(onDiscard ? 41 : 13) + (treeHasOverflow ? scrollbarGutter : 0)}px; --trees-bg-override: var(--app-theme-sidebar); --trees-fg-override: var(--app-theme-sidebar-foreground); --trees-fg-muted-override: var(--app-theme-sidebar-muted-foreground); --trees-border-color-override: var(--app-theme-sidebar-border); --trees-selected-bg-override: var(--app-theme-sidebar-row-selected); --trees-selected-fg-override: var(--app-theme-accent-surface-foreground); --trees-accent-override: var(--app-theme-accent); --trees-focus-ring-color-override: var(--app-theme-focus); --trees-status-added-override: #2f9e6f; --trees-status-deleted-override: #e5484d; --trees-status-modified-override: #d09a2e; --trees-status-renamed-override: #8b5cf6; --trees-status-untracked-override: #2f9e6f; --trees-status-ignored-override: var(--app-theme-text-subtle); --trees-border-radius-override: 4px; --trees-font-family-override: inherit; --trees-font-size-override: 13px; --trees-padding-inline-override: 3px; --trees-item-padding-x-override: 3px; --trees-item-row-gap-override: 6px; --trees-level-gap-override: 0px; --trees-icon-width-override: 18px; --trees-item-height: 28px;`}></div>
 
   <div class="pointer-events-none absolute inset-0 overflow-hidden">
@@ -412,4 +448,24 @@
       </button>
     {/each}
   </div>
+
+  {#if contextMenu}
+    <div
+      class="fixed z-[600] min-w-48 border border-[var(--app-theme-border)] bg-[var(--app-theme-surface-raised)] p-1 shadow-lg"
+      data-working-tree-context-menu
+      role="menu"
+      aria-label="Unstaged file actions"
+      style={`left: ${contextMenu.x}px; top: ${contextMenu.y}px;`}
+    >
+      <button
+        class="w-full px-3 py-2 text-left text-sm text-[var(--app-theme-error-foreground)] hover:bg-[var(--app-theme-sidebar-row-hover)] focus-visible:outline-2 focus-visible:outline-[var(--app-theme-focus)] disabled:opacity-45"
+        disabled={disabled || files.length === 0}
+        role="menuitem"
+        type="button"
+        onclick={discardAllFromContextMenu}
+      >
+        Discard all unstaged
+      </button>
+    </div>
+  {/if}
 </div>

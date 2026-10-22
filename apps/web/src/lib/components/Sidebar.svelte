@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { ChevronRight } from "@lucide/svelte";
   import BranchTree from "$lib/components/BranchTree.svelte";
+  import FileTreeChevron from "$lib/components/FileTreeChevron.svelte";
   import WorktreeTree from "$lib/components/WorktreeTree.svelte";
   import type { CommitInfo, CommitRef, RepositorySnapshot, StashInfo } from "$lib/types/repository";
 
@@ -118,19 +118,14 @@
 </script>
 
 <aside class="min-h-0 border-r border-[var(--app-theme-sidebar-border)] bg-[var(--app-theme-sidebar)]">
-  <div class="flex h-full flex-col overflow-auto px-2 pt-1 pb-1">
+  <div class="flex h-full flex-col overflow-auto">
     <section class={`flex min-h-0 flex-col border-b border-[var(--app-theme-sidebar-border)] py-2 first:pt-2 last:border-b-0 ${open.LocalBranches ? 'flex-1' : 'flex-none'}`}>
       <button
         type="button"
         onclick={() => toggle("LocalBranches")}
-        class="group mb-1 inline-flex items-center gap-1 text-xs font-bold uppercase text-[var(--app-theme-sidebar-muted-foreground)] transition-colors hover:text-[var(--app-theme-accent-surface-foreground)]"
+        class="group mb-1 inline-flex items-center gap-1 pl-1.5 text-xs font-bold uppercase text-[var(--app-theme-sidebar-muted-foreground)] transition-colors hover:text-[var(--app-theme-accent-surface-foreground)]"
       >
-        <ChevronRight
-          aria-hidden="true"
-          size={14}
-          strokeWidth={2.5}
-          class={`shrink-0 origin-center transition-transform duration-200 ${open.LocalBranches ? 'rotate-90' : 'rotate-0'}`}
-        />
+        <FileTreeChevron expanded={open.LocalBranches} />
         <span>Local branches {snapshot ? `(${localBranches.length})` : ""}</span>
       </button>
       {#if open.LocalBranches}
@@ -158,14 +153,9 @@
       <button
         type="button"
         onclick={() => toggle("RemoteBranches")}
-        class="group mb-1 inline-flex items-center gap-1 text-xs font-bold uppercase text-[var(--app-theme-sidebar-muted-foreground)] transition-colors hover:text-[var(--app-theme-accent-surface-foreground)]"
+        class="group mb-1 inline-flex items-center gap-1 pl-1.5 text-xs font-bold uppercase text-[var(--app-theme-sidebar-muted-foreground)] transition-colors hover:text-[var(--app-theme-accent-surface-foreground)]"
       >
-        <ChevronRight
-          aria-hidden="true"
-          size={14}
-          strokeWidth={2.5}
-          class={`shrink-0 origin-center transition-transform duration-200 ${open.RemoteBranches ? 'rotate-90' : 'rotate-0'}`}
-        />
+        <FileTreeChevron expanded={open.RemoteBranches} />
         <span>Remote branches {snapshot ? `(${remoteBranches.length})` : ""}</span>
       </button>
       {#if open.RemoteBranches}
@@ -191,14 +181,9 @@
       <button
         type="button"
         onclick={() => toggle("Worktrees")}
-        class="group mb-1 inline-flex items-center gap-1 text-xs font-bold uppercase text-[var(--app-theme-sidebar-muted-foreground)] transition-colors hover:text-[var(--app-theme-accent-surface-foreground)]"
+        class="group mb-1 inline-flex items-center gap-1 pl-1.5 text-xs font-bold uppercase text-[var(--app-theme-sidebar-muted-foreground)] transition-colors hover:text-[var(--app-theme-accent-surface-foreground)]"
       >
-        <ChevronRight
-          aria-hidden="true"
-          size={14}
-          strokeWidth={2.5}
-          class={`shrink-0 origin-center transition-transform duration-200 ${open.Worktrees ? 'rotate-90' : 'rotate-0'}`}
-        />
+        <FileTreeChevron expanded={open.Worktrees} />
         <span>Worktrees {snapshot ? `(${(snapshot.worktrees ?? []).length})` : ""}</span>
       </button>
       {#if open.Worktrees}
@@ -216,14 +201,9 @@
       <button
         type="button"
         onclick={() => toggle("Stashes")}
-        class="group mb-1 inline-flex items-center gap-1 text-xs font-bold uppercase text-[var(--app-theme-sidebar-muted-foreground)] transition-colors hover:text-[var(--app-theme-accent-surface-foreground)]"
+        class="group mb-1 inline-flex items-center gap-1 pl-1.5 text-xs font-bold uppercase text-[var(--app-theme-sidebar-muted-foreground)] transition-colors hover:text-[var(--app-theme-accent-surface-foreground)]"
       >
-        <ChevronRight
-          aria-hidden="true"
-          size={14}
-          strokeWidth={2.5}
-          class={`shrink-0 origin-center transition-transform duration-200 ${open.Stashes ? 'rotate-90' : 'rotate-0'}`}
-        />
+        <FileTreeChevron expanded={open.Stashes} />
         <span>Stashes {snapshot ? `(${(snapshot.stashes ?? []).length})` : ""}</span>
       </button>
       {#if open.Stashes}

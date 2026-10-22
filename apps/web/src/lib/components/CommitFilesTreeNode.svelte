@@ -11,8 +11,9 @@
 </script>
 
 <script lang="ts">
-  import { ChevronRight, File, Folder } from "@lucide/svelte";
+  import { File, Folder } from "@lucide/svelte";
   import CommitFilesTreeNode from "$lib/components/CommitFilesTreeNode.svelte";
+  import FileTreeChevron from "$lib/components/FileTreeChevron.svelte";
 
   type Props = {
     node: FileTreeNode;
@@ -83,12 +84,7 @@
     type="button"
     onclick={() => toggleFolder(node.path)}
   >
-    <ChevronRight
-      aria-hidden="true"
-      size={14}
-      strokeWidth={2.5}
-      class={`shrink-0 text-[var(--app-theme-text-subtle)] transition-transform ${isCollapsed ? "rotate-0" : "rotate-90"}`}
-    />
+    <FileTreeChevron expanded={!isCollapsed} class="text-[var(--app-theme-text-subtle)]" />
     <Folder aria-hidden="true" size={15} class="shrink-0 text-[var(--app-theme-text-muted)]" />
     <span class="truncate">{node.name}</span>
     {#if isCollapsed}

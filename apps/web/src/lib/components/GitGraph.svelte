@@ -995,7 +995,7 @@
               >
                 <span class="relative z-30 flex min-w-0 items-center gap-0.5 overflow-visible px-0.5">
                   {#if snapshot.status.currentBranch}
-                    <span class="max-w-full truncate rounded-sm border border-[var(--app-theme-accent)]/30 bg-[var(--app-theme-accent-surface)] px-0.5 py-0 text-[10px] font-semibold leading-3.5 text-[var(--app-theme-accent-surface-foreground)]">
+                    <span class="max-w-full truncate rounded-[2px] border border-[var(--app-theme-accent)]/30 bg-[var(--app-theme-accent-surface)] px-0.5 py-0 text-[10px] font-semibold leading-3.5 text-[var(--app-theme-accent-surface-foreground)]">
                       {snapshot.status.currentBranch}
                     </span>
                   {/if}
@@ -1020,8 +1020,10 @@
             {@const ghostRef = branchRefByLineCommit.get(commit.hash) ?? nearestDescendantRefs.get(commit.hash) ?? branchRefByMergeTargetCommit.get(commit.hash) ?? branchRefByLaneCommit.get(commit.hash) ?? branchRefByFirstParentCommit.get(commit.hash)}
             <li aria-setsize={graphRows.length + Number(hasChanges)} aria-posinset={rowRange.start + index + Number(hasChanges) + 1}>
               <button
-                class={`grid w-full items-center border-b border-[var(--app-theme-border)] text-left transition hover:bg-[var(--app-theme-sidebar-row-hover)] focus-visible:outline-2 focus-visible:outline-[var(--app-theme-focus)] ${
-                  selectedCommit?.hash === commit.hash ? "bg-[var(--app-theme-accent-surface)]" : "bg-[var(--app-theme-surface)]"
+                class={`grid w-full items-center border-b border-[var(--app-theme-border)] text-left transition focus-visible:outline-2 focus-visible:outline-[var(--app-theme-focus)] ${
+                  selectedCommit?.hash === commit.hash
+                    ? "bg-[var(--app-theme-accent-surface)]"
+                    : "bg-[var(--app-theme-surface)] hover:bg-[var(--app-theme-sidebar-row-hover)]"
                 }`}
                 data-commit-hash={commit.hash}
                 onkeydown={(event) => navigateHistory(event, commit.hash)}
@@ -1044,7 +1046,7 @@
                     {#if !stash}
                       {#each commitRefs as ref (refKey(ref))}
                         <span
-                          class="relative z-30 flex max-w-full items-center gap-0.5 rounded-sm border px-0.5 py-0 text-[10px] font-semibold leading-3.5 hover:z-[100] hover:max-w-none hover:whitespace-nowrap"
+                          class="relative z-30 flex max-w-full items-center gap-0.5 rounded-[2px] border px-0.5 py-0 text-[10px] font-semibold leading-3.5 hover:z-[100] hover:max-w-none hover:whitespace-nowrap"
                           style={refBadgeStyle(ref.refType, graphCommit)}
                         >
                           {#if ref.refType === "remoteBranch"}
@@ -1059,7 +1061,7 @@
                     {#if !stash && !commitRefs.length && (hoveredRowHash === commit.hash || selectedCommit?.hash === commit.hash)}
                       {#if ghostRef}
                         <span
-                          class="relative z-30 flex max-w-full items-center gap-0.5 rounded-sm border border-dashed px-0.5 py-0 text-[10px] font-semibold leading-3.5 opacity-50 hover:z-[100] hover:max-w-none hover:whitespace-nowrap"
+                          class="relative z-30 flex max-w-full items-center gap-0.5 rounded-[2px] border border-dashed px-0.5 py-0 text-[10px] font-semibold leading-3.5 opacity-50 hover:z-[100] hover:max-w-none hover:whitespace-nowrap"
                           style={refBadgeStyle(ghostRef.refType, graphCommit)}
                         >
                           {#if ghostRef.refType === "remoteBranch"}

@@ -64,7 +64,7 @@
         [data-item-section="decoration"] {
           position: absolute;
           top: 0;
-          left: 2px;
+          right: 2px;
           z-index: 4;
           width: 18px;
           height: 100%;
@@ -72,8 +72,15 @@
         }
 
         [data-type="item"] {
-          padding-left: 22px;
+          margin-inline: 0;
+          border-radius: 0;
+          padding-left: 6px;
+          padding-right: 22px;
           white-space: nowrap;
+        }
+
+        [data-file-tree-virtualized-scroll="true"] {
+          scrollbar-gutter: auto;
         }
 
         [data-type="item"][data-item-focused="true"]::before,

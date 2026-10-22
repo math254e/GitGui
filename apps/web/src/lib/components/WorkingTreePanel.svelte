@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { Check, ChevronRight, LoaderCircle } from "@lucide/svelte";
+  import { Check, LoaderCircle } from "@lucide/svelte";
+  import FileTreeChevron from "$lib/components/FileTreeChevron.svelte";
   import type { GitAmendInfo } from "@gitgui/contracts";
   import type { ChangedFile, CommitFile, RepositorySnapshot } from "$lib/types/repository";
   import WorkingTreeFileList from "$lib/components/WorkingTreeFileList.svelte";
@@ -212,10 +213,6 @@
     onDraftChange({ ...draft, [mode]: { ...currentDraft, [field]: value } });
   }
 
-  function discardUnstaged() {
-    onDiscardPaths((selectedUnstagedFiles.length ? selectedUnstagedFiles : unstagedFiles).map((file) => file.path));
-  }
-
   function toggleFileSection(section: "unstaged" | "staged") {
     fileSectionsOpen[section] = !fileSectionsOpen[section];
   }
@@ -250,11 +247,7 @@
               aria-expanded={fileSectionsOpen.unstaged}
               onclick={() => toggleFileSection("unstaged")}
             >
-              <ChevronRight
-                aria-hidden="true"
-                size={14}
-                class={`shrink-0 transition-transform ${fileSectionsOpen.unstaged ? "rotate-90" : "rotate-0"}`}
-              />
+              <FileTreeChevron expanded={fileSectionsOpen.unstaged} />
               <span id="unstaged-files-heading" class="truncate">Unstaged Files</span>
             </button>
             <span class="rounded-full bg-[var(--app-theme-sidebar-control-surface)] px-1.5 py-0.5 text-[11px] font-semibold text-[var(--app-theme-text-muted)]">
@@ -273,13 +266,6 @@
           </button>
         </div>
 
-        <div class="mb-2 flex shrink-0 justify-end px-1">
-          <button type="button" class="text-xs font-medium text-[var(--app-theme-error-foreground)] hover:underline disabled:opacity-45"
-            disabled={pending || disabled || !unstagedFiles.length} onclick={discardUnstaged}>
-            {selectedUnstagedFiles.length ? "Discard selected" : "Discard all unstaged"}
-          </button>
-        </div>
-
         {#if fileSectionsOpen.unstaged}
           <div id="unstaged-files-list" class="min-h-0 flex-1 overflow-hidden">
             {#if unstagedFiles.length}
@@ -292,6 +278,7 @@
                 onSelectionChange={handleUnstagedSelection}
                 onAction={stageSingleFile}
                 onDiscard={(file) => onDiscardPaths([file.path])}
+                onDiscardAll={() => onDiscardPaths(unstagedFiles.map((file) => file.path))}
                 disabled={stageControlsDisabled}
               />
             {:else}
@@ -314,11 +301,7 @@
               aria-expanded={fileSectionsOpen.staged}
               onclick={() => toggleFileSection("staged")}
             >
-              <ChevronRight
-                aria-hidden="true"
-                size={14}
-                class={`shrink-0 transition-transform ${fileSectionsOpen.staged ? "rotate-90" : "rotate-0"}`}
-              />
+              <FileTreeChevron expanded={fileSectionsOpen.staged} />
               <span id="staged-files-heading" class="truncate">Staged Files</span>
             </button>
             <span class="rounded-full bg-[var(--app-theme-sidebar-control-surface)] px-1.5 py-0.5 text-[11px] font-semibold text-[var(--app-theme-text-muted)]">
