@@ -42,9 +42,9 @@ Filesystem notifications can also produce a `repository.changed` status invalida
 
 ### Commit diff prefetch
 
-Selecting a commit starts prefetch. The route first loads the commit file list, then requests diffs for every listed path ([`+page.svelte`](../apps/web/src/routes/+page.svelte#L927), [`+page.svelte`](../apps/web/src/routes/+page.svelte#L1050)). The server accepts up to 256 targets and processes them sequentially, loading complete diffs ([`lib.rs`](../crates/gitgui-server/src/lib.rs#L2105), [`lib.rs`](../crates/gitgui-server/src/lib.rs#L2143)). Because this is one request on the same serial WebSocket, the file the user selects can wait behind the entire batch.
+At the time of this investigation, selecting a commit started a full-diff prefetch for every listed path. Issue #7 changed this path: commit selection now loads only the file list, and the selected file's diff is loaded by the viewer when opened. Unselected files do not start background diff work, so a stale commit selection cannot leave a queued batch ahead of the current file selection on the serial WebSocket.
 
-The diff cache holds at most 100 recent file diffs, while a prefetch can contain 256 targets ([`cache.rs`](../crates/gitgui-core/src/git/cache.rs#L5)). Large batches can therefore do work for entries that are evicted before the user opens them.
+The retained prefetch RPC is a best-effort performance hint capped at one target per request, so callers can stop between complete-diff loads. The shared recent diff cache is bounded to 100 entries and 16 MiB of cached text payload; an individual diff larger than that byte budget is returned to its direct caller but is not retained in the cache. This bounds cache retention, while direct user-requested diffs remain complete.
 
 ## Correctness and loading-state findings
 
@@ -66,7 +66,7 @@ These follow-up tasks were filed as GitHub issues. Priority order is suggested; 
 2. [Keep obsolete file requests and prefetch from blocking interactive RPCs](https://github.com/math254e/GitGui/issues/4). Rework per-connection dispatch/concurrency and bound or cancel stale file requests while preserving mutation ordering and repository locks.
 3. [Reduce repeated Git and full-file work for working-tree diffs and hunks](https://github.com/math254e/GitGui/issues/5). Share status work, reduce repeated lookups and whole-file hashes, and retain stale-patch protection.
 4. [Avoid full repository reloads after working-tree mutations](https://github.com/math254e/GitGui/issues/6). Refresh status after hunk changes and consume snapshots already returned by whole-file stage/unstage.
-5. [Make commit diff prefetch bounded and prioritize the selected file](https://github.com/math254e/GitGui/issues/7). Prioritize interactive work and bound the count/bytes of sequential full-diff prefetch.
+5. [Make commit diff prefetch bounded and prioritize the selected file](https://github.com/math254e/GitGui/issues/7). Implemented with on-demand file diffs, a one-target best-effort server prefetch cap, and a byte-bounded diff cache.
 6. [Invalidate file diff and hunk preview when content changes with unchanged status](https://github.com/math254e/GitGui/issues/8). Include an explicit content generation/revision in invalidation.
 7. [Define a responsive rendering path for very large files](https://github.com/math254e/GitGui/issues/9). Measure parse/render behavior, then add a suitable size threshold or alternate rendering path.
 

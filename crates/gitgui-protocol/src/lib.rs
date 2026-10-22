@@ -138,7 +138,9 @@ pub const WS_METHOD_NAMES: &[&str] = &[
 /// Maximum number of commit hashes accepted by one commit-file prefetch hint.
 pub const MAX_PREFETCH_COMMIT_HASHES: usize = 256;
 /// Maximum number of typed diff targets accepted by one diff prefetch hint.
-pub const MAX_PREFETCH_COMMIT_DIFF_TARGETS: usize = 256;
+/// A one-target call is the smallest interruptible unit because each target
+/// loads a complete diff synchronously.
+pub const MAX_PREFETCH_COMMIT_DIFF_TARGETS: usize = 1;
 /// Maximum number of commit targets accepted by one filtered graph request.
 pub const MAX_GRAPH_TARGETS: usize = 256;
 

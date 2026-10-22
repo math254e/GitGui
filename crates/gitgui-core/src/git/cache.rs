@@ -5,6 +5,7 @@ use std::sync::{Arc, Condvar, Mutex};
 
 const RECENT_COMMIT_FILE_LIST_LIMIT: usize = 500;
 const RECENT_COMMIT_FILE_DIFF_LIMIT: usize = 100;
+const RECENT_COMMIT_FILE_DIFF_BYTE_LIMIT: usize = 16 * 1024 * 1024;
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct CommitFilesKey {
@@ -27,6 +28,7 @@ pub struct CommitFilesCache {
     recent: HashMap<CommitFilesKey, Vec<CommitFile>>,
     recent_order: VecDeque<CommitFilesKey>,
     recent_diffs: HashMap<CommitFileDiffKey, CommitFileDiff>,
+    recent_diff_bytes: usize,
     recent_diff_order: VecDeque<CommitFileDiffKey>,
     in_flight_diffs: HashMap<CommitFileDiffKey, InFlightCommitFileDiff>,
 }
@@ -75,7 +77,16 @@ impl CommitFilesCache {
     }
 
     pub fn insert_diff(&mut self, key: CommitFileDiffKey, diff: CommitFileDiff) {
+        let size = commit_file_diff_size(&diff);
+        if size > RECENT_COMMIT_FILE_DIFF_BYTE_LIMIT {
+            self.remove_recent_diff(&key);
+            self.recent_diff_order.retain(|existing| existing != &key);
+            return;
+        }
+
+        self.remove_recent_diff(&key);
         self.recent_diffs.insert(key.clone(), diff);
+        self.recent_diff_bytes = self.recent_diff_bytes.saturating_add(size);
         self.touch_recent_diff(&key);
         self.evict_recent_diffs();
     }
@@ -106,6 +117,7 @@ impl CommitFilesCache {
         self.recent_order.retain(|key| key.repo_root != repo_root);
         self.recent_diffs
             .retain(|key, _| key.repo_root != repo_root);
+        self.recent_diff_bytes = self.recent_diffs.values().map(commit_file_diff_size).sum();
         self.recent_diff_order
             .retain(|key| key.repo_root != repo_root);
 
@@ -149,12 +161,102 @@ impl CommitFilesCache {
     }
 
     fn evict_recent_diffs(&mut self) {
-        while self.recent_diffs.len() > RECENT_COMMIT_FILE_DIFF_LIMIT {
+        while self.recent_diffs.len() > RECENT_COMMIT_FILE_DIFF_LIMIT
+            || self.recent_diff_bytes > RECENT_COMMIT_FILE_DIFF_BYTE_LIMIT
+        {
             let Some(oldest) = self.recent_diff_order.pop_front() else {
                 break;
             };
 
-            self.recent_diffs.remove(&oldest);
+            self.remove_recent_diff(&oldest);
         }
+    }
+
+    fn remove_recent_diff(&mut self, key: &CommitFileDiffKey) {
+        if let Some(diff) = self.recent_diffs.remove(key) {
+            self.recent_diff_bytes = self
+                .recent_diff_bytes
+                .saturating_sub(commit_file_diff_size(&diff));
+        }
+    }
+}
+
+fn commit_file_diff_size(diff: &CommitFileDiff) -> usize {
+    [
+        diff.original_path.as_ref().map_or(0, String::len),
+        diff.modified_path.len(),
+        diff.original_content.len(),
+        diff.modified_content.len(),
+        diff.message.as_ref().map_or(0, String::len),
+    ]
+    .into_iter()
+    .fold(0usize, usize::saturating_add)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn key(path: &str) -> CommitFileDiffKey {
+        CommitFileDiffKey {
+            repo_root: "/repo".to_string(),
+            commit_hash: "commit".to_string(),
+            parent_hash: None,
+            path: path.to_string(),
+            original_path: None,
+            status: "M".to_string(),
+        }
+    }
+
+    fn diff(content: &str) -> CommitFileDiff {
+        CommitFileDiff {
+            original_path: None,
+            modified_path: "file.txt".to_string(),
+            original_content: content.to_string(),
+            modified_content: String::new(),
+            is_binary: false,
+            message: None,
+        }
+    }
+
+    #[test]
+    fn diff_cache_evicts_least_recent_entries_to_respect_byte_limit() {
+        let mut cache = CommitFilesCache::default();
+        let content = "x".repeat(8 * 1024 * 1024);
+        let first = key("first.txt");
+        let second = key("second.txt");
+
+        cache.insert_diff(first.clone(), diff(&content));
+        cache.insert_diff(second.clone(), diff(&content));
+
+        assert!(cache.get_diff(&first).is_none());
+        assert!(cache.get_diff(&second).is_some());
+        assert!(cache.recent_diff_bytes <= RECENT_COMMIT_FILE_DIFF_BYTE_LIMIT);
+    }
+
+    #[test]
+    fn diff_larger_than_cache_budget_is_returned_uncached() {
+        let mut cache = CommitFilesCache::default();
+        let key = key("large.txt");
+
+        cache.insert_diff(
+            key.clone(),
+            diff(&"x".repeat(RECENT_COMMIT_FILE_DIFF_BYTE_LIMIT + 1)),
+        );
+
+        assert!(cache.get_diff(&key).is_none());
+        assert_eq!(cache.recent_diff_bytes, 0);
+    }
+
+    #[test]
+    fn evicting_repository_releases_its_diff_cache_budget() {
+        let mut cache = CommitFilesCache::default();
+        let key = key("file.txt");
+        cache.insert_diff(key.clone(), diff("contents"));
+
+        cache.evict_repo("/repo");
+
+        assert!(cache.get_diff(&key).is_none());
+        assert_eq!(cache.recent_diff_bytes, 0);
     }
 }

@@ -2146,19 +2146,29 @@ async fn git_prefetch_commit_diffs(
     match spawn_blocking(move || {
         let mut count = 0u32;
         for target in &targets {
-            let files =
-                load_commit_files_cached(&cache, &repository.operation_path, &target.commit_hash)?;
-            let Some(file) = find_commit_file(&files, &target.file_path) else {
-                continue;
-            };
-            load_commit_file_diff_cached(
-                &cache,
-                &repository.operation_path,
-                &target.commit_hash,
-                target.parent_hash.as_deref(),
-                &file,
-            )?;
-            count += 1;
+            // This RPC is a performance hint. A missing file or a Git error for
+            // one target must not turn successful targets into a failed request.
+            let loaded = (|| {
+                let files = load_commit_files_cached(
+                    &cache,
+                    &repository.operation_path,
+                    &target.commit_hash,
+                )?;
+                let Some(file) = find_commit_file(&files, &target.file_path) else {
+                    return Ok::<bool, GitError>(false);
+                };
+                load_commit_file_diff_cached(
+                    &cache,
+                    &repository.operation_path,
+                    &target.commit_hash,
+                    target.parent_hash.as_deref(),
+                    &file,
+                )?;
+                Ok(true)
+            })();
+            if matches!(loaded, Ok(true)) {
+                count += 1;
+            }
         }
         Ok::<u32, GitError>(count)
     })

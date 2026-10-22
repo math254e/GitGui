@@ -349,7 +349,6 @@ export class WorkspaceStore {
   private hasResumed = false;
   private readonly graphScrollPositions = new Map<string, number>();
   private readonly prefetchedInitialCommits = new Map<string, string>();
-  private readonly prefetchedCommitDiffs = new Set<string>();
 
   constructor(runtime: WebApplicationRuntime) {
     this.runtime = runtime;
@@ -953,10 +952,6 @@ export class WorkspaceStore {
   }
 
   selectCommit(commit: CommitInfo): void {
-    if (this.snapshot && this.activeRepositoryId) {
-      void this.prefetchCommitDiffs(this.activeRepositoryId, commit);
-    }
-
     this.updateActiveRepository((repo) => ({
       ...repo,
       selectedGraphItem: { type: "commit", commit },
@@ -1101,13 +1096,6 @@ export class WorkspaceStore {
       }
     }
 
-    for (const signature of this.prefetchedCommitDiffs) {
-      const isOpenRepoSignature = repos.some((repo) => signature.startsWith(`${repo.id}:`));
-
-      if (!isOpenRepoSignature) {
-        this.prefetchedCommitDiffs.delete(signature);
-      }
-    }
   }
 
   private prefetchInitialCommitFiles(repos: WorkspaceRepo[]): void {
@@ -1134,30 +1122,6 @@ export class WorkspaceStore {
       void this.workspace.prefetchCommitFiles(repo.id, commitHashes).catch(() => {
         this.prefetchedInitialCommits.delete(repo.id);
       });
-    }
-  }
-
-  private async prefetchCommitDiffs(repositoryId: string, commit: CommitInfo): Promise<void> {
-    const parentHash = commit.parents[0] ?? null;
-    const signature = `${repositoryId}:${commit.hash}:${parentHash ?? ""}`;
-
-    if (this.prefetchedCommitDiffs.has(signature) || !this.client || !this.workspace) {
-      return;
-    }
-
-    this.prefetchedCommitDiffs.add(signature);
-    try {
-      const result = await this.client.getCommitFiles(repositoryId, commit.hash);
-      await this.workspace.prefetchCommitDiffs({
-        repositoryId,
-        targets: result.files.map((file) => ({
-          commitHash: commit.hash,
-          ...(parentHash ? { parentHash } : {}),
-          filePath: file.path,
-        })),
-      });
-    } catch {
-      this.prefetchedCommitDiffs.delete(signature);
     }
   }
 
