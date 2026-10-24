@@ -136,22 +136,96 @@ pub struct CommitFileDiff {
 }
 
 pub fn load_repository(path: &str) -> Result<RepositorySnapshot, GitError> {
+    load_repository_impl(path, false)
+}
+
+/// Interactive snapshots read stash metadata without auditing every saved tree.
+/// The server verifies immutable saved content separately in its preparation queue.
+pub fn load_repository_for_display(path: &str) -> Result<RepositorySnapshot, GitError> {
+    load_repository_impl(path, true)
+}
+
+fn load_repository_impl(path: &str, display: bool) -> Result<RepositorySnapshot, GitError> {
     let info = detect_repository(path)?;
     let root = Path::new(&info.root);
     let status = repository_status(root)?;
-    // A stash is user-facing history, but its index and optional untracked-file
-    // parents are Git implementation details. Keep the stash commit and omit
-    // those helper commits before ordering and laying out the canonical graph.
-    let (stashes, stash_helper_hashes) = load_stashes(root).unwrap_or_default();
+    // A stash is user-facing history; its synthetic baseline, index and
+    // untracked parents are helpers. Project a synthetic first-parent edge onto
+    // original HEAD before laying out the visible graph.
+    let (stashes, mut stash_helper_hashes) = load_stashes(root, display).unwrap_or_default();
     let worktrees = load_worktrees(root)?;
+    let refs = load_refs(root)?;
+    let history = load_commits(root, status.head_oid.as_deref(), &stashes, &worktrees)?;
+    // A helper adopted by a branch, tag, detached HEAD/worktree, or a later
+    // stash's original HEAD is ordinary history, together with its ancestry.
+    // Walk the unprojected graph so hiding another helper cannot break it.
+    if !stash_helper_hashes.is_empty() {
+        let mut ordinary_roots = status
+            .head_oid
+            .iter()
+            .cloned()
+            .chain(
+                worktrees
+                    .iter()
+                    .filter_map(|worktree| worktree.head_oid.clone()),
+            )
+            .chain(stashes.iter().map(|stash| stash.base_hash.clone()))
+            .collect::<Vec<_>>();
+        let history_hashes = history
+            .iter()
+            .map(|commit| commit.hash.as_str())
+            .collect::<HashSet<_>>();
+        for reference in &refs {
+            let target = if history_hashes.contains(reference.target.as_str()) {
+                reference.target.clone()
+            } else {
+                // Ref metadata peels only one tag layer. Ordinary tags may
+                // be nested; peel their literal target fully. Trees/blobs are
+                // valid tag targets, but contribute no commit history roots.
+                // Saved stash objects themselves are never peeled this way.
+                let raw = super::stash::read_git(
+                    &info.root,
+                    &[
+                        "rev-parse",
+                        "--verify",
+                        &format!("{}^{{}}", reference.target),
+                    ],
+                    256,
+                )?;
+                let oid = std::str::from_utf8(&raw).map_err(content_error)?.trim();
+                if !super::stash::is_oid(oid) {
+                    return Err(content_error("Malformed Git history root"));
+                }
+                match super::stash::read_git(&info.root, &["cat-file", "-t", oid], 32)?.as_slice() {
+                    b"commit\n" => {}
+                    b"tree\n" | b"blob\n" => continue,
+                    _ => return Err(content_error("Invalid Git history root type")),
+                }
+                oid.to_owned()
+            };
+            ordinary_roots.push(target);
+        }
+        for commit in reachable_commits(&history, &ordinary_roots) {
+            stash_helper_hashes.remove(&commit.hash);
+        }
+    }
     let commits = sort_commits(
-        load_commits(root, status.head_oid.as_deref(), &stashes, &worktrees)?
+        history
             .into_iter()
             .filter(|commit| !stash_helper_hashes.contains(&commit.hash))
+            .map(|mut commit| {
+                if let Some(stash) = stashes.iter().find(|stash| stash.hash == commit.hash) {
+                    if let Some(parent) = commit.parents.first_mut() {
+                        if stash_helper_hashes.contains(parent) {
+                            *parent = stash.base_hash.clone();
+                        }
+                    }
+                }
+                commit
+            })
             .collect(),
     );
     let graph = build_commit_graph(&commits, status.head_oid.as_deref());
-    let refs = load_refs(root)?;
 
     Ok(RepositorySnapshot {
         status,
@@ -370,7 +444,14 @@ pub(crate) fn load_working_tree_file_diff_with_content(
         // The index is always the base for unstaged changes, including before
         // the repository's first commit.
         match load_file_from_index(root, &file.path) {
-            Err(_) if matches!(file.status.as_str(), "DD" | "AU" | "UD" | "UA" | "DU" | "AA" | "UU") => FileContent::Missing("Resolve conflicts before selecting hunks.".into()),
+            Err(_)
+                if matches!(
+                    file.status.as_str(),
+                    "DD" | "AU" | "UD" | "UA" | "DU" | "AA" | "UU"
+                ) =>
+            {
+                FileContent::Missing("Resolve conflicts before selecting hunks.".into())
+            }
             result => result?,
         }
     };
@@ -399,7 +480,7 @@ pub(crate) fn load_working_tree_file_diff_with_content(
     )
 }
 
-fn file_diff(
+pub(crate) fn file_diff(
     original_path: Option<String>,
     modified_path: String,
     original: FileContent,
@@ -643,133 +724,78 @@ fn load_commits(
         .collect::<String>();
     let output = GitCommand::run_with_stdin(
         &[
+            "--no-replace-objects",
             "log",
             "--branches",
             "--remotes",
             "--tags",
             "--stdin",
             "--date=unix",
-            "--pretty=format:%H%x1f%P%x1f%an%x1f%at%x1f%s%x1e",
+            "-z",
+            "--format=%H%x00%P%x00%an%x00%at%x00%s",
         ],
         Some(root),
         additional_roots.as_bytes(),
     )?;
 
-    Ok(output
-        .split('\x1e')
-        .filter_map(|record| {
-            let record = record.trim();
-            if record.is_empty() {
-                return None;
+    let fields: Vec<_> = output
+        .strip_suffix('\0')
+        .unwrap_or(&output)
+        .split('\0')
+        .collect();
+    if output.is_empty() {
+        return Ok(Vec::new());
+    }
+    if fields.len() % 5 != 0 {
+        return Err(content_error("Malformed Git history metadata"));
+    }
+    fields
+        .chunks_exact(5)
+        .map(|fields| {
+            let parents: Vec<String> = fields[1].split_whitespace().map(str::to_owned).collect();
+            if !super::stash::is_oid(fields[0]) || parents.iter().any(|p| !super::stash::is_oid(p))
+            {
+                return Err(content_error("Malformed Git history identity"));
             }
-
-            let mut parts = record.split('\x1f');
-            Some(CommitInfo {
-                hash: parts.next()?.to_string(),
-                parents: parts
-                    .next()
-                    .unwrap_or_default()
-                    .split_whitespace()
-                    .map(ToString::to_string)
-                    .collect(),
-                author: parts.next().unwrap_or_default().to_string(),
-                timestamp: parts.next().unwrap_or("0").parse().unwrap_or(0),
-                message: parts.next().unwrap_or_default().to_string(),
+            Ok(CommitInfo {
+                hash: fields[0].into(),
+                parents,
+                author: fields[2].into(),
+                timestamp: fields[3].parse().unwrap_or(0),
+                message: fields[4].into(),
             })
         })
-        .collect())
+        .collect()
 }
 
-fn load_stashes(root: &Path) -> Result<(Vec<StashInfo>, HashSet<String>), GitError> {
-    let output = GitCommand::run(
-        &["stash", "list", "--format=%gd%x1f%H%x1f%ct%x1f%gs%x1e"],
-        Some(root),
-    )?;
+fn load_stashes(root: &Path, display: bool) -> Result<(Vec<StashInfo>, HashSet<String>), GitError> {
+    let root = root
+        .to_str()
+        .ok_or_else(|| content_error("Non-UTF-8 repository path"))?;
     let mut stashes = Vec::new();
-    let mut helper_hashes = HashSet::new();
-
-    for record in output.split('\x1e') {
-        let record = record.trim();
-        if record.is_empty() {
-            continue;
+    let mut helpers = HashSet::new();
+    let records = if display {
+        super::stash_read::list_stashes_for_display(root)?
+    } else {
+        super::stash::list_stashes_with_layout(root)?
+    };
+    for (stash, layout) in records {
+        helpers.insert(layout.index_oid);
+        helpers.extend(layout.untracked_oid);
+        if layout.encoding == super::stash::StashEncoding::SelectedUnstagedV1 {
+            helpers.insert(layout.baseline_oid);
         }
-
-        let mut parts = record.split('\x1f');
-        let Some(selector) = parts
-            .next()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        else {
-            continue;
-        };
-        let Some(hash) = parts
-            .next()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        else {
-            continue;
-        };
-        let timestamp = parts.next().unwrap_or_default().trim().parse().unwrap_or(0);
-        let subject = parts.next().unwrap_or_default().trim();
-        let Ok((base_hash, index_hash, stash_helper_hashes)) = stash_parent_hashes(root, hash)
-        else {
-            continue;
-        };
-        let (branch, message) = parse_stash_subject(subject);
-
-        helper_hashes.extend(stash_helper_hashes);
-        stashes.push(StashInfo {
-            hash: hash.to_string(),
-            selector: selector.to_string(),
-            base_hash,
-            index_hash,
-            branch,
-            message,
-            timestamp,
-        });
+        stashes.push(stash);
     }
-
-    Ok((stashes, helper_hashes))
+    // An external branch can make an older helper a later stash's real HEAD.
+    // Original history takes precedence over the helper presentation filter.
+    for stash in &stashes {
+        helpers.remove(&stash.base_hash);
+    }
+    Ok((stashes, helpers))
 }
 
-fn stash_parent_hashes(
-    root: &Path,
-    stash_hash: &str,
-) -> Result<(String, Option<String>, Vec<String>), GitError> {
-    let output = GitCommand::run_owned(
-        &[
-            "rev-list".to_string(),
-            "--parents".to_string(),
-            "-n".to_string(),
-            "1".to_string(),
-            stash_hash.to_string(),
-        ],
-        Some(root),
-    )?;
-
-    parse_stash_parent_hashes(stash_hash, &output)
-}
-
-fn parse_stash_parent_hashes(
-    stash_hash: &str,
-    output: &str,
-) -> Result<(String, Option<String>, Vec<String>), GitError> {
-    let mut parents = output.split_whitespace().skip(1);
-    let base_hash = parents
-        .next()
-        .map(ToOwned::to_owned)
-        .ok_or_else(|| GitError {
-            message: format!("stash {stash_hash} has no base commit"),
-            stderr: String::new(),
-            status: None,
-        })?;
-    let helper_hashes: Vec<String> = parents.map(ToOwned::to_owned).collect();
-    let index_hash = helper_hashes.first().cloned();
-
-    Ok((base_hash, index_hash, helper_hashes))
-}
-
-fn parse_stash_subject(subject: &str) -> (Option<String>, String) {
+pub(crate) fn parse_stash_subject(subject: &str) -> (Option<String>, String) {
     let Some((prefix, message)) = subject.split_once(": ") else {
         return (None, subject.to_string());
     };
@@ -924,7 +950,7 @@ fn parse_commit_file(line: &str) -> Option<CommitFile> {
     })
 }
 
-enum FileContent {
+pub(crate) enum FileContent {
     Text(String),
     Binary,
     Missing(String),
@@ -932,7 +958,11 @@ enum FileContent {
 
 impl FileContent {
     fn message(&self) -> Option<&str> {
-        if let Self::Missing(message) = self { Some(message) } else { None }
+        if let Self::Missing(message) = self {
+            Some(message)
+        } else {
+            None
+        }
     }
     fn is_binary(&self) -> bool {
         matches!(self, Self::Binary)
@@ -972,7 +1002,7 @@ fn read_content(mut reader: impl Read) -> Result<Vec<u8>, GitError> {
     Ok(bytes)
 }
 
-fn classify_content(bytes: Vec<u8>) -> FileContent {
+pub(crate) fn classify_content(bytes: Vec<u8>) -> FileContent {
     if bytes.contains(&0) {
         return FileContent::Binary;
     }
@@ -1034,7 +1064,9 @@ fn load_file_from_git_spec(root: &Path, spec: &str) -> Result<FileContent, GitEr
 fn load_file_from_working_tree(root: &Path, file_path: &str) -> Result<FileContent, GitError> {
     let full_path = root.join(file_path);
     if fs::symlink_metadata(&full_path).is_ok_and(|meta| meta.file_type().is_symlink()) {
-        return Ok(FileContent::Missing("Symlinks use whole-file actions.".to_string()));
+        return Ok(FileContent::Missing(
+            "Symlinks use whole-file actions.".to_string(),
+        ));
     }
     let file = fs::File::open(&full_path)
         .map_err(|e| content_error(format!("Failed to open {file_path}: {e}")))?;
@@ -1051,7 +1083,11 @@ mod tests {
 
     #[test]
     fn text_contents_have_no_size_or_shape_cutoff_and_binary_reads_stop_early() {
-        for text in ["x\n".repeat(100_000), "x".repeat(256 * 1024), "const value = \"\u{20ac}\";\n".repeat(10_000)] {
+        for text in [
+            "x\n".repeat(100_000),
+            "x".repeat(256 * 1024),
+            "const value = \"\u{20ac}\";\n".repeat(10_000),
+        ] {
             let bytes = read_content(text.as_bytes()).unwrap();
             assert_eq!(classify_content(bytes).into_text(), text);
         }
@@ -1064,10 +1100,12 @@ mod tests {
     #[test]
     fn snapshot_patch_preserves_line_endings_and_missing_final_newlines() {
         let diff = file_diff(
-            Some("file.ts".into()), "file.ts".into(),
+            Some("file.ts".into()),
+            "file.ts".into(),
             FileContent::Text("old\r\nlast".into()),
             FileContent::Text("new\r\nlast".into()),
-        ).unwrap();
+        )
+        .unwrap();
         let patch = diff.patch.unwrap();
         assert!(patch.contains("-old\r\n+new\r\n"));
         assert!(patch.contains("\\ No newline at end of file"));
@@ -1107,8 +1145,12 @@ mod tests {
             .trim()
             .to_string();
         file.status = "A".to_string();
-        assert_complete(load_commit_file_diff(root.to_str().unwrap(), &first, None, &file).unwrap());
-        assert_complete(load_commit_working_tree_file_diff(root.to_str().unwrap(), &first, &file).unwrap());
+        assert_complete(
+            load_commit_file_diff(root.to_str().unwrap(), &first, None, &file).unwrap(),
+        );
+        assert_complete(
+            load_commit_working_tree_file_diff(root.to_str().unwrap(), &first, &file).unwrap(),
+        );
         let renamed = "renamed large.txt";
         run_test_git(root, &["mv", "--", path, renamed]);
         run_test_git(root, &["commit", "-q", "-m", "rename"]);
@@ -1553,12 +1595,25 @@ mod tests {
 
     #[test]
     fn identifies_all_internal_stash_parent_commits() {
-        let (base_hash, index_hash, helper_hashes) =
-            parse_stash_parent_hashes("stash", "stash base index untracked").unwrap();
-
-        assert_eq!(base_hash, "base");
-        assert_eq!(index_hash.as_deref(), Some("index"));
-        assert_eq!(helper_hashes, vec!["index", "untracked"]);
+        let repository = new_test_repository();
+        let root = repository.0.as_path();
+        run_test_git(root, &["init", "-q", "-b", "main"]);
+        run_test_git(root, &["config", "user.email", "test@example.com"]);
+        run_test_git(root, &["config", "user.name", "GitGui Test"]);
+        fs::write(root.join("tracked.txt"), "base\n").unwrap();
+        run_test_git(root, &["add", "tracked.txt"]);
+        run_test_git(root, &["commit", "-qm", "base"]);
+        fs::write(root.join("tracked.txt"), "saved\n").unwrap();
+        fs::write(root.join("new.txt"), "untracked\n").unwrap();
+        run_test_git(root, &["stash", "push", "-qu"]);
+        let (stashes, helpers) = load_stashes(root, false).unwrap();
+        assert_eq!(stashes.len(), 1);
+        let layout =
+            super::super::stash::decode_stash(root.to_str().unwrap(), &stashes[0].hash).unwrap();
+        assert_eq!(stashes[0].base_hash, layout.original_head_oid);
+        assert!(helpers.contains(&layout.index_oid));
+        assert!(helpers.contains(layout.untracked_oid.as_ref().unwrap()));
+        assert!(!helpers.contains(&layout.original_head_oid));
     }
 
     #[test]

@@ -6,14 +6,18 @@
  * server adds, removes, or renames a method, this test fails until the
  * table follows.
  */
-import { WS_METHOD_NAMES as CONTRACT_METHOD_NAMES } from "@gitgui/contracts";
+import { STASH_FEATURE_METHOD_NAMES, WS_METHOD_NAMES as CONTRACT_METHOD_NAMES } from "@gitgui/contracts";
 import { describe, expect, it } from "@effect/vitest";
 
 import { WS_METHOD_NAMES, WS_METHODS } from "./protocol.ts";
 
 describe("the GitGui RPC protocol", () => {
-  it("covers every method the server accepts", () => {
+  it("covers every accepted method", () => {
     expect([...WS_METHOD_NAMES].sort()).toEqual([...CONTRACT_METHOD_NAMES].sort());
+  });
+
+  it("includes the stash feature subset in accepted server methods", () => {
+    expect(STASH_FEATURE_METHOD_NAMES.every((method) => (CONTRACT_METHOD_NAMES as readonly string[]).includes(method))).toBe(true);
   });
 
   it("names every method once", () => {

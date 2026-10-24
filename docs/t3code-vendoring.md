@@ -28,6 +28,23 @@ The checks themselves have isolated fixture tests in
 
 ## What is vendored
 
+The GitGui method-table divergence also declares the accepted stash feature
+contracts from `STASH_FEATURE_METHOD_NAMES`: selected push, targeted actions,
+and saved-change inspection. These names extend the existing typed table in
+`rpc/protocol.ts`; the feature list is a subset of Rust's accepted
+`WS_METHOD_NAMES`, not another reservation registry. Authorized server handlers
+advertise the matching per-method capabilities. New mutations return receipts
+independently of refresh, and saved reads cannot prepare live hunk contexts.
+The promise facade and Svelte stash selection remain GitGui-owned. See
+`docs/stash-features.md` for the exact APIs and integration rules. The current
+T3 checkout at `70cd258d8aac43ea57494527b00bf36de3efa6c0` was inspected for its
+RPC and application-state boundaries; the pinned snapshot remains unchanged.
+Final server integration re-inspected that checkout's workspace-layout,
+connection-runtime and RPC protocol sources. Only the reviewed local
+`rpc/protocol.ts` hash changes; the upstream commit, upstream file hash,
+Effect and @effect/vitest pins remain unchanged because this checkout differs
+from the recorded snapshot. Transport/session/retry behavior is unchanged.
+
 The GitGui RPC registry also includes reviewed local branch rename/delete
 methods. Their parameters come from Rust and include the expected branch tip;
 mutation outcomes return before repository refresh. This extends the existing

@@ -2,10 +2,7 @@
 //! Each repository has one bounded pending change, including during event storms.
 use super::{ServerState, SCOPE_REPOSITORY_READ};
 use gitgui_core::git::watch::{metadata_directories, only_ignored};
-use gitgui_protocol::{
-    OrderedEventEnvelope, RepositoryChangeKind, RepositoryChanged, ServerLifecycle,
-    EVENT_REPOSITORY_CHANGED,
-};
+use gitgui_protocol::{RepositoryChangeKind, RepositoryChanged, ServerLifecycle};
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use std::{
     collections::{HashMap, HashSet},
@@ -238,7 +235,6 @@ pub(super) fn can_read(session: &gitgui_protocol::AuthSession) -> bool {
 pub(super) async fn run(state: Weak<ServerState>) {
     let mut watches: HashMap<String, RepositoryWatch> = HashMap::new();
     let mut interval = tokio::time::interval(Duration::from_millis(100));
-    let mut sequence = 0;
     let mut catalog_tick = 0;
     loop {
         interval.tick().await;
@@ -300,18 +296,11 @@ pub(super) async fn run(state: Weak<ServerState>) {
                     }
                 }
             }
-            sequence += 1;
-            let payload = serde_json::to_value(RepositoryChanged {
+            state.publish_repository_change(RepositoryChanged {
                 repository_id,
                 kind,
                 paths: paths.map(|paths| paths.into_iter().map(|path| path.to_string_lossy().into_owned()).collect()),
-            })
-            .expect("serializable invalidation");
-            let _ = state.repository_events.send(OrderedEventEnvelope::new(
-                sequence,
-                EVENT_REPOSITORY_CHANGED,
-                payload,
-            ));
+            });
         }
     }
 }
@@ -321,6 +310,7 @@ mod tests {
     use super::*;
     use crate::{load_open_repository, ServerConfig};
     use gitgui_core::git::command::GitCommand;
+    use gitgui_protocol::{OrderedEventEnvelope, EVENT_REPOSITORY_CHANGED};
     use std::{fs, net::SocketAddr};
     use tokio::sync::broadcast;
 
@@ -496,13 +486,33 @@ mod tests {
             Some(RepositoryChangeKind::Snapshot)
         );
         change(&mut rx, &id, RepositoryChangeKind::Snapshot).await;
+        let linked_entry = crate::build_repository_catalog(&[linked.display().to_string()])
+            .pop()
+            .unwrap();
+        let linked_id = linked_entry.summary.id.clone();
         state.remove_repository(&id).await.unwrap();
-        tokio::time::sleep(Duration::from_millis(1300)).await;
+        state.upsert_repository(linked_entry).await.unwrap();
+        // A fixed sleep cannot establish removal: the catalog loop may still
+        // be awaiting Git metadata under load. This new registration's initial
+        // invalidation follows the catalog pass that retires the removed watch.
+        change(&mut rx, &linked_id, RepositoryChangeKind::Snapshot).await;
         while rx.try_recv().is_ok() {}
         fs::write(root.join("renamed.txt"), "after removal\n").unwrap();
         fs::write(other.join("tracked.txt"), "second repository\n").unwrap();
-        change(&mut rx, &other_id, RepositoryChangeKind::Status).await;
-        assert!(rx.try_recv().is_err());
+        // Do not silently discard an event from the removed/linked repository
+        // while looking for the expected event from the independent repository.
+        let event = tokio::time::timeout(Duration::from_secs(8), rx.recv())
+            .await
+            .expect("independent repository notification after removal")
+            .unwrap();
+        let payload: RepositoryChanged = serde_json::from_value(event.payload).unwrap();
+        assert_eq!(payload.repository_id, other_id, "{payload:?}");
+        assert!(matches!(
+            payload.kind,
+            RepositoryChangeKind::Status | RepositoryChangeKind::Snapshot
+        ));
+        let extra = rx.try_recv();
+        assert!(extra.is_err(), "unexpected post-removal event: {extra:?}");
         state.set_lifecycle(ServerLifecycle::Stopping).await;
         tokio::time::timeout(Duration::from_secs(2), task)
             .await

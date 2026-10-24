@@ -4,7 +4,16 @@
   import WorktreeTree from "$lib/components/WorktreeTree.svelte";
   import type { CommitInfo, CommitRef, RepositorySnapshot, StashInfo, WorktreeInfo } from "$lib/types/repository";
 
+  import StashTree from "./StashTree.svelte";
+  import { unsupportedStashActions, type StashCapabilities } from "$lib/workspace/stash-menu";
+  import type { StashAction } from "$lib/workspace/stash-operations";
+
   type Props = {
+    stashContextKey?: string | null;
+    selectedStash?: StashInfo | null;
+    stashCapabilities?: StashCapabilities;
+    onSelectStash?: (stash: StashInfo) => void;
+    onStashAction?: (action: StashAction, stash: StashInfo) => void;
     snapshot: RepositorySnapshot | null;
     selectedCommit: CommitInfo | null;
     stateKey: string | null;
@@ -38,6 +47,7 @@
   };
 
   let {
+    stashContextKey = null, selectedStash = null, stashCapabilities = unsupportedStashActions, onSelectStash = () => {}, onStashAction = () => {},
     snapshot,
     selectedCommit,
     stateKey,
@@ -65,15 +75,6 @@
   function toggle(section: keyof typeof open) {
     open[section] = !open[section];
     persistOpenState();
-  }
-
-  function stashKey(stash: StashInfo) {
-    return `${stash.hash}\0${stash.selector}`;
-  }
-
-  function stashTitle(stash: StashInfo) {
-    const branch = stash.branch ? ` on ${stash.branch}` : "";
-    return `${stash.selector}${branch}: ${stash.message}\nBase: ${stash.baseHash}`;
   }
 
   $effect(() => {
@@ -234,22 +235,9 @@
       {#if open.Stashes}
         <div class="min-h-0 flex-1 overflow-auto">
           {#if snapshot?.stashes?.length}
-            <ul class="space-y-1">
-              {#each snapshot.stashes ?? [] as stash (stashKey(stash))}
-                <li
-                  class="min-w-0 rounded-md px-2 py-1 text-sm text-[var(--app-theme-sidebar-foreground)] hover:bg-[var(--app-theme-sidebar-row-hover)]"
-                  title={stashTitle(stash)}
-                >
-                  <div class="flex min-w-0 items-center gap-2">
-                    <code class="shrink-0 font-mono text-xs text-[var(--app-theme-accent)]">{stash.selector}</code>
-                    <span class="truncate">{stash.message}</span>
-                  </div>
-                  {#if stash.branch}
-                    <span class="mt-0.5 block truncate pl-[4.5rem] text-xs text-[var(--app-theme-text-subtle)]">on {stash.branch}</span>
-                  {/if}
-                </li>
-              {/each}
-            </ul>
+            <StashTree stashes={snapshot.stashes} {selectedStash}
+              contextKey={stashContextKey ?? stateKey} capabilities={stashCapabilities}
+              onSelect={onSelectStash} onAction={onStashAction} />
           {:else}
             <p class="px-2 py-1 text-sm text-[var(--app-theme-text-subtle)]">No stashes.</p>
           {/if}

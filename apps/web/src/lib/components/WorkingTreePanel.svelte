@@ -22,6 +22,9 @@
   export type WorkingTreeDiffSource = "workingTree" | "staged" | "commitWorkingTree";
 
   export type WorkingTreePanelProps = {
+    contextKey?: string | null;
+    canStashSelected?: boolean;
+    onStashSelected?: (source: "staged" | "unstaged", files: ChangedFile[]) => void;
     snapshot: RepositorySnapshot;
     draft: WorkingTreeDraftState;
     amendInfo: GitAmendInfo | null;
@@ -49,6 +52,7 @@
   };
 
   let {
+    contextKey = null, canStashSelected = false, onStashSelected,
     snapshot,
     draft, amendInfo, amendLoading = false, onDraftChange, onAmendToggle, onDiscardPaths,
     selectedPaths,
@@ -270,6 +274,8 @@
           <div id="unstaged-files-list" class="min-h-0 flex-1 overflow-hidden">
             {#if unstagedFiles.length}
               <WorkingTreeFileList
+                {contextKey} {canStashSelected}
+                onStashSelected={(files) => onStashSelected?.("unstaged", files)}
                 files={unstagedFiles}
                 selectedPaths={selectedPathsSource === "workingTree" ? selectedPaths : []}
                 treeId="gitgui-working-tree-unstaged"
@@ -324,6 +330,8 @@
           <div id="staged-files-list" class="min-h-0 flex-1 overflow-hidden">
             {#if stagedFiles.length}
               <WorkingTreeFileList
+                {contextKey} {canStashSelected}
+                onStashSelected={(files) => onStashSelected?.("staged", files)}
                 files={stagedFiles}
                 selectedPaths={selectedPathsSource === "staged" ? selectedPaths : []}
                 treeId="gitgui-working-tree-staged"

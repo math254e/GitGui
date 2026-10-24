@@ -18,6 +18,9 @@
  * - GitGui-owned branch rename/delete methods use reviewed local ref targets
  *   and return mutation outcomes before the client refreshes repository state.
  * - Reviewed worktree removal also reports branch and catalog cleanup outcomes.
+ * - Accepted stash feature contracts include selected capture, reviewed actions,
+ *   and saved-object reads. The Rust feature list is a subset of its accepted
+ *   registry; advertised capabilities still determine server availability.
  */
 import type {
   CommitFileDiffParams,
@@ -56,6 +59,14 @@ import type {
   GitStashPopResult,
   GitStashPushParams,
   GitStashPushResult,
+  GitStashPushSelectedParams,
+  GitStashPushSelectedResult,
+  GitStashTargetParams,
+  GitStashBranchParams,
+  GitStashMutationResult,
+  GitStashFilesResult,
+  GitStashFileDiffParams,
+  GitStashFileDiffResult,
   GitStatusParams,
   GitStatusResult,
   GitUnstageResult,
@@ -81,6 +92,7 @@ import type {
   ServerStatus,
   WorkingTreeFileDiffParams,
 } from "@gitgui/contracts";
+import { STASH_FEATURE_METHOD_NAMES } from "@gitgui/contracts";
 import type * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import type * as Stream from "effect/Stream";
@@ -89,7 +101,7 @@ import type * as Stream from "effect/Stream";
 export type EmptyRpcInput = Record<string, never>;
 
 /**
- * The payload and result of every method the WebSocket surface accepts.
+ * The payload and result of accepted WebSocket methods.
  *
  * The method names are the canonical ones from the Rust protocol, and the
  * types are the generated contract, so a call is checked against the server's
@@ -163,13 +175,21 @@ export interface GitGuiRpcMethods {
   "git.worktree.remove": { readonly input: GitWorktreeRemoveParams; readonly output: GitWorktreeRemoveResult };
   "git.stash.push": { readonly input: GitStashPushParams; readonly output: GitStashPushResult };
   "git.stash.pop": { readonly input: GitStashPopParams; readonly output: GitStashPopResult };
+  "git.stash.push_selected": { readonly input: GitStashPushSelectedParams; readonly output: GitStashPushSelectedResult };
+  "git.stash.apply": { readonly input: GitStashTargetParams; readonly output: GitStashMutationResult };
+  "git.stash.pop_target": { readonly input: GitStashTargetParams; readonly output: GitStashMutationResult };
+  "git.stash.drop": { readonly input: GitStashTargetParams; readonly output: GitStashMutationResult };
+  "git.stash.branch": { readonly input: GitStashBranchParams; readonly output: GitStashMutationResult };
+  "git.stash.files": { readonly input: GitStashTargetParams; readonly output: GitStashFilesResult };
+  "git.stash.file_diff": { readonly input: GitStashFileDiffParams; readonly output: GitStashFileDiffResult };
 }
 
 /**
- * Every method the WebSocket surface accepts.
+ * Every accepted method the client can name.
  *
  * The list is the source of truth on this side; the generated contract holds
- * the server's list, and the test below proves the two agree.
+ * the server's accepted list, and tests prove the two agree.
+ * Availability is determined only by advertised server capabilities.
  */
 export const WS_METHOD_NAMES = [
   "server.get_info",
@@ -209,6 +229,7 @@ export const WS_METHOD_NAMES = [
   "git.worktree.remove",
   "git.stash.push",
   "git.stash.pop",
+  ...STASH_FEATURE_METHOD_NAMES,
 ] as const satisfies ReadonlyArray<keyof GitGuiRpcMethods>;
 
 export type GitGuiRpcMethod = (typeof WS_METHOD_NAMES)[number];
@@ -267,6 +288,13 @@ export const WS_METHODS = {
   gitWorktreeRemove: "git.worktree.remove",
   gitStashPush: "git.stash.push",
   gitStashPop: "git.stash.pop",
+  gitStashPushSelected: "git.stash.push_selected",
+  gitStashApply: "git.stash.apply",
+  gitStashPopTarget: "git.stash.pop_target",
+  gitStashDrop: "git.stash.drop",
+  gitStashBranch: "git.stash.branch",
+  gitStashFiles: "git.stash.files",
+  gitStashFileDiff: "git.stash.file_diff",
 } as const satisfies Record<string, GitGuiRpcMethod>;
 
 /** Server-sent events the client subscribes to. */

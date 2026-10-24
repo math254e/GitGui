@@ -25,7 +25,13 @@
     graphCommit: GraphCommit;
     stash: StashInfo | null;
   };
+  import { stashMenuItems, unsupportedStashActions, type StashCapabilities } from "$lib/workspace/stash-menu";
+  import type { StashAction } from "$lib/workspace/stash-operations";
   type Props = {
+    selectedStash?: StashInfo | null;
+    stashCapabilities?: StashCapabilities;
+    onSelectStash?: (stash: StashInfo) => void;
+    onStashAction?: (action: StashAction, stash: StashInfo) => void;
     snapshot: RepositorySnapshot | null;
     repositoryId: string | null;
     getRestoredScrollTop: (repositoryId: string) => number;
@@ -57,6 +63,7 @@
   const columnStorageKey = "gitgui.historyColumns.v1";
   const minimumColumnWidth = 24;
   let {
+    selectedStash = null, stashCapabilities = unsupportedStashActions, onSelectStash = () => {}, onStashAction = () => {},
     snapshot,
     repositoryId,
     getRestoredScrollTop,
@@ -88,6 +95,7 @@
   let hoveredRowHash = $state<string | null>(null);
   let contextMenuTarget = $state.raw<{ hash: string } | null>(null);
   const contextMenuOwner = {};
+  let destroyed = false;
   $effect(() => {
     void contextKey;
     dismissContextMenu(contextMenuOwner);
@@ -130,6 +138,7 @@
   });
 
   onDestroy(() => {
+    destroyed = true;
     dismissContextMenu(contextMenuOwner);
     window.removeEventListener("pointermove", resizeColumn);
     resizeState = null;
@@ -137,6 +146,17 @@
 
   function openCommitContextMenu(commit: CommitInfo, position: { x: number; y: number }, clickedBranch?: CommitRef) {
     const key = contextKey;
+    const stash = snapshot?.stashes.find((entry) => entry.hash === commit.hash);
+    if (stash) {
+      const captured = { ...stash };
+      const target = { hash: stash.hash };
+      contextMenuTarget = target;
+      void showContextMenu(stashMenuItems(stashCapabilities), position, contextMenuOwner, { width: 250 }).then((action) => {
+        if (contextMenuTarget === target) contextMenuTarget = null;
+        if (!destroyed && key === contextKey && action && stashCapabilities[action]) onStashAction(action, captured);
+      });
+      return;
+    }
     const branches = clickedBranch ? [clickedBranch] : snapshot?.refs.filter((ref) => ref.refType === "localBranch" && ref.target === commit.hash) ?? [];
     const actionsFor = (branch: CommitRef) => branchMenuItems(branch, {
       canRename: canRenameBranch,
@@ -467,7 +487,9 @@
     const commits = new Map(currentSnapshot.commits.map((commit) => [commit.hash, commit]));
     const stashes = new Map<string, StashInfo>();
     for (const stash of currentSnapshot.stashes ?? []) {
-      stashes.set(stash.hash, stash);
+      // A graph object has one row even when the reflog stores it repeatedly.
+      // Match the latest entry used by the row's reviewed context menu.
+      if (!stashes.has(stash.hash)) stashes.set(stash.hash, stash);
     }
 
     return [...currentSnapshot.graph.commits]
@@ -1021,7 +1043,7 @@
     event.preventDefault();
     const index = Math.max(0, Math.min(count - 1, next));
     const row = graphRows[index - Number(hasChanges)];
-    if (row) onSelectCommit(row.commit); else onSelectChanges();
+    if (row?.stash) onSelectStash(row.stash); else if (row) onSelectCommit(row.commit); else onSelectChanges();
     const viewport = graphViewport;
     const top = index * rowHeight;
     if (top < viewport.scrollTop) setViewportScrollTop(viewport, top);
@@ -1111,17 +1133,18 @@
             <li aria-setsize={graphRows.length + Number(hasChanges)} aria-posinset={rowRange.start + index + Number(hasChanges) + 1}>
               <button
                 class={`grid w-full items-center border-b border-[var(--app-theme-border)] text-left transition focus-visible:outline-2 focus-visible:outline-[var(--app-theme-focus)] ${
-                  selectedCommit?.hash === commit.hash
-                    ? "bg-[var(--app-theme-accent-surface)]"
-                    : contextMenuTarget?.hash === commit.hash
-                      ? "bg-[var(--app-theme-sidebar-row-hover)]"
+                  contextMenuTarget?.hash === commit.hash
+                    ? "bg-[var(--app-theme-sidebar-row-hover)]"
+                    : (selectedCommit?.hash === commit.hash || (selectedStash?.hash === commit.hash && selectedStash?.selector === stash?.selector))
+                      ? "bg-[var(--app-theme-accent-surface)]"
                       : "bg-[var(--app-theme-surface)] hover:bg-[var(--app-theme-sidebar-row-hover)]"
                 }`}
                 data-commit-hash={commit.hash}
+                aria-pressed={stash ? selectedStash?.hash === stash.hash && selectedStash?.selector === stash.selector : selectedCommit?.hash === commit.hash}
                 onkeydown={(event) => handleCommitKeydown(event, commit)}
                 style={`grid-template-columns: ${gridTemplate}; height: ${rowHeight}px;`}
                 type="button"
-                onclick={() => onSelectCommit(commit)}
+                onclick={() => stash ? onSelectStash(stash) : onSelectCommit(commit)}
                 oncontextmenu={(event) => handleCommitContextMenu(event, commit)}
                 onpointerenter={() => (hoveredRowHash = commit.hash)}
                 onpointerleave={() => (hoveredRowHash = hoveredRowHash === commit.hash ? null : hoveredRowHash)}

@@ -28,6 +28,11 @@ use gitgui_protocol::{
     ResponseSuccessEnvelope, ServerInfo, ServerLifecycle, ServerReadiness, ServerStatus, StashInfo,
     TokenExchangeResponse, WebSocketTicketResponse, WelcomeMessage, WelcomePayload,
     WorkingTreeFileDiffParams, WorktreeInfo, OmittedDiffContent,
+    GitStashTarget, GitStashSelectionSource, GitStashPushSelectedParams,
+    GitStashPushSelectedOutcome, GitStashPushSelectedResult, GitStashTargetParams,
+    GitStashBranchParams, GitStashMutationOutcome, GitStashState, GitStashRestoreOutcome,
+    GitStashCreatedBranch, GitStashMutationResult, GitStashFilesResult,
+    GitStashFileDiffParams, GitStashFileDiffResult,
 };
 use std::{
     fs, io,
@@ -124,6 +129,21 @@ fn main() -> io::Result<()> {
         <GitStashPushResult as TS>::decl(&config),
         <GitStashPopParams as TS>::decl(&config),
         <GitStashPopResult as TS>::decl(&config),
+        <GitStashTarget as TS>::decl(&config),
+        <GitStashSelectionSource as TS>::decl(&config),
+        <GitStashPushSelectedParams as TS>::decl(&config),
+        <GitStashPushSelectedOutcome as TS>::decl(&config),
+        <GitStashPushSelectedResult as TS>::decl(&config),
+        <GitStashTargetParams as TS>::decl(&config),
+        <GitStashBranchParams as TS>::decl(&config),
+        <GitStashMutationOutcome as TS>::decl(&config),
+        <GitStashState as TS>::decl(&config),
+        <GitStashRestoreOutcome as TS>::decl(&config),
+        <GitStashCreatedBranch as TS>::decl(&config),
+        <GitStashMutationResult as TS>::decl(&config),
+        <GitStashFilesResult as TS>::decl(&config),
+        <GitStashFileDiffParams as TS>::decl(&config),
+        <GitStashFileDiffResult as TS>::decl(&config),
         <CommitFilesParams as TS>::decl(&config),
         <CommitFilesResult as TS>::decl(&config),
         <CommitWorkingTreeFilesParams as TS>::decl(&config),
@@ -164,6 +184,12 @@ fn main() -> io::Result<()> {
         output.push_str("  \"");
         output.push_str(method);
         output.push_str("\",\n");
+    }
+    output.push_str("] as const;\n");
+    output.push_str("\n/// Accepted stash method subset; availability still requires advertised capabilities.\n");
+    output.push_str("export const STASH_FEATURE_METHOD_NAMES = [\n");
+    for method in gitgui_protocol::STASH_FEATURE_METHOD_NAMES {
+        output.push_str(&format!("  \"{method}\",\n"));
     }
     output.push_str("] as const;\n");
     output.push('\n');

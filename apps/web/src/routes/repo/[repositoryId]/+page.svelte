@@ -2,6 +2,8 @@
   import { page } from "$app/state";
   import { onMount } from "svelte";
   import { acquireDiffRenderer } from "$lib/diff/renderer";
+  import StashDetailsPanel from "$lib/components/StashDetailsPanel.svelte";
+  import StashReviewDialog from "$lib/components/StashReviewDialog.svelte";
   import CommitDetailsPanel from "$lib/components/CommitDetailsPanel.svelte";
   import CommitFileDiffViewer from "$lib/components/CommitFileDiffViewer.svelte";
   import EmptyDetailsPanel from "$lib/components/EmptyDetailsPanel.svelte";
@@ -74,10 +76,15 @@
   />
 {:else if !store.largeScreen}
   <div class="grid h-full min-h-0 grid-cols-1 overflow-hidden">
-    {#if store.snapshot && store.selectedFile && (store.selectedCommit || store.changesSelected)}
+    {#if store.snapshot && store.selectedFile && (store.selectedCommit || store.selectedStash || store.changesSelected)}
       <Sidebar
+        stashContextKey={store.stashContextKey}
+        stashCapabilities={store.stashCapabilities}
+        onSelectStash={(stash) => store.selectStash(stash)}
+        onStashAction={(action, stash) => store.openStashAction(action, stash)}
         onRenameWorktreeBranch={(worktree) => store.openRenameWorktreeBranchDialog(worktree)}
         snapshot={store.snapshot}
+        selectedStash={store.selectedStash}
         selectedCommit={store.selectedCommit}
         stateKey={store.sidebarStateKey}
         visibleRefKeys={store.visibleGraphRefKeys}
@@ -97,7 +104,8 @@
           client={store.client!}
           repositoryId={store.activeRepositoryId!}
           snapshot={store.snapshot}
-          diffSource={store.changesSelected ? store.selectedFileSource : (store.comparingCommitToWorkingTree ? "commitWorkingTree" : "commit")}
+          diffSource={store.selectedStash ? "stash" : store.changesSelected ? store.selectedFileSource : (store.comparingCommitToWorkingTree ? "commitWorkingTree" : "commit")}
+          selectedStash={store.selectedStash}
           selectedCommit={store.selectedCommit}
           selectedFile={store.selectedFile}
           contentRevision={store.workspaceState?.fileContentRevisions[store.activeRepositoryId!]?.[store.selectedFile.path] ?? 0}
@@ -108,8 +116,13 @@
       </div>
     {:else}
       <Sidebar
+        stashContextKey={store.stashContextKey}
+        stashCapabilities={store.stashCapabilities}
+        onSelectStash={(stash) => store.selectStash(stash)}
+        onStashAction={(action, stash) => store.openStashAction(action, stash)}
         onRenameWorktreeBranch={(worktree) => store.openRenameWorktreeBranchDialog(worktree)}
         snapshot={store.snapshot}
+        selectedStash={store.selectedStash}
         selectedCommit={store.selectedCommit}
         stateKey={store.sidebarStateKey}
         visibleRefKeys={store.visibleGraphRefKeys}
@@ -125,6 +138,7 @@
       />
       <div class="flex min-h-0 flex-col overflow-hidden">
         <HistoryToolbar
+          canPop={store.canPopStash}
           onFetch={() => store.fetchRepository()}
           onPull={() => store.pullRepository()}
           onPush={() => store.pushRepository()}
@@ -137,10 +151,14 @@
         <div class="min-h-0 flex-1">
           {#key store.activeRepositoryId}
             <GitGraph
-              contextKey={store.sidebarStateKey}
+              stashCapabilities={store.stashCapabilities}
+              onSelectStash={(stash) => store.selectStash(stash)}
+              onStashAction={(action, stash) => store.openStashAction(action, stash)}
+              contextKey={store.stashContextKey}
               snapshot={store.graphSnapshot}
               repositoryId={store.activeRepositoryId}
               getRestoredScrollTop={(repositoryId) => store.graphScrollTopFor(repositoryId)}
+              selectedStash={store.selectedStash}
               selectedCommit={store.selectedCommit}
               changesSelected={store.changesSelected}
               scrollToCommit={store.scrollToCommit}
@@ -164,6 +182,9 @@
     {/if}
     {#if store.snapshot && store.changesSelected}
       <WorkingTreePanel
+        contextKey={store.stashContextKey}
+        canStashSelected={store.stashCapabilities.selected}
+        onStashSelected={(source, files) => store.openSelectedStash(source, files)}
         snapshot={store.snapshot}
         selectedPaths={store.selectedChangePaths}
         selectedPathsSource={store.selectedChangeSource}
@@ -189,6 +210,9 @@
         stageQueueWaiting={store.stageQueueWaiting}
         stageQueueLabel={store.stageQueueLabel}
       />
+    {:else if store.snapshot && store.selectedStash}
+      <StashDetailsPanel client={store.client!} repositoryId={store.activeRepositoryId!}
+        stash={store.selectedStash} selectedFile={store.selectedFile} onSelectFile={(file) => store.selectFile(file)} />
     {:else if store.snapshot && store.selectedCommit}
       <CommitDetailsPanel
         client={store.client!}
@@ -209,12 +233,13 @@
   <div class="h-full min-h-0">
     <ResizablePaneGroup panes={store.largeScreenPanes} onResize={(id, width) => store.resizePane(id, width)}>
       {#snippet pane0()}
-        {#if store.snapshot && store.selectedFile && (store.selectedCommit || store.changesSelected)}
+        {#if store.snapshot && store.selectedFile && (store.selectedCommit || store.selectedStash || store.changesSelected)}
           <CommitFileDiffViewer
             client={store.client!}
             repositoryId={store.activeRepositoryId!}
             snapshot={store.snapshot}
-            diffSource={store.changesSelected ? store.selectedFileSource : (store.comparingCommitToWorkingTree ? "commitWorkingTree" : "commit")}
+            diffSource={store.selectedStash ? "stash" : store.changesSelected ? store.selectedFileSource : (store.comparingCommitToWorkingTree ? "commitWorkingTree" : "commit")}
+            selectedStash={store.selectedStash}
             selectedCommit={store.selectedCommit}
             selectedFile={store.selectedFile}
             contentRevision={store.workspaceState?.fileContentRevisions[store.activeRepositoryId!]?.[store.selectedFile.path] ?? 0}
@@ -224,8 +249,13 @@
           />
         {:else}
           <Sidebar
+            stashContextKey={store.stashContextKey}
+            stashCapabilities={store.stashCapabilities}
+            onSelectStash={(stash) => store.selectStash(stash)}
+            onStashAction={(action, stash) => store.openStashAction(action, stash)}
             onRenameWorktreeBranch={(worktree) => store.openRenameWorktreeBranchDialog(worktree)}
             snapshot={store.snapshot}
+            selectedStash={store.selectedStash}
             selectedCommit={store.selectedCommit}
             stateKey={store.sidebarStateKey}
             visibleRefKeys={store.visibleGraphRefKeys}
@@ -244,11 +274,12 @@
       {/snippet}
 
       {#snippet pane1()}
-        {#if store.snapshot && store.selectedFile && (store.selectedCommit || store.changesSelected)}
+        {#if store.snapshot && store.selectedFile && (store.selectedCommit || store.selectedStash || store.changesSelected)}
           <div class="h-full" aria-hidden="true"></div>
         {:else}
           <div class="flex h-full min-h-0 flex-col overflow-hidden">
             <HistoryToolbar
+              canPop={store.canPopStash}
               onFetch={() => store.fetchRepository()}
               onPull={() => store.pullRepository()}
               onPush={() => store.pushRepository()}
@@ -261,10 +292,14 @@
             <div class="min-h-0 flex-1">
               {#key store.activeRepositoryId}
                 <GitGraph
-                  contextKey={store.sidebarStateKey}
+                  stashCapabilities={store.stashCapabilities}
+                  onSelectStash={(stash) => store.selectStash(stash)}
+                  onStashAction={(action, stash) => store.openStashAction(action, stash)}
+                  contextKey={store.stashContextKey}
                   snapshot={store.graphSnapshot}
                   repositoryId={store.activeRepositoryId}
                   getRestoredScrollTop={(repositoryId) => store.graphScrollTopFor(repositoryId)}
+                  selectedStash={store.selectedStash}
                   selectedCommit={store.selectedCommit}
                   changesSelected={store.changesSelected}
                   scrollToCommit={store.scrollToCommit}
@@ -291,6 +326,9 @@
       {#snippet pane2()}
         {#if store.snapshot && store.changesSelected}
           <WorkingTreePanel
+            contextKey={store.stashContextKey}
+            canStashSelected={store.stashCapabilities.selected}
+            onStashSelected={(source, files) => store.openSelectedStash(source, files)}
             snapshot={store.snapshot}
             selectedPaths={store.selectedChangePaths}
             selectedPathsSource={store.selectedChangeSource}
@@ -316,6 +354,9 @@
             stageQueueWaiting={store.stageQueueWaiting}
             stageQueueLabel={store.stageQueueLabel}
           />
+        {:else if store.snapshot && store.selectedStash}
+          <StashDetailsPanel client={store.client!} repositoryId={store.activeRepositoryId!}
+            stash={store.selectedStash} selectedFile={store.selectedFile} onSelectFile={(file) => store.selectFile(file)} />
         {:else if store.snapshot && store.selectedCommit}
           <CommitDetailsPanel
             client={store.client!}
@@ -334,4 +375,8 @@
       {/snippet}
     </ResizablePaneGroup>
   </div>
+{/if}
+
+{#if store.stashReview}
+  <StashReviewDialog review={store.stashReview} onSubmit={(value) => store.submitStashReview(value)} onCancel={() => store.stashReview = null} />
 {/if}

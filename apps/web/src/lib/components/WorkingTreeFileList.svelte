@@ -3,10 +3,14 @@
   import { Minus, Plus } from "@lucide/svelte";
   import { onDestroy, onMount } from "svelte";
   import { dismissContextMenu, showContextMenu, type ContextMenuItem } from "$lib/contextMenu";
+  import { stashContextPaths } from "$lib/workspace/stash-selection";
   import type { ChangedFile } from "@gitgui/contracts";
   import type { CommitFile } from "$lib/types/repository";
 
   type Props = {
+    contextKey?: string | null;
+    onStashSelected?: (files: ChangedFile[]) => void;
+    canStashSelected?: boolean;
     files: ChangedFile[];
     selectedPaths: string[];
     treeId: string;
@@ -25,6 +29,7 @@
   };
 
   let {
+    contextKey = null, onStashSelected, canStashSelected = false,
     files,
     selectedPaths,
     treeId,
@@ -49,6 +54,7 @@
   let scrollbarGutter = $state(15);
   let treeHasOverflow = $state(false);
   const contextMenuOwner = {};
+  $effect(() => { void contextKey; dismissContextMenu(contextMenuOwner); });
 
   const fileIconTokens = [
     "astro",
@@ -283,7 +289,7 @@
 
   function handleContextMenu(event: MouseEvent) {
     const row = getTreeRow(event);
-    if (disabled || (!onDiscard && !onDiscardSelected) || !row) {
+    if (disabled || (!onDiscard && !onDiscardSelected && !onStashSelected) || !row) {
       return;
     }
 
@@ -297,7 +303,7 @@
     }
 
     const row = getTreeRow(event);
-    if (disabled || (!onDiscard && !onDiscardSelected) || !row) {
+    if (disabled || (!onDiscard && !onDiscardSelected && !onStashSelected) || !row) {
       return;
     }
 
@@ -309,23 +315,23 @@
   function openFileContextMenu(row: HTMLElement, position: { x: number; y: number }) {
     const treePath = row.dataset.itemPath ?? "";
     const file = fileByTreePath.get(treePath);
-    const selectedFiles = (tree?.getSelectedPaths() ?? [])
-      .map((path) => fileByTreePath.get(path))
-      .filter((file): file is ChangedFile => Boolean(file));
-    let items: ContextMenuItem<"discard-file" | "discard-selected">[];
-    if (selectedFiles.length > 1) {
-      if (!onDiscardSelected) {
-        return;
-      }
-      items = [{ id: "discard-selected", label: "Discard selected", destructive: true, icon: "trash" }];
-    } else {
-      if (!onDiscard || !file) {
-        return;
-      }
-      items = [{ id: "discard-file", label: "Discard changes", destructive: true, icon: "trash" }];
+    if (!file) return;
+    const key = contextKey;
+    const paths = stashContextPaths(file.path, selectedPaths);
+    const selectedFiles = files.filter((entry) => paths.includes(entry.path)).map((entry) => ({ ...entry }));
+    const items: ContextMenuItem<"discard-file" | "discard-selected" | "stash-selected">[] = [];
+    if (selectedFiles.length > 1 && onDiscardSelected) {
+      items.push({ id: "discard-selected", label: "Discard selected", destructive: true, icon: "trash" });
+    } else if (onDiscard) {
+      items.push({ id: "discard-file", label: "Discard changes", destructive: true, icon: "trash" });
     }
+    if (onStashSelected) {
+      const source = actionLabel === "Unstage" ? "staged" : "unstaged";
+      items.push({ id: "stash-selected", label: `Stash ${source} changes${selectedFiles.length > 1 ? ` (${selectedFiles.length} selected)` : ""}…`, disabled: !canStashSelected });
+    }
+    if (!items.length) return;
 
-    const menu = showContextMenu(items, position, contextMenuOwner);
+    const menu = showContextMenu(items, position, contextMenuOwner, onStashSelected ? { width: 320 } : undefined);
     // Match the tree's hover color by path so refreshes and virtualized row
     // replacements retain the menu target without changing the selection.
     const highlight = document.createElement("style");
@@ -337,9 +343,10 @@
 
     void menu.then((selected) => {
       highlight.remove();
-      if (disabled) {
+      if (disabled || key !== contextKey) {
         return;
       }
+      if (selected === "stash-selected" && canStashSelected) onStashSelected?.(selectedFiles);
       if (selected === "discard-file" && file) {
         onDiscard?.(file);
       } else if (selected === "discard-selected" && selectedFiles.length > 0) {

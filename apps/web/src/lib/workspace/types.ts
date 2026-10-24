@@ -1,8 +1,19 @@
-import type { CommitFile, CommitInfo, CommitRef, RepositorySnapshot } from "$lib/types/repository";
+import type { CommitFile, CommitInfo, CommitRef, RepositorySnapshot, StashInfo } from "$lib/types/repository";
+import type { GitStashTarget } from "@gitgui/contracts";
 import type { WorkingTreeDiffSource } from "$lib/components/WorkingTreePanel.svelte";
 
 /** The graph row the user has selected in a repository. */
-export type SelectedGraphItem = { type: "changes" } | { type: "commit"; commit: CommitInfo };
+export type SelectedGraphItem =
+  | { type: "changes" }
+  | { type: "commit"; commit: CommitInfo }
+  | { type: "stash"; stash: StashInfo };
+
+/** Capture when opening a menu/dialog, before active environment or refs change. */
+export type StashActionContext = {
+  readonly environmentId: string;
+  readonly repositoryId: string;
+  readonly target: Readonly<GitStashTarget>;
+};
 
 /** One open repository tab, including the selection state the tab owns. */
 export type WorkspaceRepo = {
@@ -14,6 +25,8 @@ export type WorkspaceRepo = {
   error?: string | null;
   loading: boolean;
   selectedGraphItem: SelectedGraphItem | null;
+  /** Distinguish an intentionally cleared selection from a still-loading tab. */
+  selectionInitialized?: boolean;
   selectedFile: CommitFile | null;
   selectedFileSource: WorkingTreeDiffSource | null;
   selectedChangePaths: string[];

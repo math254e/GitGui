@@ -8,6 +8,8 @@ mod auth;
 mod rpc_queue;
 #[cfg(test)]
 mod rpc_tests;
+mod stash;
+mod stash_preparation;
 mod watching;
 
 use auth::{AuthError, AuthStore};
@@ -37,7 +39,7 @@ use gitgui_core::git::{
         load_commit_files_from_root as load_core_commit_files,
         load_commit_working_tree_file_diff as load_core_commit_working_tree_file_diff,
         load_commit_working_tree_files as load_core_commit_working_tree_files,
-        load_repository as load_core_repository,
+        load_repository_for_display as load_core_repository,
         load_repository_graph as load_core_repository_graph,
         load_repository_status as load_core_repository_status,
         load_working_tree_file_diff as load_core_working_tree_file_diff, resolve_repository,
@@ -70,32 +72,35 @@ use gitgui_protocol::{
     RepositoryStatus as ProtocolRepositoryStatus, RepositorySummary, RequestEnvelope,
     ResponseEnvelope, ServerInfo, ServerLifecycle, ServerReadiness, ServerStatus,
     StashInfo as ProtocolStashInfo, WelcomeMessage, WorktreeInfo as ProtocolWorktreeInfo,
-    CAPABILITY_GIT_AMEND, CAPABILITY_GIT_BRANCH_CREATE, CAPABILITY_GIT_BRANCH_LIST,
-    CAPABILITY_GIT_BRANCH_SWITCH, CAPABILITY_GIT_BRANCH_RENAME, CAPABILITY_GIT_BRANCH_DELETE,
-    CAPABILITY_GIT_COMMIT, CAPABILITY_GIT_COMMIT_FILES,
-    CAPABILITY_GIT_COMMIT_FILE_DIFF, CAPABILITY_GIT_COMMIT_WORKING_TREE_FILES,
-    CAPABILITY_GIT_COMMIT_WORKING_TREE_FILE_DIFF, CAPABILITY_GIT_DISCARD, CAPABILITY_GIT_FETCH,
-    CAPABILITY_GIT_HUNKS, CAPABILITY_GIT_PREFETCH_COMMIT_DIFFS,
-    CAPABILITY_GIT_PREFETCH_COMMIT_FILES, CAPABILITY_GIT_PULL, CAPABILITY_GIT_PUSH,
-    CAPABILITY_GIT_STAGE, CAPABILITY_GIT_STASH_POP, CAPABILITY_GIT_STASH_PUSH,
-    CAPABILITY_GIT_STATUS, CAPABILITY_GIT_UNSTAGE, CAPABILITY_GIT_WORKING_TREE_FILE_DIFF,
-    CAPABILITY_REPOSITORIES_CREATE, CAPABILITY_REPOSITORIES_GET_GRAPH,
-    CAPABILITY_REPOSITORIES_GET_SNAPSHOT, CAPABILITY_REPOSITORIES_LIST,
-    CAPABILITY_REPOSITORIES_OPEN, CAPABILITY_REPOSITORIES_REFRESH, CAPABILITY_REPOSITORIES_REMOVE,
-    CAPABILITY_SERVER_INFO, CAPABILITY_SERVER_STATUS, MAX_GRAPH_TARGETS,
-    MAX_PREFETCH_COMMIT_DIFF_TARGETS, MAX_PREFETCH_COMMIT_HASHES, METHOD_GIT_AMEND,
-    METHOD_GIT_AMEND_INFO, METHOD_GIT_APPLY_HUNKS, METHOD_GIT_BRANCH_CREATE,
-    METHOD_GIT_BRANCH_LIST, METHOD_GIT_BRANCH_SWITCH, METHOD_GIT_BRANCH_RENAME,
-    METHOD_GIT_BRANCH_DELETE, METHOD_GIT_WORKTREE_REMOVE, METHOD_GIT_COMMIT, METHOD_GIT_COMMIT_FILES,
+    CAPABILITY_GIT_AMEND, CAPABILITY_GIT_BRANCH_CREATE, CAPABILITY_GIT_BRANCH_DELETE,
+    CAPABILITY_GIT_BRANCH_LIST, CAPABILITY_GIT_BRANCH_RENAME, CAPABILITY_GIT_BRANCH_SWITCH,
+    CAPABILITY_GIT_COMMIT, CAPABILITY_GIT_COMMIT_FILES, CAPABILITY_GIT_COMMIT_FILE_DIFF,
+    CAPABILITY_GIT_COMMIT_WORKING_TREE_FILES, CAPABILITY_GIT_COMMIT_WORKING_TREE_FILE_DIFF,
+    CAPABILITY_GIT_DISCARD, CAPABILITY_GIT_FETCH, CAPABILITY_GIT_HUNKS,
+    CAPABILITY_GIT_PREFETCH_COMMIT_DIFFS, CAPABILITY_GIT_PREFETCH_COMMIT_FILES,
+    CAPABILITY_GIT_PULL, CAPABILITY_GIT_PUSH, CAPABILITY_GIT_STAGE, CAPABILITY_GIT_STASH_POP,
+    CAPABILITY_GIT_STASH_PUSH, CAPABILITY_GIT_STATUS, CAPABILITY_GIT_UNSTAGE,
+    CAPABILITY_GIT_WORKING_TREE_FILE_DIFF, CAPABILITY_REPOSITORIES_CREATE,
+    CAPABILITY_REPOSITORIES_GET_GRAPH, CAPABILITY_REPOSITORIES_GET_SNAPSHOT,
+    CAPABILITY_REPOSITORIES_LIST, CAPABILITY_REPOSITORIES_OPEN, CAPABILITY_REPOSITORIES_REFRESH,
+    CAPABILITY_REPOSITORIES_REMOVE, CAPABILITY_SERVER_INFO, CAPABILITY_SERVER_STATUS,
+    MAX_GRAPH_TARGETS, MAX_PREFETCH_COMMIT_DIFF_TARGETS, MAX_PREFETCH_COMMIT_HASHES,
+    METHOD_GIT_AMEND, METHOD_GIT_AMEND_INFO, METHOD_GIT_APPLY_HUNKS, METHOD_GIT_BRANCH_CREATE,
+    METHOD_GIT_BRANCH_DELETE, METHOD_GIT_BRANCH_LIST, METHOD_GIT_BRANCH_RENAME,
+    METHOD_GIT_BRANCH_SWITCH, METHOD_GIT_COMMIT, METHOD_GIT_COMMIT_FILES,
     METHOD_GIT_COMMIT_FILE_DIFF, METHOD_GIT_DISCARD, METHOD_GIT_DISCARD_PREVIEW, METHOD_GIT_FETCH,
     METHOD_GIT_HUNK_PREVIEW, METHOD_GIT_PREFETCH_COMMIT_DIFFS, METHOD_GIT_PREFETCH_COMMIT_FILES,
     METHOD_GIT_PULL, METHOD_GIT_PUSH, METHOD_GIT_STAGE, METHOD_GIT_STASH_POP,
     METHOD_GIT_STASH_PUSH, METHOD_GIT_STATUS, METHOD_GIT_UNSTAGE,
-    METHOD_GIT_WORKING_TREE_FILE_DIFF, METHOD_REPOSITORIES_CREATE, METHOD_REPOSITORIES_GET_GRAPH,
-    METHOD_REPOSITORIES_GET_SNAPSHOT, METHOD_REPOSITORIES_LIST, METHOD_REPOSITORIES_OPEN,
-    METHOD_REPOSITORIES_REFRESH, METHOD_REPOSITORIES_REMOVE, METHOD_SERVER_GET_INFO,
-    METHOD_SERVER_GET_STATUS, PROTOCOL_VERSION, SCOPE_REPOSITORY_MANAGE, SCOPE_REPOSITORY_OPERATE,
-    SCOPE_REPOSITORY_READ,
+    METHOD_GIT_WORKING_TREE_FILE_DIFF, METHOD_GIT_WORKTREE_REMOVE, METHOD_REPOSITORIES_CREATE,
+    METHOD_REPOSITORIES_GET_GRAPH, METHOD_REPOSITORIES_GET_SNAPSHOT, METHOD_REPOSITORIES_LIST,
+    METHOD_REPOSITORIES_OPEN, METHOD_REPOSITORIES_REFRESH, METHOD_REPOSITORIES_REMOVE,
+    METHOD_SERVER_GET_INFO, METHOD_SERVER_GET_STATUS, PROTOCOL_VERSION, SCOPE_REPOSITORY_MANAGE,
+    SCOPE_REPOSITORY_OPERATE, SCOPE_REPOSITORY_READ,
+};
+use gitgui_protocol::{
+    METHOD_GIT_STASH_APPLY, METHOD_GIT_STASH_BRANCH, METHOD_GIT_STASH_DROP, METHOD_GIT_STASH_FILES,
+    METHOD_GIT_STASH_FILE_DIFF, METHOD_GIT_STASH_POP_TARGET, METHOD_GIT_STASH_PUSH_SELECTED,
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -430,6 +435,7 @@ pub async fn start(config: ServerConfig) -> Result<ServerHandle, ServerError> {
     let local_addr = listener.local_addr()?;
     let state = Arc::new(ServerState::new(&config, local_addr, startup.repositories));
     let watcher = tokio::spawn(watching::run(Arc::downgrade(&state)));
+    let stash_worker = tokio::spawn(stash_preparation::run(Arc::downgrade(&state)));
     let router = router(state.clone(), web_dir);
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
     let shutdown_state = state.clone();
@@ -444,6 +450,7 @@ pub async fn start(config: ServerConfig) -> Result<ServerHandle, ServerError> {
             .await;
         state.set_lifecycle(ServerLifecycle::Stopped).await;
         watcher.abort();
+        stash_worker.abort();
         result
     });
 
@@ -469,6 +476,7 @@ pub async fn run(config: ServerConfig) -> Result<(), ServerError> {
     let local_addr = listener.local_addr()?;
     let state = Arc::new(ServerState::new(&config, local_addr, startup.repositories));
     let watcher = tokio::spawn(watching::run(Arc::downgrade(&state)));
+    let stash_worker = tokio::spawn(stash_preparation::run(Arc::downgrade(&state)));
     let router = router(state.clone(), web_dir);
 
     log_bind_address(local_addr, &config);
@@ -478,6 +486,7 @@ pub async fn run(config: ServerConfig) -> Result<(), ServerError> {
         .await
         .map_err(ServerError::Io);
     watcher.abort();
+    stash_worker.abort();
     state.set_lifecycle(ServerLifecycle::Stopped).await;
     result
 }
@@ -719,16 +728,21 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<ServerState>, session: 
                 let id = request.id.clone();
                 let method = request.method.clone();
                 let started = std::time::Instant::now();
-                let response = std::panic::AssertUnwindSafe(dispatch_authorized(
-                    request, &state, &session,
-                ))
-                .catch_unwind()
-                .await
-                .unwrap_or_else(|_| internal_error(id.clone(), "RPC worker failed"));
+                let response =
+                    std::panic::AssertUnwindSafe(dispatch_authorized(request, &state, &session))
+                        .catch_unwind()
+                        .await
+                        .unwrap_or_else(|_| internal_error(id.clone(), "RPC worker failed"));
                 let text = serde_json::to_string(&response);
-                if matches!(method.as_str(),
-                    "git.commit_file_diff" | "git.working_tree_file_diff" | "git.hunk_preview"
-                    | "git.apply_hunks" | "git.stage" | "git.unstage" | "repositories.refresh"
+                if matches!(
+                    method.as_str(),
+                    "git.commit_file_diff"
+                        | "git.working_tree_file_diff"
+                        | "git.hunk_preview"
+                        | "git.apply_hunks"
+                        | "git.stage"
+                        | "git.unstage"
+                        | "repositories.refresh"
                 ) {
                     if let Ok(text) = &text {
                         tracing::info!(
@@ -829,7 +843,10 @@ async fn process_text_frame(
         if queue.cancel(&id) {
             let response = ResponseEnvelope::error(
                 id,
-                ProtocolError::new(error_codes::REQUEST_CANCELLED, "The read request was cancelled"),
+                ProtocolError::new(
+                    error_codes::REQUEST_CANCELLED,
+                    "The read request was cancelled",
+                ),
             );
             return send_json(socket, &response).await;
         }
@@ -953,6 +970,11 @@ fn required_scope_for_method(method: &str) -> Option<&'static str> {
         | METHOD_GIT_BRANCH_DELETE
         | METHOD_GIT_WORKTREE_REMOVE
         | METHOD_GIT_STASH_PUSH
+        | METHOD_GIT_STASH_PUSH_SELECTED
+        | METHOD_GIT_STASH_APPLY
+        | METHOD_GIT_STASH_POP_TARGET
+        | METHOD_GIT_STASH_DROP
+        | METHOD_GIT_STASH_BRANCH
         | METHOD_GIT_STASH_POP => Some(SCOPE_REPOSITORY_OPERATE),
         METHOD_SERVER_GET_INFO
         | METHOD_SERVER_GET_STATUS
@@ -971,6 +993,8 @@ fn required_scope_for_method(method: &str) -> Option<&'static str> {
         | METHOD_GIT_WORKING_TREE_FILE_DIFF
         | METHOD_GIT_PREFETCH_COMMIT_FILES
         | METHOD_GIT_PREFETCH_COMMIT_DIFFS
+        | METHOD_GIT_STASH_FILES
+        | METHOD_GIT_STASH_FILE_DIFF
         | METHOD_GIT_BRANCH_LIST => Some(SCOPE_REPOSITORY_READ),
         _ => None,
     }
@@ -1036,6 +1060,15 @@ async fn dispatch(request: RequestEnvelope, state: &ServerState) -> ResponseEnve
         METHOD_GIT_WORKTREE_REMOVE => git_worktree_remove(request.id, request.params, state).await,
         METHOD_GIT_STASH_PUSH => git_stash_push(request.id, request.params, state).await,
         METHOD_GIT_STASH_POP => git_stash_pop(request.id, request.params, state).await,
+        METHOD_GIT_STASH_PUSH_SELECTED
+        | METHOD_GIT_STASH_APPLY
+        | METHOD_GIT_STASH_POP_TARGET
+        | METHOD_GIT_STASH_DROP
+        | METHOD_GIT_STASH_BRANCH
+        | METHOD_GIT_STASH_FILES
+        | METHOD_GIT_STASH_FILE_DIFF => {
+            stash::dispatch(request.id, &request.method, request.params, state).await
+        }
         _ => ResponseEnvelope::error(
             request.id,
             ProtocolError::with_details(
@@ -1069,6 +1102,7 @@ async fn repositories_open(
         return invalid_params(request_id, "path must be a non-empty repository path");
     }
 
+    let cache_generation = state.stash_cache.generation();
     let path = params.path;
     let loaded = spawn_blocking(move || load_open_repository(&path)).await;
     let (candidate, core_snapshot) = match loaded {
@@ -1099,7 +1133,10 @@ async fn repositories_open(
             return internal_error(request_id, "repository catalog could not be updated");
         }
     };
-    let snapshot = protocol_snapshot(core_snapshot, &repository.summary);
+    let mut snapshot = protocol_snapshot(core_snapshot, &repository.summary);
+    state
+        .prepare_stashes(&repository, &mut snapshot, cache_generation)
+        .await;
     let repository_summary = repository.summary.clone();
 
     response_success(
@@ -1245,19 +1282,25 @@ async fn repositories_get_snapshot(
     if let Err(error) = validate_repository_id(&params.repository_id) {
         return ResponseEnvelope::error(request_id, error);
     }
+    let cache_generation = state.stash_cache.generation();
     let Some(repository) = state.repository(&params.repository_id).await else {
         return repository_not_configured(request_id, &params.repository_id);
     };
     let repository_summary = repository.summary.clone();
-
-    match spawn_blocking(move || load_snapshot(&repository)).await {
-        Ok(Ok(snapshot)) => response_success(
-            request_id,
-            RepositorySnapshotResult {
-                repository: repository_summary,
-                snapshot,
-            },
-        ),
+    let snapshot_repository = repository.clone();
+    match spawn_blocking(move || load_snapshot(&snapshot_repository)).await {
+        Ok(Ok(mut snapshot)) => {
+            state
+                .prepare_stashes(&repository, &mut snapshot, cache_generation)
+                .await;
+            response_success(
+                request_id,
+                RepositorySnapshotResult {
+                    repository: repository_summary,
+                    snapshot,
+                },
+            )
+        }
         Ok(Err(RepositoryLoadError::NotFound)) => repository_not_found(request_id),
         Ok(Err(RepositoryLoadError::Git(error))) => {
             warn!(error = %error.message, "repository snapshot operation failed");
@@ -1344,6 +1387,7 @@ async fn repositories_refresh(
             continue;
         }
 
+        let cache_generation = state.stash_cache.generation();
         let Some(repository) = state.repository(&repository_id).await else {
             repositories.push(RepositoryRefreshItem {
                 repository_id: repository_id.clone(),
@@ -1355,14 +1399,20 @@ async fn repositories_refresh(
         };
         let repository_summary = repository.summary.clone();
 
-        let result = spawn_blocking(move || load_snapshot(&repository)).await;
+        let snapshot_repository = repository.clone();
+        let result = spawn_blocking(move || load_snapshot(&snapshot_repository)).await;
         match result {
-            Ok(Ok(snapshot)) => repositories.push(RepositoryRefreshItem {
-                repository_id,
-                repository: Some(repository_summary.clone()),
-                snapshot: Some(normalize_snapshot(snapshot, &repository_summary)),
-                error: None,
-            }),
+            Ok(Ok(mut snapshot)) => {
+                state
+                    .prepare_stashes(&repository, &mut snapshot, cache_generation)
+                    .await;
+                repositories.push(RepositoryRefreshItem {
+                    repository_id,
+                    repository: Some(repository_summary.clone()),
+                    snapshot: Some(normalize_snapshot(snapshot, &repository_summary)),
+                    error: None,
+                })
+            }
             Ok(Err(RepositoryLoadError::NotFound)) => repositories.push(RepositoryRefreshItem {
                 repository_id,
                 repository: None,
@@ -2049,7 +2099,7 @@ async fn git_stash_push(
     let repository_id = params.repository_id.clone();
     let message = params.message;
     let include_untracked = params.include_untracked;
-    match run_git_action(state, &repository_id, move |root| {
+    match stash::legacy_action(state, &repository_id, move |root| {
         run_stash_push(root, message.as_deref(), include_untracked)
     })
     .await
@@ -2074,7 +2124,7 @@ async fn git_stash_pop(request_id: String, params: Value, state: &ServerState) -
         return ResponseEnvelope::error(request_id, error);
     }
 
-    match run_git_action(state, &params.repository_id, run_stash_pop).await {
+    match stash::legacy_action(state, &params.repository_id, run_stash_pop).await {
         Ok((repository, snapshot, _)) => response_success(
             request_id,
             GitStashPopResult {
@@ -2095,6 +2145,7 @@ where
     T: Send + 'static,
     F: FnOnce(&str) -> Result<T, GitError> + Send + 'static,
 {
+    let cache_generation = state.stash_cache.generation();
     let repository = state
         .repository(repository_id)
         .await
@@ -2113,7 +2164,7 @@ where
             git_operation_error(error)
         })?;
     let snapshot_repository = repository.clone();
-    let snapshot = spawn_blocking(move || load_snapshot(&snapshot_repository))
+    let mut snapshot = spawn_blocking(move || load_snapshot(&snapshot_repository))
         .await
         .map_err(|error| {
             warn!(error = %error, "repository refresh worker failed");
@@ -2128,6 +2179,9 @@ where
             }
         })
         .map_err(applied_refresh_error)?;
+    state
+        .prepare_stashes(&repository, &mut snapshot, cache_generation)
+        .await;
     Ok((repository.summary, snapshot, value))
 }
 
@@ -2828,9 +2882,13 @@ struct ServerState {
     repositories: RwLock<Vec<ConfiguredRepository>>,
     catalog_mutation: Mutex<()>,
     git_mutation_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
+    stash_mutation_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
     repository_events: broadcast::Sender<gitgui_protocol::OrderedEventEnvelope>,
+    repository_event_sequence: std::sync::Mutex<u64>,
     data_dir: Option<PathBuf>,
     cache: SharedCommitFilesCache,
+    stash_cache: Arc<gitgui_core::git::stash_inspection_cache::StashInspectionCache>,
+    stash_preparation: Arc<stash_preparation::Preparation>,
     hunk_cache: SharedHunkReviewCache,
     auth: AuthStore,
     allowed_origins: Vec<String>,
@@ -2876,12 +2934,39 @@ enum FileDiffLoadError {
 }
 
 impl ServerState {
+    async fn prepare_stashes(
+        &self,
+        repository: &ConfiguredRepository,
+        snapshot: &mut RepositorySnapshot,
+        cache_generation: u64,
+    ) {
+        // Keep catalog membership stable only for the short enqueue operation;
+        // an old snapshot must not recreate work after removal/re-registration.
+        let catalog = self.repositories.read().await;
+        if self.stash_cache.generation() != cache_generation
+            || !catalog.iter().any(|current| {
+                current.summary.id == repository.summary.id
+                    && current.operation_path == repository.operation_path
+            })
+        {
+            return;
+        }
+        snapshot.stashes.retain(|stash| {
+            !self
+                .stash_cache
+                .is_rejected(&repository.operation_path, &stash.hash)
+        });
+        self.stash_preparation
+            .snapshot(repository, &snapshot.stashes, cache_generation);
+    }
+
     fn new(
         config: &ServerConfig,
         local_addr: SocketAddr,
         repositories: Vec<ConfiguredRepository>,
     ) -> Self {
         let actual_capabilities = implemented_capabilities();
+        let mut advertised = std::collections::HashSet::new();
         let capabilities = config
             .capabilities
             .iter()
@@ -2889,6 +2974,7 @@ impl ServerState {
                 actual_capabilities
                     .iter()
                     .any(|actual| actual == *capability)
+                    && advertised.insert((*capability).clone())
             })
             .cloned()
             .collect();
@@ -2906,9 +2992,13 @@ impl ServerState {
             repositories: RwLock::new(repositories),
             catalog_mutation: Mutex::new(()),
             git_mutation_locks: Mutex::new(HashMap::new()),
+            stash_mutation_locks: Mutex::new(HashMap::new()),
             repository_events: broadcast::channel(256).0,
+            repository_event_sequence: std::sync::Mutex::new(0),
             data_dir: config.data_dir.clone(),
             cache: SharedCommitFilesCache::default(),
+            stash_cache: Arc::default(),
+            stash_preparation: Arc::default(),
             hunk_cache: SharedHunkReviewCache::default(),
             auth: AuthStore::new(config.server_id.clone(), config.bootstrap_token.clone()),
             allowed_origins: config.allowed_origins.clone(),
@@ -3041,6 +3131,10 @@ impl ServerState {
         if let Ok(mut cache) = self.hunk_cache.lock() {
             cache.evict_repo(&removed_repository.operation_path);
         }
+        self.stash_cache
+            .evict_repo(&removed_repository.operation_path);
+        self.stash_preparation
+            .forget(&removed_repository.operation_path);
         self.persist_catalog().await?;
         Ok(true)
     }
@@ -3063,6 +3157,10 @@ impl ServerState {
     }
 
     async fn set_lifecycle(&self, lifecycle: ServerLifecycle) {
+        if lifecycle != ServerLifecycle::Ready {
+            self.stash_preparation.stop();
+            self.stash_cache.clear();
+        }
         *self.lifecycle.write().await = lifecycle;
     }
 
@@ -3591,6 +3689,13 @@ fn implemented_capabilities() -> Vec<String> {
         gitgui_protocol::CAPABILITY_GIT_WORKTREE_REMOVE,
         CAPABILITY_GIT_STASH_PUSH,
         CAPABILITY_GIT_STASH_POP,
+        gitgui_protocol::CAPABILITY_GIT_STASH_PUSH_SELECTED,
+        gitgui_protocol::CAPABILITY_GIT_STASH_APPLY,
+        gitgui_protocol::CAPABILITY_GIT_STASH_POP_TARGET,
+        gitgui_protocol::CAPABILITY_GIT_STASH_DROP,
+        gitgui_protocol::CAPABILITY_GIT_STASH_BRANCH,
+        gitgui_protocol::CAPABILITY_GIT_STASH_FILES,
+        gitgui_protocol::CAPABILITY_GIT_STASH_FILE_DIFF,
     ]
     .into_iter()
     .map(str::to_string)
@@ -3880,7 +3985,9 @@ fn native_patch_and_complete_content_survive_cache_and_wire_conversion() {
     let mut legacy = serialized;
     legacy.as_object_mut().unwrap().remove("patch");
     assert!(serde_json::from_value::<ProtocolCommitFileDiff>(legacy)
-        .unwrap().patch.is_none());
+        .unwrap()
+        .patch
+        .is_none());
 }
 
 fn core_changed_file_to_commit_file(file: &CoreChangedFile) -> CoreCommitFile {

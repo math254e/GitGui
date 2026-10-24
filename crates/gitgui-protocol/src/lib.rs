@@ -120,6 +120,26 @@ pub const METHOD_GIT_STASH_PUSH: &str = "git.stash.push";
 /// Canonical method for applying and removing the latest stash.
 pub const METHOD_GIT_STASH_POP: &str = "git.stash.pop";
 
+/// Accepted stash feature methods. The feature subset below is also included
+/// in `WS_METHOD_NAMES`; it is not a second reservation or dispatch registry.
+pub const METHOD_GIT_STASH_PUSH_SELECTED: &str = "git.stash.push_selected";
+pub const METHOD_GIT_STASH_APPLY: &str = "git.stash.apply";
+pub const METHOD_GIT_STASH_POP_TARGET: &str = "git.stash.pop_target";
+pub const METHOD_GIT_STASH_DROP: &str = "git.stash.drop";
+pub const METHOD_GIT_STASH_BRANCH: &str = "git.stash.branch";
+pub const METHOD_GIT_STASH_FILES: &str = "git.stash.files";
+pub const METHOD_GIT_STASH_FILE_DIFF: &str = "git.stash.file_diff";
+
+pub const STASH_FEATURE_METHOD_NAMES: &[&str] = &[
+    METHOD_GIT_STASH_PUSH_SELECTED,
+    METHOD_GIT_STASH_APPLY,
+    METHOD_GIT_STASH_POP_TARGET,
+    METHOD_GIT_STASH_DROP,
+    METHOD_GIT_STASH_BRANCH,
+    METHOD_GIT_STASH_FILES,
+    METHOD_GIT_STASH_FILE_DIFF,
+];
+
 /// Every method the WebSocket RPC surface accepts, in a stable order.
 ///
 /// The client runtime types its RPC calls against this registry, and the
@@ -163,6 +183,13 @@ pub const WS_METHOD_NAMES: &[&str] = &[
     METHOD_GIT_WORKTREE_REMOVE,
     METHOD_GIT_STASH_PUSH,
     METHOD_GIT_STASH_POP,
+    METHOD_GIT_STASH_PUSH_SELECTED,
+    METHOD_GIT_STASH_APPLY,
+    METHOD_GIT_STASH_POP_TARGET,
+    METHOD_GIT_STASH_DROP,
+    METHOD_GIT_STASH_BRANCH,
+    METHOD_GIT_STASH_FILES,
+    METHOD_GIT_STASH_FILE_DIFF,
 ];
 
 /// Maximum number of commit hashes accepted by one commit-file prefetch hint.
@@ -258,6 +285,13 @@ pub const CAPABILITY_GIT_WORKTREE_REMOVE: &str = "git.worktree.remove";
 pub const CAPABILITY_GIT_STASH_PUSH: &str = "git.stash.push";
 /// Capability advertised when stash popping is available.
 pub const CAPABILITY_GIT_STASH_POP: &str = "git.stash.pop";
+pub const CAPABILITY_GIT_STASH_PUSH_SELECTED: &str = METHOD_GIT_STASH_PUSH_SELECTED;
+pub const CAPABILITY_GIT_STASH_APPLY: &str = METHOD_GIT_STASH_APPLY;
+pub const CAPABILITY_GIT_STASH_POP_TARGET: &str = METHOD_GIT_STASH_POP_TARGET;
+pub const CAPABILITY_GIT_STASH_DROP: &str = METHOD_GIT_STASH_DROP;
+pub const CAPABILITY_GIT_STASH_BRANCH: &str = METHOD_GIT_STASH_BRANCH;
+pub const CAPABILITY_GIT_STASH_FILES: &str = METHOD_GIT_STASH_FILES;
+pub const CAPABILITY_GIT_STASH_FILE_DIFF: &str = METHOD_GIT_STASH_FILE_DIFF;
 
 /// Machine-readable protocol error codes.
 pub mod error_codes {
@@ -289,6 +323,9 @@ pub mod error_codes {
     pub const GIT_OPERATION_FAILED: &str = "git_operation_failed";
     /// Safe deletion refused a branch whose commits are not fully merged.
     pub const BRANCH_NOT_MERGED: &str = "branch_not_merged";
+    /// The reviewed stash selector is missing or no longer resolves to its OID.
+    /// Clients must refresh and require a new explicit action, never retarget.
+    pub const STASH_TARGET_CHANGED: &str = "stash_target_changed";
     /// An internal server failure occurred while handling a request.
     pub const INTERNAL: &str = "internal_error";
 }
@@ -1185,6 +1222,149 @@ pub struct GitStashPopResult {
     pub snapshot: RepositorySnapshot,
 }
 
+/// Reviewed reflog entry. Resolve the selector and compare the full object ID
+/// under the repository mutation lock; never act on a replacement entry.
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GitStashTarget {
+    pub selector: String,
+    pub expected_oid: String,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum GitStashSelectionSource {
+    Staged,
+    Unstaged,
+}
+
+/// Explicit literal repository-relative paths; an empty list is invalid and
+/// must never mean stash-all. Untracked paths are supported only in Unstaged.
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GitStashPushSelectedParams {
+    pub repository_id: String,
+    pub source: GitStashSelectionSource,
+    pub paths: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub message: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum GitStashPushSelectedOutcome {
+    Success,
+    NoChanges,
+    Partial,
+}
+
+/// Mutation receipt, independent of subsequent snapshot/status refresh.
+/// Partial may mean the stash was saved but selected-change cleanup failed.
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GitStashPushSelectedResult {
+    pub repository_id: String,
+    pub outcome: GitStashPushSelectedOutcome,
+    /// Saved entry if one was created, including on partial failure.
+    pub stash: Option<StashInfo>,
+    /// Safe diagnostic for a partial outcome, never a refresh error.
+    pub error: Option<ProtocolError>,
+}
+
+/// Shared input for apply, targeted pop, drop, and file-list inspection.
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GitStashTargetParams {
+    pub repository_id: String,
+    pub target: GitStashTarget,
+}
+
+/// Create and switch to a new branch at the stash's original base, restore
+/// saved index/worktree, then remove the reviewed entry only on full success.
+/// For selected-unstaged snapshots this includes selected index baseline
+/// context, not a branch at the synthetic patch baseline. See stash-features.md.
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GitStashBranchParams {
+    pub repository_id: String,
+    pub target: GitStashTarget,
+    pub name: String,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum GitStashMutationOutcome {
+    Success,
+    Conflicts,
+    Partial,
+    BranchCreatedRestoreFailed,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum GitStashState {
+    Retained,
+    Removed,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum GitStashRestoreOutcome {
+    NotAttempted,
+    Succeeded,
+    Conflicts,
+    Failed,
+}
+
+/// Non-null only when this request actually created the branch.
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GitStashCreatedBranch {
+    pub name: String,
+    pub switched: bool,
+}
+
+/// Receipt for apply/pop/drop/branch. Return this after any started mutation,
+/// even on conflicts/partial failure; refresh separately and never retry the
+/// mutation because a later read failed. No snapshot is embedded.
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GitStashMutationResult {
+    pub repository_id: String,
+    pub target: GitStashTarget,
+    pub outcome: GitStashMutationOutcome,
+    pub stash_state: GitStashState,
+    pub restore: GitStashRestoreOutcome,
+    pub branch: Option<GitStashCreatedBranch>,
+    pub error: Option<ProtocolError>,
+}
+
+/// Combined saved tracked changes against the persisted patch baseline, plus
+/// saved untracked paths. Selected-unstaged baselines can differ from original
+/// HEAD; see docs/stash-features.md. Never infer the baseline from selection.
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GitStashFilesResult {
+    pub stash: StashInfo,
+    pub files: Vec<CommitFile>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GitStashFileDiffParams {
+    pub repository_id: String,
+    pub target: GitStashTarget,
+    pub file_path: String,
+}
+
+/// A saved, read-only diff. Deliberately has no live hunk continuation.
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GitStashFileDiffResult {
+    pub diff: CommitFileDiff,
+}
+
 /// Parameters for listing files changed by one commit.
 #[derive(Clone, Debug, Deserialize, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -1376,7 +1556,8 @@ pub struct StashInfo {
     pub hash: String,
     /// Reflog selector such as `stash@{0}`.
     pub selector: String,
-    /// The `HEAD` commit when the stash was created.
+    /// Original `HEAD` when created. For validated selected-unstaged encoding,
+    /// this is the synthetic first parent's parent, not the patch baseline.
     pub base_hash: String,
     /// The optional index commit created as the stash's second parent.
     pub index_hash: Option<String>,

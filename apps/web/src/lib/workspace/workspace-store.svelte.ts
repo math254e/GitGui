@@ -32,8 +32,10 @@ import { readDesktopBridge } from "$lib/connection/platform";
 import type { WebApplicationRuntime, WebApplicationRuntimeState } from "$lib/connection/runtime";
 import { readBranchSwitchMergePreference, resolveProjectsLocation } from "$lib/preferences";
 import { graphRefKey, isCurrentBranchRef } from "$lib/types/branch-visibility";
-import type { CommitFile, CommitInfo, CommitRef, RepositorySnapshot, WorktreeInfo } from "$lib/types/repository";
+import type { CommitFile, CommitInfo, CommitRef, RepositorySnapshot, StashInfo, WorktreeInfo } from "$lib/types/repository";
 import { removableWorktree } from "./worktree-menu";
+import { captureStashActionContext, reconcileSelectedStash } from "./stash-selection";
+import { performStashOperation, selectedStashPaths, stashContextIsCurrent, stashMethods, type StashAction, type StashDialog, type StashReceipt } from "./stash-operations";
 import type { RepoTab } from "$lib/components/TopMenu.svelte";
 import type { ResizablePane } from "$lib/components/ResizablePaneGroup.svelte";
 import type {
@@ -56,6 +58,7 @@ import type {
   GitActionRequest,
   PendingGitAction,
   RepositoryListItem,
+  SelectedGraphItem,
   WorkspaceRepo,
 } from "./types";
 
@@ -87,6 +90,7 @@ export class WorkspaceStore {
   connectionError = $state(false);
   startError = $state("");
   operationPending = $state(false);
+  private connectionEnvironmentId = $state<string | null>(null);
 
   /* ---------------------------------------------------------------------- */
   /* Repositories                                                            */
@@ -95,6 +99,7 @@ export class WorkspaceStore {
   repositoryCatalog = $state<RepositorySummary[]>([]);
   openRepos = $state<WorkspaceRepo[]>([]);
   activeRepositoryId = $state<string | null>(null);
+  stashContextKey = $derived(this.connectionEnvironmentId && this.activeRepositoryId ? `${this.connectionEnvironmentId}:${this.activeRepositoryId}` : null);
 
   /* ---------------------------------------------------------------------- */
   /* Git actions                                                             */
@@ -137,6 +142,7 @@ export class WorkspaceStore {
     client: GitGuiClient;
   } | null>(null);
   repositoryPathDialogOpen = $state(false);
+  stashReview = $state<StashDialog | null>(null);
   repositoryPathValue = $state("");
   repositoryPathError = $state("");
   gitNameDialogKind = $state<"branch" | "renameBranch" | "stash" | null>(null);
@@ -198,6 +204,11 @@ export class WorkspaceStore {
   canRenameBranch = $derived(!this.gitActionPending && (this.client?.serverWelcome.capabilities.includes("git.branch.rename") ?? false));
   canDeleteBranch = $derived(!this.gitActionPending && (this.client?.serverWelcome.capabilities.includes("git.branch.delete") ?? false));
   canRemoveWorktree = $derived(!this.gitActionPending && (this.client?.serverWelcome.capabilities.includes("git.worktree.remove") ?? false));
+  stashCapabilities = $derived({
+    selected: this.supportsStash("selected"), apply: this.supportsStash("apply"),
+    pop: this.supportsStash("pop"), drop: this.supportsStash("drop"), branch: this.supportsStash("branch"),
+  });
+  canPopStash = $derived(this.stashCapabilities.pop && Boolean(this.snapshot?.stashes.length));
   activeWorkingTreeAction = $derived(
     this.gitAction?.repositoryId === this.activeRepositoryId ? this.gitAction : null,
   );
@@ -291,6 +302,9 @@ export class WorkspaceStore {
   selectedCommit = $derived(
     this.selectedGraphItem?.type === "commit" ? this.selectedGraphItem.commit : null,
   );
+  selectedStash = $derived(
+    this.selectedGraphItem?.type === "stash" ? this.selectedGraphItem.stash : null,
+  );
   comparingCommitToWorkingTree = $derived(this.comparingCommitToWorkingTreeHash === this.selectedCommit?.hash);
   changesSelected = $derived(this.selectedGraphItem?.type === "changes");
 
@@ -333,7 +347,7 @@ export class WorkspaceStore {
     this.detailsPane,
   ]);
   largeScreenPanes = $derived<ResizablePane[]>(
-    this.selectedFile && (this.selectedCommit || this.changesSelected)
+    this.selectedFile && (this.selectedCommit || this.selectedStash || this.changesSelected)
       ? [
           {
             id: "diff",
@@ -414,6 +428,8 @@ export class WorkspaceStore {
     });
 
     $effect(() => {
+      const stashReview = this.stashReview;
+      if (stashReview && (stashReview.context.repositoryId !== this.activeRepositoryId || stashReview.context.environmentId !== this.workspaceState?.environmentId)) this.stashReview = null;
       const dialog = this.discardDialog;
       if (
         dialog &&
@@ -577,6 +593,12 @@ export class WorkspaceStore {
   /* ---------------------------------------------------------------------- */
 
   private applyApplicationRuntimeState(state: WebApplicationRuntimeState): void {
+    this.connectionEnvironmentId = state.registry.selectedEnvironmentId ?? state.client?.serverWelcome.environment_id ?? null;
+    if (this.workspaceState && this.connectionEnvironmentId !== this.workspaceState.environmentId) {
+      this.stashReview = null;
+      this.openRepos = this.openRepos.map((repo) => repo.selectedGraphItem?.type === "stash"
+        ? { ...repo, selectedGraphItem: null, selectedFile: null, selectedFileSource: null } : repo);
+    }
     // Registrations survive disconnects. Their removal is the signal to
     // release environment-owned drafts, matching the runtime's cache lifetime.
     const registeredEnvironments = new Set(
@@ -636,8 +658,8 @@ export class WorkspaceStore {
   }
 
   private applyWorkspaceState(state: ClientWorkspaceState): void {
+    const previousRepos = this.workspaceState?.environmentId === state.environmentId ? this.openRepos : [];
     this.workspaceState = state;
-    const previousRepos = this.openRepos;
     this.repositoryCatalog = this.mergeRepositoryCatalog(this.repositoryCatalog, state);
     this.activeRepositoryId = state.activeRepositoryId;
     this.openRepos = state.openRepositoryIds.flatMap((repositoryId) => {
@@ -650,7 +672,7 @@ export class WorkspaceStore {
       const snapshot = repositoryState.snapshot;
       const previousRepo = previousRepos.find((candidate) => candidate.id === repositoryId);
       const selectedGraphItem = snapshot
-        ? this.reconcileSelection(previousRepo?.selectedGraphItem ?? null, snapshot)
+        ? previousRepo?.selectionInitialized ? this.reconcileSelection(previousRepo.selectedGraphItem, snapshot) : this.initialGraphSelection(snapshot)
         : previousRepo?.selectedGraphItem ?? null;
       const selectedFile = snapshot
         ? selectedGraphItem?.type === "changes"
@@ -663,7 +685,12 @@ export class WorkspaceStore {
               previousRepo?.selectedGraphItem?.type === "commit" &&
               selectedGraphItem.commit.hash === previousRepo.selectedGraphItem.commit.hash
             ? previousRepo.selectedFile
-            : null
+            : selectedGraphItem?.type === "stash" &&
+                previousRepo?.selectedGraphItem?.type === "stash" &&
+                selectedGraphItem.stash.hash === previousRepo.selectedGraphItem.stash.hash &&
+                selectedGraphItem.stash.selector === previousRepo.selectedGraphItem.stash.selector
+              ? previousRepo.selectedFile
+              : null
         : previousRepo?.selectedFile ?? null;
 
       return [
@@ -676,6 +703,7 @@ export class WorkspaceStore {
           error: repositoryState.error?.message ?? null,
           loading: repositoryState.loading || repositoryState.refreshing,
           selectedGraphItem,
+          selectionInitialized: previousRepo?.selectionInitialized || Boolean(snapshot),
           selectedFile,
           selectedFileSource:
             selectedGraphItem?.type === "changes" && selectedFile
@@ -1017,6 +1045,21 @@ export class WorkspaceStore {
     this.comparingCommitToWorkingTreeHash = commit.hash;
   }
 
+  /** Sidebar and graph share a real stash selection, never a fabricated commit. */
+  selectStash(stash: StashInfo): void {
+    const selected = reconcileSelectedStash(stash, this.snapshot?.stashes ?? []);
+    if (!selected) return;
+    this.comparingCommitToWorkingTreeHash = null;
+    this.updateActiveRepository((repo) => ({
+      ...repo,
+      selectedGraphItem: { type: "stash", stash: selected },
+      selectedFile: null,
+      selectedFileSource: null,
+      selectedChangePaths: [],
+      selectedChangeSource: null,
+    }));
+  }
+
   selectRef(ref: CommitRef): void {
     const commit = this.snapshot?.commits.find((candidate) => candidate.hash === ref.target);
     if (commit && this.activeRepositoryId) {
@@ -1074,15 +1117,23 @@ export class WorkspaceStore {
       return { type: "changes" } as const;
     }
 
-    return nextSnapshot.commits[0]
-      ? ({ type: "commit", commit: nextSnapshot.commits[0] } as const)
+    const stashHashes = new Set(nextSnapshot.stashes.map((stash) => stash.hash));
+    const commit = nextSnapshot.commits.find((candidate) => !stashHashes.has(candidate.hash));
+    return commit
+      ? ({ type: "commit", commit } as const)
       : null;
   }
 
   private reconcileSelection(
-    currentSelection: { type: "changes" } | { type: "commit"; commit: CommitInfo } | null,
+    currentSelection: SelectedGraphItem | null,
     nextSnapshot: RepositorySnapshot,
   ) {
+    // A cleared stash selection stays cleared on later invalidations too.
+    if (!currentSelection) return null;
+    if (currentSelection?.type === "stash") {
+      const stash = reconcileSelectedStash(currentSelection.stash, nextSnapshot.stashes);
+      return stash ? { type: "stash", stash } as const : null;
+    }
     if (currentSelection?.type === "commit") {
       const matchingCommit = nextSnapshot.commits.find(
         (commit) => commit.hash === currentSelection.commit.hash,
@@ -1714,12 +1765,131 @@ export class WorkspaceStore {
   }
 
   popStash(): void {
-    this.requestGitAction({
-      kind: "stashPop",
-      label: "Popping stash",
-      successMessage: "Stash applied",
-      action: (repositoryId) => this.client!.stashPop(repositoryId),
+    const latest = this.snapshot?.stashes[0];
+    if (latest && this.canPopStash) this.openStashAction("pop", latest);
+  }
+
+  private supportsStash(action: keyof typeof stashMethods): boolean {
+    return !this.gitActionPending && this.client?.serverWelcome.environment_id === this.connectionEnvironmentId &&
+      (this.client?.serverWelcome.capabilities.includes(stashMethods[action]) ?? false);
+  }
+
+  openSelectedStash(source: "staged" | "unstaged", files: ChangedFile[]): void {
+    const environmentId = this.workspaceState?.environmentId;
+    const repositoryId = this.activeRepositoryId;
+    const paths = selectedStashPaths(files);
+    if (!environmentId || !repositoryId || !paths.length || !this.supportsStash("selected")) return;
+    this.stashReview = { action: "selected", context: { environmentId, repositoryId }, source, paths };
+  }
+
+  openStashAction(action: StashAction, stash: StashInfo): void {
+    const environmentId = this.workspaceState?.environmentId;
+    const repositoryId = this.activeRepositoryId;
+    if (!environmentId || !repositoryId || !this.supportsStash(action) || !reconcileSelectedStash(stash, this.snapshot?.stashes ?? [])) return;
+    const context = captureStashActionContext(environmentId, repositoryId, stash);
+    if (action === "apply") {
+      void this.executeStash(action, context, (client) => client.stashApply({ repositoryId, target: { ...context.target } }));
+    } else {
+      this.stashReview = { action, context, stash: { ...stash }, destination: this.snapshot?.status.currentBranch ?? "Detached HEAD", destinationHead: this.snapshot?.status.headOid ?? null };
+    }
+  }
+
+  submitStashReview(value: string): void {
+    const review = this.stashReview;
+    if (!review || this.gitActionPending) return;
+    this.stashReview = null;
+    if (review.action !== "selected" && review.action !== "drop" &&
+      (review.destination !== (this.snapshot?.status.currentBranch ?? "Detached HEAD") || review.destinationHead !== (this.snapshot?.status.headOid ?? null))) {
+      toast.error("The destination changed", { description: "Open the stash action again to review the current branch." });
+      return;
+    }
+    const { repositoryId } = review.context;
+    if (review.action === "selected") {
+      const paths = [...review.paths];
+      if (!paths.length) return;
+      void this.executeStash("selected", review.context, (client) => client.stashPushSelected({ repositoryId, source: review.source, paths, ...(value.trim() ? { message: value.trim() } : {}) }));
+    } else {
+      const params = { repositoryId, target: { ...review.context.target } };
+      void this.executeStash(review.action, review.context, (client) => review.action === "branch"
+        ? client.stashBranch({ ...params, name: value.trim() })
+        : review.action === "pop" ? client.stashPopTarget(params) : client.stashDrop(params), value.trim());
+    }
+  }
+
+  private async executeStash(
+    action: StashAction | "selected",
+    context: { environmentId: string; repositoryId: string; target?: { selector: string; expectedOid: string } },
+    mutate: (client: GitGuiClient) => Promise<StashReceipt>,
+    branchName = "",
+  ): Promise<void> {
+    // Resolve the current projected session once at execution, then retain that
+    // environment's client/workspace across every await. Never route late work
+    // through this.client after an environment switch.
+    const runtime = this.runtime.state;
+    const client = runtime.client;
+    const workspace = runtime.workspace;
+    if (!client || !workspace || this.gitActionPending ||
+      client.serverWelcome.environment_id !== context.environmentId ||
+      (runtime.registry.selectedEnvironmentId && runtime.registry.selectedEnvironmentId !== context.environmentId) ||
+      !stashContextIsCurrent(context, this.workspaceState?.environmentId, this.activeRepositoryId, this.snapshot?.stashes ?? [])) {
+      toast.error("Stash review is no longer current", { description: "Open the action again in the original repository." });
+      return;
+    }
+    if (!client.serverWelcome.capabilities.includes(stashMethods[action])) {
+      toast.error("This server does not support that stash action");
+      return;
+    }
+    const refresh = () => this.refreshAfterMutation(workspace, context.repositoryId);
+    // Linked worktrees share refs/stash. Use only server-reported membership
+    // within this environment, never path/name guesses across hosts.
+    const sourceRepo = this.openRepos.find((repo) => repo.id === context.repositoryId);
+    const stashRoots = new Set([sourceRepo?.root, ...(sourceRepo?.snapshot?.worktrees.map((entry) => entry.path) ?? [])]);
+    const retryRefresh = async () => {
+      const current = this.runtime.state;
+      if (!current.workspace || current.client?.serverWelcome.environment_id !== context.environmentId || current.registry.selectedEnvironmentId !== context.environmentId) {
+        throw new Error("Select and reconnect to the original environment before refreshing this repository.");
+      }
+      await this.refreshAfterMutation(current.workspace, context.repositoryId);
+    };
+    this.gitAction = { repositoryId: context.repositoryId, kind: action === "pop" ? "stashPop" : "stash", label: action === "selected" ? "Stashing selected changes" : "Updating stash" };
+    const request = action === "selected" ? { action, repositoryId: context.repositoryId } : action === "branch"
+      ? { action, repositoryId: context.repositoryId, target: { ...context.target! }, name: branchName }
+      : { action, repositoryId: context.repositoryId, target: { ...context.target! } };
+    const result = await performStashOperation(request, () => mutate(client), refresh, (receipt) => {
+      if (action !== "selected" && "stashState" in receipt && receipt.stashState === "removed" && this.workspaceState?.environmentId === context.environmentId) {
+        const removedIndex = stashSelectorIndex(receipt.target.selector);
+        this.openRepos = this.openRepos.map((repo) => {
+          const selected = repo.selectedGraphItem;
+          const sharesStashes = repo.id === context.repositoryId || stashRoots.has(repo.root) ||
+            (sourceRepo && repo.snapshot?.worktrees.some((entry) => entry.path === sourceRepo.root));
+          if (!sharesStashes || selected?.type !== "stash") return repo;
+          const selectedIndex = stashSelectorIndex(selected.stash.selector);
+          // Removal shifts every older selector, even when its OID is unchanged
+          // or duplicates another entry. Never follow an entry by OID alone.
+          const shifted = removedIndex !== null && selectedIndex !== null && selectedIndex >= removedIndex;
+          const removed = selected.stash.selector === receipt.target.selector && selected.stash.hash === receipt.target.expectedOid;
+          return shifted || removed
+            ? { ...repo, selectionInitialized: true, selectedGraphItem: null, selectedFile: null, selectedFileSource: null }
+            : repo;
+        });
+      }
     });
+    this.gitAction = null;
+    if (result.receipt && (result.notice.conflicts || this.hasUnmergedFiles(context.repositoryId, workspace.state)) &&
+      this.workspaceState?.environmentId === context.environmentId && this.activeRepositoryId === context.repositoryId && this.runtime.state.registry.selectedEnvironmentId === context.environmentId) this.selectChanges();
+    const { tone, title, description } = result.notice;
+    toast[tone](result.refreshError ? `${title}; refresh failed` : title, {
+      description: result.refreshError ? `${description} ${summarizeGitError(result.refreshError)}` : description,
+      ...(result.refreshError ? {
+        action: {
+          label: "Retry refresh",
+          onClick: () => { void retryRefresh().catch((error) => toast.error("Refresh failed", { description: summarizeGitError(error) })); },
+        },
+      } : {}),
+    });
+    const nextAction = this.queuedGitActions[0];
+    this.queuedGitActions = this.queuedGitActions.slice(1);
+    if (nextAction && this.workspace === workspace) void this.runGitAction(nextAction);
   }
 
   /* ---------------------------------------------------------------------- */
@@ -1752,6 +1922,13 @@ export class WorkspaceStore {
       detailsWidth: this.detailsWidth,
     });
   }
+}
+
+function stashSelectorIndex(selector: string): number | null {
+  const match = /^stash@\{(0|[1-9]\d*)\}$/.exec(selector);
+  if (!match) return null;
+  const index = Number(match[1]);
+  return Number.isSafeInteger(index) ? index : null;
 }
 
 function isMutationSnapshotResult(

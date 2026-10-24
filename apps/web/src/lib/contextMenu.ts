@@ -236,8 +236,10 @@ export function showContextMenu<T extends string>(
 ): Promise<T | null> {
   dismissContextMenu();
   return new Promise<T | null>((resolve) => {
-    const previouslyFocusedElement =
-      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    // Tree rows live inside shadow roots; restore their focus, not the host.
+    let focusedElement = document.activeElement;
+    while (focusedElement?.shadowRoot?.activeElement) focusedElement = focusedElement.shadowRoot.activeElement;
+    const previouslyFocusedElement = focusedElement instanceof HTMLElement ? focusedElement : null;
     const menuStack: HTMLDivElement[] = [];
     const submenuTriggerStack: Array<HTMLButtonElement | undefined> = [];
     // Intercept hit testing as well as clicks so CSS hover and tree pointer
@@ -260,7 +262,7 @@ export function showContextMenu<T extends string>(
         activeContextMenuDismiss = null;
         activeContextMenuOwner = null;
       }
-      document.removeEventListener("keydown", onKeyDown);
+      document.removeEventListener("keydown", onKeyDown, true);
       document.removeEventListener("pointerdown", onPointerDown, true);
       document.removeEventListener("contextmenu", onContextMenu, true);
       const shouldRestoreFocus = isNodeWithinMenuStack(document.activeElement, menuStack);
@@ -275,9 +277,35 @@ export function showContextMenu<T extends string>(
     };
 
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
+      if (!["ArrowUp", "ArrowDown", "Home", "End", "ArrowLeft", "ArrowRight", "Escape", "Enter", " ", "Tab"].includes(event.key)) return;
+      // Capture before the invoking graph/tree row can navigate behind us.
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.key === "Escape" || event.key === "Tab") {
         cleanup(null);
+        return;
+      }
+      const focused = document.activeElement;
+      const level = menuStack.findIndex((menu) => menu.contains(focused));
+      const menu = menuStack[level < 0 ? menuStack.length - 1 : level];
+      if (!menu) return;
+      const buttons = [...menu.querySelectorAll<HTMLButtonElement>("button:not(:disabled)")];
+      const index = buttons.findIndex((button) => button === focused);
+      if (event.key === "ArrowLeft") {
+        if (level > 0) {
+          const trigger = submenuTriggerStack[level];
+          closeMenusFromLevel(level);
+          trigger?.focus({ preventScroll: true });
+        }
+      } else if (event.key === "Enter" || event.key === " " || event.key === "ArrowRight") {
+        const button = buttons[index];
+        if (button && (event.key !== "ArrowRight" || button.getAttribute("aria-haspopup") === "menu")) button.click();
+      } else if (buttons.length) {
+        closeMenusFromLevel(menuStack.indexOf(menu) + 1);
+        const next = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1
+          : event.key === "ArrowDown" ? (index + 1) % buttons.length
+          : (index < 0 ? buttons.length - 1 : (index - 1 + buttons.length) % buttons.length);
+        buttons[next].focus({ preventScroll: true });
       }
     };
 
@@ -329,6 +357,8 @@ export function showContextMenu<T extends string>(
         menu.style.maxWidth = width;
       }
       menu.dataset.level = String(level);
+      menu.setAttribute("role", "menu");
+      menu.tabIndex = -1;
 
       const inner = document.createElement("div");
       inner.className =
@@ -363,8 +393,11 @@ export function showContextMenu<T extends string>(
 
         const button = document.createElement("button");
         button.type = "button";
+        button.setAttribute("role", "menuitem");
+        button.tabIndex = -1;
         const isDisabled = item.disabled === true;
         button.disabled = isDisabled;
+        if (isDisabled) button.setAttribute("aria-disabled", "true");
         const rowBase =
           "flex w-full cursor-default select-none items-center gap-2 rounded-sm px-2 py-1 text-left outline-none transition-colors sm:min-h-7 sm:text-sm min-h-8 text-base";
         button.className = isDisabled
@@ -480,8 +513,8 @@ export function showContextMenu<T extends string>(
             button.addEventListener("mouseenter", () => {
               closeMenusFromLevel(level + 1);
             });
-            button.addEventListener("click", () => {
-              if (canDismissFromPointer) cleanup(item.id);
+            button.addEventListener("click", (event) => {
+              if (canDismissFromPointer || event.detail === 0) cleanup(item.id);
             });
           }
         }
@@ -504,13 +537,15 @@ export function showContextMenu<T extends string>(
       });
     };
 
-    document.addEventListener("keydown", onKeyDown);
+    document.addEventListener("keydown", onKeyDown, true);
     document.addEventListener("pointerdown", onPointerDown, true);
     document.addEventListener("contextmenu", onContextMenu, true);
     document.body.appendChild(backdrop);
     openMenu(items, position?.x ?? 0, position?.y ?? 0, 0);
     activeContextMenuDismiss = dismiss;
     activeContextMenuOwner = owner ?? null;
+    const rootMenu = menuStack[0];
+    (rootMenu.querySelector<HTMLButtonElement>("button:not(:disabled)") ?? rootMenu).focus({ preventScroll: true });
 
     requestAnimationFrame(() => {
       canDismissFromPointer = true;

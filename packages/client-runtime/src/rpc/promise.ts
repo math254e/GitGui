@@ -25,6 +25,11 @@ import type {
   GitDiscardParams,
   GitHunkPreviewParams,
   GitStashPushParams,
+  GitStashPushSelectedParams,
+  GitStashTarget,
+  GitStashTargetParams,
+  GitStashBranchParams,
+  GitStashFileDiffParams,
   OrderedEventEnvelope,
   PrefetchCommitDiffsParams,
   RepositoriesCreateParams,
@@ -377,6 +382,52 @@ export class GitGuiClient {
   stashPop(repositoryId: string) {
     return this.call("git.stash.pop", { repositoryId: assertRepositoryId(repositoryId) });
   }
+
+  /** Reserved feature API: callers must check the server's capability first. */
+  stashPushSelected(params: GitStashPushSelectedParams) {
+    if (!Array.isArray(params.paths) || params.paths.length === 0 ||
+        params.paths.some((path) => typeof path !== "string" || !path.length || path.includes("\0"))) {
+      throw new TypeError("Selected stash paths must be a non-empty list of literal paths");
+    }
+    return this.call("git.stash.push_selected", {
+      ...params,
+      paths: [...params.paths],
+      repositoryId: assertRepositoryId(params.repositoryId),
+    });
+  }
+
+  stashApply(params: GitStashTargetParams) {
+    return this.call("git.stash.apply", stashTargetParams(params));
+  }
+
+  stashPopTarget(params: GitStashTargetParams) {
+    return this.call("git.stash.pop_target", stashTargetParams(params));
+  }
+
+  stashDrop(params: GitStashTargetParams) {
+    return this.call("git.stash.drop", stashTargetParams(params));
+  }
+
+  stashBranch(params: GitStashBranchParams) {
+    return this.call("git.stash.branch", { ...stashTargetParams(params), name: params.name });
+  }
+
+  getStashFiles(params: GitStashTargetParams, signal?: AbortSignal) {
+    return this.call("git.stash.files", stashTargetParams(params), signal);
+  }
+
+  getStashFileDiff(params: GitStashFileDiffParams, signal?: AbortSignal) {
+    return this.call("git.stash.file_diff", { ...stashTargetParams(params), filePath: params.filePath }, signal);
+  }
+}
+
+function stashTargetParams(params: GitStashTargetParams): GitStashTargetParams {
+  const target: GitStashTarget = params.target;
+  if (!target || !/^stash@\{(?:0|[1-9][0-9]*)\}$/.test(target.selector) ||
+      !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(target.expectedOid)) {
+    throw new TypeError("A reviewed stash selector and full object ID are required");
+  }
+  return { repositoryId: assertRepositoryId(params.repositoryId), target: { ...target } };
 }
 
 export function assertRepositoryId(repositoryId: string): string {

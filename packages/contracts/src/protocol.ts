@@ -46,6 +46,24 @@ export const WS_METHOD_NAMES = [
   "git.worktree.remove",
   "git.stash.push",
   "git.stash.pop",
+  "git.stash.push_selected",
+  "git.stash.apply",
+  "git.stash.pop_target",
+  "git.stash.drop",
+  "git.stash.branch",
+  "git.stash.files",
+  "git.stash.file_diff",
+] as const;
+
+/// Accepted stash method subset; availability still requires advertised capabilities.
+export const STASH_FEATURE_METHOD_NAMES = [
+  "git.stash.push_selected",
+  "git.stash.apply",
+  "git.stash.pop_target",
+  "git.stash.drop",
+  "git.stash.branch",
+  "git.stash.files",
+  "git.stash.file_diff",
 ] as const;
 
 export type RequestEnvelope = {
@@ -653,6 +671,44 @@ export type GitStashPopParams = { repositoryId: string, };
 
 export type GitStashPopResult = { repository: RepositorySummary, snapshot: RepositorySnapshot, };
 
+export type GitStashTarget = { selector: string, expectedOid: string, };
+
+export type GitStashSelectionSource = "staged" | "unstaged";
+
+export type GitStashPushSelectedParams = { repositoryId: string, source: GitStashSelectionSource, paths: Array<string>, message?: string, };
+
+export type GitStashPushSelectedOutcome = "success" | "noChanges" | "partial";
+
+export type GitStashPushSelectedResult = { repositoryId: string, outcome: GitStashPushSelectedOutcome,
+/**
+ * Saved entry if one was created, including on partial failure.
+ */
+stash: StashInfo | null,
+/**
+ * Safe diagnostic for a partial outcome, never a refresh error.
+ */
+error: ProtocolError | null, };
+
+export type GitStashTargetParams = { repositoryId: string, target: GitStashTarget, };
+
+export type GitStashBranchParams = { repositoryId: string, target: GitStashTarget, name: string, };
+
+export type GitStashMutationOutcome = "success" | "conflicts" | "partial" | "branchCreatedRestoreFailed";
+
+export type GitStashState = "retained" | "removed";
+
+export type GitStashRestoreOutcome = "notAttempted" | "succeeded" | "conflicts" | "failed";
+
+export type GitStashCreatedBranch = { name: string, switched: boolean, };
+
+export type GitStashMutationResult = { repositoryId: string, target: GitStashTarget, outcome: GitStashMutationOutcome, stashState: GitStashState, restore: GitStashRestoreOutcome, branch: GitStashCreatedBranch | null, error: ProtocolError | null, };
+
+export type GitStashFilesResult = { stash: StashInfo, files: Array<CommitFile>, };
+
+export type GitStashFileDiffParams = { repositoryId: string, target: GitStashTarget, filePath: string, };
+
+export type GitStashFileDiffResult = { diff: CommitFileDiff, };
+
 export type CommitFilesParams = {
 /**
  * Stable ID from the host's configured repository catalog.
@@ -833,7 +889,8 @@ hash: string,
  */
 selector: string,
 /**
- * The `HEAD` commit when the stash was created.
+ * Original `HEAD` when created. For validated selected-unstaged encoding,
+ * this is the synthetic first parent's parent, not the patch baseline.
  */
 baseHash: string,
 /**

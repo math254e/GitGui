@@ -11,14 +11,14 @@
   import { acquireDiffRenderer } from "$lib/diff/renderer";
   import { themeStore } from "$lib/theme/useTheme";
   import type { ThemeAppearance } from "$lib/theme/types";
-  import type { CommitFile, CommitFileDiff, CommitInfo, RepositorySnapshot } from "$lib/types/repository";
+  import type { CommitFile, CommitFileDiff, CommitInfo, RepositorySnapshot, StashInfo } from "$lib/types/repository";
   import { buildFileDiffRequestKey, buildFileDiffSelectionKey } from "./file-diff-request-key";
   import { hasCurrentHunkReview, resolveFileDiffPatch, reuseFileDiff, reuseHunkPreview } from "./file-diff-response";
+  import { canMutateFileDiff, requestFileDiff, type DiffSource } from "./file-diff-source";
 
   type HunkAnnotation = { id: number; header: string; request: number; revision: string };
   type DiffViewMode = "hunks" | "inline" | "split";
   type ContentViewMode = "diff" | "file";
-  type DiffSource = "commit" | "workingTree" | "staged" | "commitWorkingTree";
   const contentModes = [
     { value: "diff", label: "Diff", title: "Compare original and modified contents" },
     { value: "file", label: "File", title: "Read the full file contents" },
@@ -35,6 +35,7 @@
     snapshot: RepositorySnapshot;
     diffSource: DiffSource;
     selectedCommit: CommitInfo | null;
+    selectedStash?: StashInfo | null;
     selectedFile: CommitFile;
     contentRevision?: number;
     onClose: () => void;
@@ -42,7 +43,7 @@
     pending?: boolean;
   };
 
-  let { client, repositoryId, snapshot, diffSource, selectedCommit, selectedFile, contentRevision = 0, onClose, onApplyHunks, pending = false }: Props = $props();
+  let { client, repositoryId, snapshot, diffSource, selectedCommit, selectedStash = null, selectedFile, contentRevision = 0, onClose, onApplyHunks, pending = false }: Props = $props();
   const viewerId = $props.id();
   let releaseRendererResources: (() => void) | undefined;
   let viewerContainer: HTMLDivElement;
@@ -75,15 +76,16 @@
   let parseVersion = 0;
   let contentVersion = 0;
   let activeDiffRequestKey = "";
+  let activeDiffClient: GitGuiClient | null = null;
   let destroyed = false;
-  const diffRequestKey = $derived(buildFileDiffRequestKey(repositoryId, snapshot, diffSource, selectedCommit, selectedFile, contentRevision));
+  const diffRequestKey = $derived(buildFileDiffRequestKey(repositoryId, snapshot, diffSource, selectedCommit, selectedFile, contentRevision, selectedStash, client.serverWelcome.environment_id));
   const noContentChanges = $derived(diff !== null && diff.originalContent === diff.modifiedContent);
   const showingDeletedFile = $derived(statusLabel(selectedFile) === "D");
   const displayedFileIsEmpty = $derived(diff !== null &&
     (showingDeletedFile ? diff.originalContent : diff.modifiedContent) === "");
   const viewState = $derived(fileViewState(diff, (loading && diff === null) || (contentViewMode === "diff" && parsing && parsedDiff === null),
     error || (contentViewMode === "diff" ? parseError : ""), renderError, renderer !== null));
-  const hunkActionsDisabled = $derived(pending || Boolean(error) || Boolean(parseError) ||
+  const hunkActionsDisabled = $derived(!canMutateFileDiff(diffSource) || pending || Boolean(error) || Boolean(parseError) ||
     Boolean(hunkError) || Boolean(renderError) || !onApplyHunks ||
     !hasCurrentHunkReview(diff, hunkPreview, parsedDiff, reviewedRequestKey, diffRequestKey));
 
@@ -91,11 +93,13 @@
     const requestKey = diffRequestKey;
 
     const currentSnapshot = snapshot;
-    if (requestKey === activeDiffRequestKey &&
-        (diffSource === "commit" || diffSource === "commitWorkingTree" || currentSnapshot.status === activeStatusSnapshot)) {
+    const currentClient = client;
+    if (currentClient === activeDiffClient && requestKey === activeDiffRequestKey &&
+        (diffSource === "stash" || diffSource === "commit" || diffSource === "commitWorkingTree" || currentSnapshot.status === activeStatusSnapshot)) {
       return;
     }
 
+    activeDiffClient = currentClient;
     activeDiffRequestKey = requestKey;
     activeStatusSnapshot = currentSnapshot.status;
     untrack(() => { void loadDiff(repositoryId, diffSource, selectedCommit, selectedFile, currentSnapshot); });
@@ -117,7 +121,7 @@
     // can turn a small edit into a full rewrite until the review arrives.
     // Keep an existing display during revalidation and parse only the review,
     // or the snapshot fallback once review has explicitly failed.
-    const patch = resolveFileDiffPatch(currentDiff, preview, diffSource === "workingTree" || diffSource === "staged", hunkError);
+    const patch = resolveFileDiffPatch(currentDiff, preview, canMutateFileDiff(diffSource), hunkError);
     if (!patch) {
       parsing = true;
       return;
@@ -221,8 +225,8 @@
     selectionController?.abort();
     selectionController = new AbortController();
     const signal = selectionController.signal;
-    const requestKey = buildFileDiffRequestKey(repositoryId, currentSnapshot, source, commit, file, contentRevision);
-    const selectionKey = buildFileDiffSelectionKey(repositoryId, source, commit, file);
+    const requestKey = buildFileDiffRequestKey(repositoryId, currentSnapshot, source, commit, file, contentRevision, selectedStash, client.serverWelcome.environment_id);
+    const selectionKey = buildFileDiffSelectionKey(repositoryId, source, commit, file, selectedStash, client.serverWelcome.environment_id);
     if (selectionKey !== activeSelectionKey) {
       activeSelectionKey = selectionKey;
       activeSelection += 1;
@@ -238,31 +242,7 @@
     loading = true;
 
     try {
-      const commitHash = commit?.hash;
-      const parentHash = commit?.parents[0] ?? null;
-      const headHash = currentSnapshot.status.headOid ?? null;
-
-      if ((source === "commit" || source === "commitWorkingTree") && !commitHash) {
-        throw new Error("No commit is selected.");
-      }
-
-      const resultPromise =
-        source === "commit"
-          ? client.getCommitFileDiff({
-              repositoryId,
-              commitHash: commitHash ?? "",
-              ...(parentHash ? { parentHash } : {}),
-              filePath: file.path,
-            }, signal)
-          : source === "commitWorkingTree"
-          ? client.getCommitWorkingTreeFileDiff({ repositoryId, commitHash: commitHash ?? "", filePath: file.path }, signal)
-          : client.getWorkingTreeFileDiff({
-              repositoryId,
-              ...(headHash ? { headHash } : {}),
-              filePath: file.path,
-              staged: source === "staged",
-              prepareHunks: true,
-            }, signal);
+      const resultPromise = requestFileDiff(client, repositoryId, source, commit, selectedStash, file, currentSnapshot, signal);
 
       const result = await resultPromise;
       if (!destroyed && request === activeRequest) {
@@ -275,7 +255,7 @@
         }
         // Contents are ready before the Git patch. The continuation shares
         // their status/index snapshot and first full-file read with preview.
-        if ((source === "workingTree" || source === "staged") && !diff.isBinary && !diff.omittedContent) {
+        if (canMutateFileDiff(source) && !diff.isBinary && !diff.omittedContent) {
           if (result.hunkError) {
             hunkError = result.hunkError;
             hunkPreview = null;
@@ -401,7 +381,7 @@
       }
 
       const preview = hunkPreview;
-      const annotations: DiffLineAnnotation<HunkAnnotation>[] = preview && !preview.unavailableReason && onApplyHunks
+      const annotations: DiffLineAnnotation<HunkAnnotation>[] = canMutateFileDiff(diffSource) && preview && !preview.unavailableReason && onApplyHunks
         ? prepared.metadata.hunks.map((hunk, id) => ({
             // Place controls directly after their Git hunk, including additions
             // and deletions where only one side has any lines.
@@ -583,13 +563,13 @@
     </div>
 
     <button class="close-button" type="button" title="Close file"
-      aria-label={diffSource === "workingTree" || diffSource === "staged" ? "Close changed file" : "Close diff"}
+      aria-label={canMutateFileDiff(diffSource) ? "Close changed file" : "Close diff"}
       onclick={onClose}>
       <X aria-hidden="true" size={16} />
     </button>
   </header>
 
-  {#if (diffSource === "workingTree" || diffSource === "staged") && diff && !diff.omittedContent}
+  {#if canMutateFileDiff(diffSource) && diff && !diff.omittedContent}
     {#if hunkError || hunkPreview?.unavailableReason}
       <div class="hunk-controls"><p class="text-xs text-[var(--app-theme-text-muted)]">{hunkError || hunkPreview?.unavailableReason}</p></div>
     {:else if selectedHunks.length && contentViewMode === "diff"}

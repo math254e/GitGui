@@ -6,6 +6,7 @@
     onBranch: () => void;
     onStash: () => void;
     onPop: () => void;
+    canPop?: boolean;
     pending?: boolean;
     pendingKind?: string | null;
     disabled?: boolean;
@@ -30,6 +31,7 @@
     onBranch,
     onStash,
     onPop,
+    canPop = false,
     pending = false,
     pendingKind = null,
     disabled = false,
@@ -136,7 +138,7 @@
       aria-label="Pop latest stash"
       aria-busy={pendingKind === "stashPop"}
       class="group inline-flex h-11 min-w-14 shrink-0 flex-col items-center justify-center gap-0.5 px-2 py-1 text-[11px] font-semibold leading-4 text-[var(--app-theme-toolbar-foreground)] transition-colors hover:bg-[var(--app-theme-toolbar-control-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus)] disabled:cursor-not-allowed disabled:opacity-45"
-      disabled={actionsDisabled}
+      disabled={actionsDisabled || !canPop}
       title="Pop latest stash"
       type="button"
       onclick={onPop}

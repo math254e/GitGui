@@ -3,7 +3,13 @@ use tokio_tungstenite::{
     connect_async, tungstenite::Message as ClientMessage, MaybeTlsStream, WebSocketStream,
 };
 
-type Client = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
+pub(super) type Client = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
+
+// These are fixture completion bounds, not responsiveness requirements. A real
+// selected stash exceeded 30s and stage/refresh exceeded the 10s receive bound
+// when the default-concurrency suite ran many Git processes on Windows. Keep
+// control/transport waits short; allow real Git integration work up to two minutes.
+pub(super) const GIT_FIXTURE_DEADLINE: Duration = Duration::from_secs(120);
 
 #[tokio::test]
 async fn worktree_removal_is_scoped_and_cleans_its_catalog_entry() {
@@ -135,7 +141,7 @@ async fn branch_mutations_are_scoped_reviewed_and_require_explicit_force() {
     server.abort();
 }
 
-fn git(root: &Path, args: &[&str]) -> String {
+pub(super) fn git(root: &Path, args: &[&str]) -> String {
     let output = std::process::Command::new("git")
         .current_dir(root)
         .args(args)
@@ -149,7 +155,7 @@ fn git(root: &Path, args: &[&str]) -> String {
     String::from_utf8(output.stdout).unwrap().trim().to_owned()
 }
 
-fn repository() -> tempfile::TempDir {
+pub(super) fn repository() -> tempfile::TempDir {
     let root = tempfile::tempdir().unwrap();
     git(root.path(), &["init", "-b", "main"]);
     git(root.path(), &["config", "user.name", "RPC Test"]);
@@ -163,7 +169,7 @@ fn repository() -> tempfile::TempDir {
 
 // Use the production socket loop without filesystem watcher events. Its exit
 // signal lets disconnect tests assert cleanup without guessing a sleep delay.
-async fn socket(
+pub(super) async fn socket(
     state: Arc<ServerState>,
     scopes: Vec<String>,
 ) -> (Client, oneshot::Receiver<()>, JoinHandle<()>) {
@@ -200,7 +206,7 @@ async fn socket(
     (socket, exited, server)
 }
 
-fn state(root: &Path) -> Arc<ServerState> {
+pub(super) fn state(root: &Path) -> Arc<ServerState> {
     let repositories = build_repository_catalog(&[root.display().to_string()]);
     Arc::new(ServerState::new(
         &ServerConfig::default(),
@@ -209,7 +215,7 @@ fn state(root: &Path) -> Arc<ServerState> {
     ))
 }
 
-async fn send(socket: &mut Client, id: &str, method: &str, params: Value) {
+pub(super) async fn send(socket: &mut Client, id: &str, method: &str, params: Value) {
     socket
         .send(ClientMessage::Text(
             json!({"id": id, "method": method, "params": params})
@@ -220,8 +226,12 @@ async fn send(socket: &mut Client, id: &str, method: &str, params: Value) {
         .unwrap();
 }
 
-async fn receive(socket: &mut Client) -> Value {
-    tokio::time::timeout(Duration::from_secs(10), async {
+pub(super) async fn receive(socket: &mut Client) -> Value {
+    receive_with_deadline(socket, Duration::from_secs(10)).await
+}
+
+async fn receive_with_deadline(socket: &mut Client, deadline: Duration) -> Value {
+    tokio::time::timeout(deadline, async {
         loop {
             let message = socket.next().await.unwrap().unwrap();
             if let ClientMessage::Text(text) = message {
@@ -338,7 +348,7 @@ async fn same_repository_mutations_keep_wire_order() {
         .unwrap();
     drop(guard);
     for id in ["stage", "unstage"] {
-        let response = receive(&mut client).await;
+        let response = receive_with_deadline(&mut client, GIT_FIXTURE_DEADLINE).await;
         assert_eq!(response["id"], id);
         assert_eq!(response["ok"], true, "{response}");
     }
