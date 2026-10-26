@@ -10,7 +10,7 @@ use super::{
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     fs,
     io::Read,
     path::{Component, Path},
@@ -559,22 +559,114 @@ fn apply_reviewed_hunks(
 }
 
 pub fn preview_discard(root: &str, paths: &[String]) -> Result<Vec<DiscardFile>, GitError> {
+    Ok(prepare_discard(root, paths, false)?.files)
+}
+
+struct DiscardReview {
+    root: String,
+    files: Vec<DiscardFile>,
+    entries: HashMap<String, String>,
+    head: Option<String>,
+    filtered: bool,
+}
+
+// Query selected index entries together, bounded below Windows' command-line
+// limit. Keep each exact -z record: it is part of the reviewed fingerprint.
+fn discard_path_batches(mut paths: &[String]) -> impl Iterator<Item = &[String]> {
+    std::iter::from_fn(move || {
+        if paths.is_empty() {
+            return None;
+        }
+        let mut end = 0;
+        let mut units = 0;
+        while end < paths.len() && (end == 0 || units + paths[end].len() * 2 + 3 < 16_000) {
+            units += paths[end].len() * 2 + 3;
+            end += 1;
+        }
+        let (batch, rest) = paths.split_at(end);
+        paths = rest;
+        Some(batch)
+    })
+}
+
+fn discard_index_entries(
+    root: &Path,
+    paths: &[String],
+) -> Result<HashMap<String, String>, GitError> {
+    let mut entries = HashMap::<String, String>::new();
+    for batch in discard_path_batches(paths) {
+        let mut args = vec!["--literal-pathspecs", "ls-files", "--stage", "-z", "--"];
+        args.extend(batch.iter().map(String::as_str));
+        let output = GitCommand::run(&args, Some(root))?;
+        for record in output.split_terminator('\0') {
+            let (_, path) = record
+                .split_once('\t')
+                .ok_or_else(|| error("Malformed index entry"))?;
+            let entry = entries.entry(path.to_string()).or_default();
+            entry.push_str(record);
+            entry.push('\0');
+        }
+    }
+    Ok(entries)
+}
+
+fn prepare_discard(
+    root: &str,
+    paths: &[String],
+    check_filters: bool,
+) -> Result<DiscardReview, GitError> {
     if paths.is_empty() {
         return Err(error("Discard requires explicit file paths"));
     }
-    let status = load_repository_status(root)?.status;
     let mut seen = HashSet::new();
-    let mut files = Vec::new();
     for path in paths {
+        safe_path(Path::new(root), path)?;
         if !seen.insert(path) {
             return Err(error("Duplicate discard path"));
         }
+    }
+    let snapshot = load_repository_status(root)?;
+    let root = snapshot.info.root;
+    let status = snapshot.status;
+    let entries = discard_index_entries(Path::new(&root), paths)?;
+    // Resolve filters before fingerprinting, so the last expensive work before
+    // an ordinary batch restore is its complete content validation.
+    let filtered = if check_filters && paths.iter().filter(|p| entries.contains_key(*p)).count() > 1
+    {
+        let mut filtered = false;
+        // Checkout prefers indexed attributes. Ordinary check-attr prefers the
+        // worktree, so either source must conservatively disable batching.
+        for batch in discard_path_batches(paths) {
+            for cached in [false, true] {
+                // check-attr streams output; use bounded argv rather than
+                // filling stdin before the synchronous runner drains stdout.
+                let mut args = vec!["--literal-pathspecs", "check-attr", "-z", "filter", "--"];
+                if cached {
+                    args.insert(2, "--cached");
+                }
+                args.extend(batch.iter().map(String::as_str));
+                let attributes = GitCommand::run(&args, Some(Path::new(&root)))?;
+                filtered |= attributes
+                    .split_terminator('\0')
+                    .collect::<Vec<_>>()
+                    .chunks(3)
+                    .any(|record| {
+                        record.len() != 3 || !matches!(record[2], "unspecified" | "unset")
+                    });
+            }
+        }
+        filtered
+    } else {
+        false
+    };
+    let mut files = Vec::new();
+    for path in paths {
         let file = status
             .changed_files
             .iter()
             .find(|f| &f.path == path)
             .ok_or_else(|| error(format!("{path}: no unstaged changes; refresh")))?;
-        let entry = index_entry(Path::new(root), path)?;
+        let entry = entries.get(path).map(String::as_str).unwrap_or("");
         if file.worktree_status == "." || file.worktree_status == " " {
             return Err(error(format!("{path}: no unstaged changes")));
         }
@@ -591,13 +683,28 @@ pub fn preview_discard(root: &str, paths: &[String]) -> Result<Vec<DiscardFile>,
                 "{path}: discard requires a resolved ordinary file; use its dedicated workflow"
             )));
         }
+        if (file.index_status == "?") != entry.is_empty() {
+            return Err(error(format!("{path}: index changed; review again")));
+        }
         files.push(DiscardFile {
             path: path.clone(),
             untracked: file.index_status == "?",
-            revision: revision(Path::new(root), path)?,
+            revision: revision_with_inputs(
+                Path::new(&root),
+                path,
+                status.head_oid.as_deref().unwrap_or(""),
+                entry,
+                None,
+            )?,
         });
     }
-    Ok(files)
+    Ok(DiscardReview {
+        root,
+        files,
+        entries,
+        head: status.head_oid,
+        filtered,
+    })
 }
 
 pub fn discard(
@@ -606,8 +713,10 @@ pub fn discard(
     delete_untracked: bool,
 ) -> Result<DiscardOutcome, GitError> {
     let paths = expected.iter().map(|f| f.path.clone()).collect::<Vec<_>>();
-    let current = preview_discard(root, &paths)?;
-    for (old, new) in expected.iter().zip(&current) {
+    let review = prepare_discard(root, &paths, true)?;
+    let current = &review.files;
+    let root = Path::new(&review.root);
+    for (old, new) in expected.iter().zip(current) {
         if old.revision != new.revision || old.untracked != new.untracked {
             return Err(error(format!(
                 "{} changed since confirmation; review again",
@@ -618,38 +727,96 @@ pub fn discard(
             return Err(error("Untracked deletion requires explicit confirmation"));
         }
     }
+    // Filters can change a later target while restoring an earlier one. Keep
+    // per-file validation/restoration for these repositories. Ordinary tracked
+    // files share one literal NUL-delimited restore without command-line limits.
+    let filtered = review.filtered;
     let mut completed = Vec::new();
-    for (i, file) in current.iter().enumerate() {
+    let mut i = 0;
+    while i < current.len() {
+        let file = &current[i];
+        let mut end = i + 1;
+        if !file.untracked && !filtered {
+            while end < current.len() && !current[end].untracked && end - i < 64 {
+                end += 1;
+            }
+        }
         // Check again immediately before touching each target, since external
-        // editors and Git processes do not participate in the server lock.
-        let result = revision(Path::new(root), &file.path).and_then(|r| {
-            if r != file.revision {
-                return Err(error("File changed during discard"));
+        // editors and Git processes do not participate in the server lock. The
+        // first ordinary restore uses the full prevalidation above. Deletions
+        // always rehash immediately before remove_file, including after filters.
+        let mut restore_attempted = false;
+        let result = (|| {
+            if i != 0 || end != current.len() || file.untracked || filtered {
+                let head = GitCommand::run(&["rev-parse", "--verify", "HEAD"], Some(root))
+                    .unwrap_or_default();
+                let entries = discard_index_entries(root, &paths[i..end])?;
+                for target in &current[i..end] {
+                    let entry = entries.get(&target.path).map(String::as_str).unwrap_or("");
+                    if revision_with_inputs(root, &target.path, head.trim(), entry, None)?
+                        != target.revision
+                    {
+                        return Err(error("File changed during discard"));
+                    }
+                }
             }
             if file.untracked {
-                fs::remove_file(Path::new(root).join(&file.path)).map_err(|e| error(e.to_string()))
+                fs::remove_file(root.join(&file.path)).map_err(|e| error(e.to_string()))
             } else {
-                GitCommand::run(
+                let input = paths[i..end]
+                    .iter()
+                    .flat_map(|p| p.bytes().chain([0]))
+                    .collect::<Vec<_>>();
+                restore_attempted = true;
+                GitCommand::run_with_stdin(
                     &[
                         "--literal-pathspecs",
                         "restore",
                         "--worktree",
-                        "--",
-                        &file.path,
+                        "--pathspec-from-file=-",
+                        "--pathspec-file-nul",
                     ],
-                    Some(Path::new(root)),
+                    Some(root),
+                    &input,
                 )
                 .map(|_| ())
             }
-        });
+        })();
         if let Err(e) = result {
+            // Git may restore part of a batch before failing. Never replay it.
+            // Only credit paths now clean against the SAME index; changed or
+            // unreadable paths remain explicit unresolved targets.
+            if restore_attempted && end - i > 1 {
+                if let (Ok(snapshot), Ok(entries)) = (
+                    load_repository_status(&review.root),
+                    discard_index_entries(root, &paths[i..end]),
+                ) {
+                    for target in &current[i..end] {
+                        let dirty = snapshot.status.changed_files.iter().any(|f| {
+                            f.path == target.path
+                                && !matches!(f.worktree_status.as_str(), "." | " ")
+                        });
+                        if !dirty
+                            && snapshot.status.head_oid == review.head
+                            && entries.get(&target.path) == review.entries.get(&target.path)
+                        {
+                            completed.push(target.path.clone());
+                        }
+                    }
+                }
+            }
             return Ok(DiscardOutcome {
+                remaining_paths: paths
+                    .iter()
+                    .filter(|p| !completed.contains(p))
+                    .cloned()
+                    .collect(),
                 completed_paths: completed,
-                remaining_paths: paths[i..].to_vec(),
                 error: Some(format!("{}: {} {}", file.path, e.message, e.stderr)),
             });
         }
-        completed.push(file.path.clone());
+        completed.extend(paths[i..end].iter().cloned());
+        i = end;
     }
     Ok(DiscardOutcome {
         completed_paths: completed,
@@ -1253,7 +1420,6 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
     #[test]
     fn discard_reports_completed_and_remaining_paths_after_external_change() {
         let repo = repository();
@@ -1299,6 +1465,178 @@ mod tests {
         );
         assert!(!root.join("old.txt").exists());
     }
+
+    #[test]
+    fn discard_batches_tracked_paths_and_reduces_processes_and_fingerprint_reads() {
+        use super::super::command::test_metrics;
+        for count in [1, 20] {
+            let repo = repository();
+            let root = repo.path();
+            let r = root.to_str().unwrap();
+            let paths = (0..count)
+                .map(|i| format!("file [{i}].txt"))
+                .collect::<Vec<_>>();
+            for path in &paths {
+                fs::write(root.join(path), "base\n").unwrap();
+            }
+            git(root, &["add", "."]);
+            git(root, &["commit", "-qm", "base"]);
+            for path in &paths {
+                fs::write(root.join(path), "edit\n").unwrap();
+            }
+            test_metrics::take();
+            let review = preview_discard(r, &paths).unwrap();
+            assert_eq!(test_metrics::take(), (3, count, count * 5));
+            let result = discard(r, &review, false).unwrap();
+            assert_eq!(
+                test_metrics::take(),
+                (if count == 1 { 4 } else { 6 }, count, count * 5)
+            );
+            assert_eq!(result.completed_paths, paths);
+            assert!(result.remaining_paths.is_empty());
+            assert!(result.error.is_none());
+            let info = crate::git::repository::resolve_repository(r).unwrap();
+            crate::git::repository::load_repository_status_from_root(&info.root).unwrap();
+            assert_eq!(test_metrics::take(), (2, 0, 0));
+            for path in &paths {
+                assert_eq!(fs::read_to_string(root.join(path)).unwrap(), "base\n");
+            }
+        }
+    }
+
+    #[test]
+    fn discard_refuses_same_size_new_bytes_index_and_head_changes() {
+        let repo = repository();
+        let root = repo.path();
+        let r = root.to_str().unwrap();
+        base_file(root, "file.txt");
+        fs::write(root.join("file.txt"), "first\n").unwrap();
+        let review = preview_discard(r, &["file.txt".into()]).unwrap();
+        fs::write(root.join("file.txt"), "later\n").unwrap();
+        assert!(discard(r, &review, false).is_err());
+        assert_eq!(
+            fs::read_to_string(root.join("file.txt")).unwrap(),
+            "later\n"
+        );
+        fs::write(root.join("file.txt"), "first\n").unwrap();
+        git(root, &["add", "file.txt"]);
+        fs::write(root.join("file.txt"), "later\n").unwrap();
+        assert!(discard(r, &review, false).is_err());
+        let review = preview_discard(r, &["file.txt".into()]).unwrap();
+        git(root, &["commit", "--allow-empty", "-qm", "new HEAD"]);
+        assert!(discard(r, &review, false).is_err());
+        assert_eq!(
+            fs::read_to_string(root.join("file.txt")).unwrap(),
+            "later\n"
+        );
+    }
+
+    #[test]
+    fn filtered_discard_revalidates_later_tracked_files_and_never_replays() {
+        let repo = repository();
+        let root = repo.path();
+        let r = root.to_str().unwrap();
+        for path in ["first.txt", "next.txt"] {
+            fs::write(root.join(path), "base\n").unwrap();
+        }
+        git(root, &["add", "."]);
+        git(root, &["commit", "-qm", "base"]);
+        fs::write(
+            root.join(".gitattributes"),
+            "first.txt filter=change-next\n",
+        )
+        .unwrap();
+        git(
+            root,
+            &[
+                "config",
+                "filter.change-next.smudge",
+                "cat; printf newer > next.txt",
+            ],
+        );
+        for path in ["first.txt", "next.txt"] {
+            fs::write(root.join(path), "edit\n").unwrap();
+        }
+        let review = preview_discard(r, &["first.txt".into(), "next.txt".into()]).unwrap();
+        let result = discard(r, &review, false).unwrap();
+        assert_eq!(result.completed_paths, ["first.txt"]);
+        assert_eq!(result.remaining_paths, ["next.txt"]);
+        assert!(result.error.unwrap().contains("changed"));
+        assert_eq!(fs::read_to_string(root.join("next.txt")).unwrap(), "newer");
+    }
+
+    #[test]
+    fn indexed_filter_attributes_cannot_be_hidden_by_worktree_attributes() {
+        let repo = repository();
+        let root = repo.path();
+        let r = root.to_str().unwrap();
+        fs::write(
+            root.join(".gitattributes"),
+            "first.txt filter=change-next\n",
+        )
+        .unwrap();
+        for path in ["first.txt", "next.txt"] {
+            fs::write(root.join(path), "base\n").unwrap();
+        }
+        git(root, &["add", "."]);
+        git(root, &["commit", "-qm", "base"]);
+        fs::write(root.join(".gitattributes"), "first.txt -filter\n").unwrap();
+        git(
+            root,
+            &[
+                "config",
+                "filter.change-next.smudge",
+                "cat; printf newer > next.txt",
+            ],
+        );
+        for path in ["first.txt", "next.txt"] {
+            fs::write(root.join(path), "edit\n").unwrap();
+        }
+        // Restoring the attributes first enables the indexed filter even on
+        // Git versions that otherwise consult the disabled worktree version.
+        let paths = [".gitattributes".into(), "first.txt".into(), "next.txt".into()];
+        assert!(prepare_discard(r, &paths, true).unwrap().filtered);
+        let review = preview_discard(r, &paths).unwrap();
+        let result = discard(r, &review, false).unwrap();
+        assert_eq!(result.completed_paths, [".gitattributes", "first.txt"]);
+        assert_eq!(result.remaining_paths, ["next.txt"]);
+        assert!(result.error.unwrap().contains("changed"));
+        assert_eq!(fs::read_to_string(root.join("next.txt")).unwrap(), "newer");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn discard_batch_reports_partial_git_restore_failure_without_retry() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let repo = repository();
+        let root = repo.path();
+        let r = root.to_str().unwrap();
+        let paths = ["a.txt".to_string(), "b.txt".to_string()];
+        for path in &paths {
+            fs::write(root.join(path), "base\n").unwrap();
+        }
+        git(root, &["add", "."]);
+        git(root, &["commit", "-qm", "base"]);
+        for path in &paths {
+            fs::write(root.join(path), "edit\n").unwrap();
+        }
+        let review = preview_discard(r, &paths).unwrap();
+        // Permit reading/writing, but refuse deletion while this handle lives.
+        // Git can restore a.txt, then cannot unlink b.txt for checkout.
+        let held = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(3)
+            .open(root.join("b.txt"))
+            .unwrap();
+        let result = discard(r, &review, false).unwrap();
+        assert!(result.error.is_some());
+        assert_eq!(result.completed_paths, ["a.txt"]);
+        assert_eq!(result.remaining_paths, ["b.txt"]);
+        assert_eq!(fs::read_to_string(root.join("a.txt")).unwrap(), "base\n");
+        assert_eq!(fs::read_to_string(root.join("b.txt")).unwrap(), "edit\n");
+        drop(held);
+    }
+
     #[test]
     fn large_files_support_reviewed_hunk_staging_and_unstaging() {
         let repo = repository();

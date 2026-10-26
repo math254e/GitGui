@@ -290,6 +290,11 @@ pub fn load_repository_status(path: &str) -> Result<RepositoryStatusSnapshot, Gi
     Ok(RepositoryStatusSnapshot { info, status })
 }
 
+/// Read status after the caller has already resolved and validated this root.
+pub fn load_repository_status_from_root(root: &str) -> Result<RepositoryStatus, GitError> {
+    repository_status(Path::new(root))
+}
+
 pub fn load_commit_files_from_root(
     repo_root: &str,
     commit_hash: &str,

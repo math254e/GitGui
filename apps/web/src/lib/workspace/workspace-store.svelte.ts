@@ -16,6 +16,7 @@ import { goto } from "$app/navigation";
 import { page } from "$app/state";
 import { browser } from "$app/environment";
 import { toast } from "svelte-sonner";
+import { untrack } from "svelte";
 import type { GitGuiClient } from "@gitgui/client-runtime";
 import type {
   ChangedFile,
@@ -44,6 +45,7 @@ import type {
   WorkingTreeDraftState,
 } from "$lib/components/WorkingTreePanel.svelte";
 import { formatError, isConnectionError, summarizeGitError } from "./errors";
+import { discardFailureNotice, validateDiscardReceipt } from "./discard-operations";
 import {
   persistHiddenGraphRefKeys,
   persistLayoutPreferences,
@@ -140,7 +142,10 @@ export class WorkspaceStore {
     loading: boolean;
     error: string;
     client: GitGuiClient;
+    workspace: ClientWorkspace;
   } | null>(null);
+  private discardPreviewGeneration = 0;
+  private discardActionGeneration = 0;
   repositoryPathDialogOpen = $state(false);
   stashReview = $state<StashDialog | null>(null);
   repositoryPathValue = $state("");
@@ -386,6 +391,9 @@ export class WorkspaceStore {
   private largeScreenMediaQuery: MediaQueryList | null = null;
   private activeWorkspaceRequest = 0;
   private amendRequest = 0;
+  private amendSnapshotGraph: RepositorySnapshot["graph"] | undefined;
+  private amendMetadataRevision = 0;
+  private amendRefreshGeneration = $state(0);
   private nextScrollCommandId = 0;
   private graphRequestGeneration = 0;
   private lastGraphRequestKey: string | null = null;
@@ -401,7 +409,11 @@ export class WorkspaceStore {
     $effect(() => {
       const client = this.client;
       const repositoryId = this.activeRepositoryId;
-      const currentSnapshot = this.snapshot;
+      // Status-only row reconciliation must not enqueue another lock-taking
+      // amend review ahead of the next interactive mutation. Full snapshots and
+      // unfiltered metadata observations still revalidate workflow blockers.
+      this.amendRefreshGeneration;
+      const currentSnapshot = untrack(() => this.snapshot);
       const key = this.sidebarStateKey;
       const request = ++this.amendRequest;
       this.amendInfo = null;
@@ -434,9 +446,11 @@ export class WorkspaceStore {
       if (
         dialog &&
         (dialog.repositoryId !== this.activeRepositoryId ||
-          dialog.environmentId !== this.workspaceState?.environmentId)
+          dialog.environmentId !== this.workspaceState?.environmentId ||
+          dialog.client !== this.client || dialog.workspace !== this.workspace)
       ) {
         this.discardDialog = null;
+        this.discardPreviewGeneration += 1;
       }
       const nameContext = this.gitNameDialogContext;
       if (nameContext && (nameContext.repositoryId !== this.activeRepositoryId || nameContext.environmentId !== this.workspaceState?.environmentId)) {
@@ -593,6 +607,11 @@ export class WorkspaceStore {
   /* ---------------------------------------------------------------------- */
 
   private applyApplicationRuntimeState(state: WebApplicationRuntimeState): void {
+    if (this.discardDialog && (this.discardDialog.client !== state.client || this.discardDialog.workspace !== state.workspace)) {
+      this.discardDialog = null;
+      this.discardPreviewGeneration += 1;
+    }
+    if (this.workspace && state.workspace && this.workspace !== state.workspace) this.queuedGitActions = [];
     this.connectionEnvironmentId = state.registry.selectedEnvironmentId ?? state.client?.serverWelcome.environment_id ?? null;
     if (this.workspaceState && this.connectionEnvironmentId !== this.workspaceState.environmentId) {
       this.stashReview = null;
@@ -658,6 +677,14 @@ export class WorkspaceStore {
   }
 
   private applyWorkspaceState(state: ClientWorkspaceState): void {
+    const graph = state.activeRepositoryId ? state.repositories[state.activeRepositoryId]?.snapshot?.graph : undefined;
+    const metadataRevision = state.activeRepositoryId && this.workspace?.environmentId === state.environmentId
+      ? this.workspace.repositoryMetadataRevision?.(state.activeRepositoryId) ?? 0 : 0;
+    if (graph !== this.amendSnapshotGraph || metadataRevision !== this.amendMetadataRevision) {
+      this.amendSnapshotGraph = graph;
+      this.amendMetadataRevision = metadataRevision;
+      this.amendRefreshGeneration += 1;
+    }
     const previousRepos = this.workspaceState?.environmentId === state.environmentId ? this.openRepos : [];
     this.workspaceState = state;
     this.repositoryCatalog = this.mergeRepositoryCatalog(this.repositoryCatalog, state);
@@ -1533,16 +1560,18 @@ export class WorkspaceStore {
     const client = this.client;
     const repositoryId = this.activeRepositoryId;
     const environmentId = this.workspaceState?.environmentId;
-    if (!client || !repositoryId || !environmentId || this.gitActionPending || !paths.length) return;
-    const dialog = { repositoryId, environmentId, client, files: [] as GitDiscardFile[], loading: true, error: "" };
+    const workspace = this.workspace;
+    if (!client || !workspace || !repositoryId || !environmentId || this.gitActionPending || !paths.length) return;
+    const generation = ++this.discardPreviewGeneration;
+    const dialog = { repositoryId, environmentId, client, workspace, files: [] as GitDiscardFile[], loading: true, error: "" };
     this.discardDialog = dialog;
     try {
       const files = await client.previewDiscard(repositoryId, paths);
-      if (this.discardDialog?.repositoryId === repositoryId && this.discardDialog.environmentId === environmentId) {
+      if (generation === this.discardPreviewGeneration && this.workspace === workspace && this.client === client && this.discardDialog?.repositoryId === repositoryId && this.discardDialog.environmentId === environmentId) {
         this.discardDialog = { ...dialog, files, loading: false };
       }
     } catch (caught) {
-      if (this.discardDialog?.repositoryId === repositoryId && this.discardDialog.environmentId === environmentId) {
+      if (generation === this.discardPreviewGeneration && this.workspace === workspace && this.client === client && this.discardDialog?.repositoryId === repositoryId && this.discardDialog.environmentId === environmentId) {
         this.discardDialog = null;
         toast.error("Could not review changes", { description: summarizeGitError(caught) });
       }
@@ -1551,15 +1580,36 @@ export class WorkspaceStore {
 
   confirmDiscard(files: GitDiscardFile[], deleteUntracked: boolean): void {
     const dialog = this.discardDialog;
-    if (!dialog || this.gitActionPending || !files.length) return;
+    if (!dialog || dialog.loading || this.gitActionPending || !files.length ||
+      dialog.workspace !== this.workspace || dialog.client !== this.client ||
+      dialog.repositoryId !== this.activeRepositoryId || dialog.environmentId !== this.workspaceState?.environmentId ||
+      new Set(files.map((file) => file.path)).size !== files.length ||
+      files.some((file) => !dialog.files.some((reviewed) => reviewed.path === file.path && reviewed.revision === file.revision && reviewed.untracked === file.untracked)) ||
+      files.some((file) => file.untracked) && !deleteUntracked) return;
     this.discardDialog = null;
-    this.requestGitAction({
-      kind: "discard",
-      label: "Discarding",
-      notifySuccess: false,
-      action: (repositoryId) => dialog.client.discard({ repositoryId, files, deleteUntracked }),
-      onSucceeded: (result) => {
-        const outcome = result as GitDiscardResult;
+    void this.runDiscard(dialog, files.map((file) => ({ ...file })), deleteUntracked);
+  }
+
+  private async runDiscard(dialog: NonNullable<WorkspaceStore["discardDialog"]>, files: GitDiscardFile[], deleteUntracked: boolean): Promise<void> {
+    const { workspace, client, repositoryId } = dialog;
+    const generation = ++this.discardActionGeneration;
+    const checkpoint = workspace.beginDiscard(repositoryId);
+    const paths = files.map((file) => file.path);
+    this.gitAction = { repositoryId, kind: "discard", label: "Discarding" };
+    const submittedAction = this.gitAction;
+    const current = () => generation === this.discardActionGeneration && this.workspace === workspace;
+    let outcome: GitDiscardResult | undefined;
+    let failure: unknown;
+    try {
+      outcome = validateDiscardReceipt(files, await client.discard({ repositoryId, files, deleteUntracked }));
+    } catch (error) {
+      failure = error;
+    }
+    workspace.reconcileDiscard(checkpoint, paths, outcome?.completedPaths ?? []);
+    // Selection can change while the original RPC is running. Release exactly
+    // its pending action, even if another environment is now on screen.
+    if (this.gitAction === submittedAction) this.gitAction = null;
+    if (outcome) {
         if (outcome.error) {
           toast.error("Discard stopped", {
             description: `${outcome.error}\nChanged: ${outcome.completedPaths.join(", ") || "none"}\nRemaining: ${outcome.remainingPaths.join(", ")}`,
@@ -1567,8 +1617,24 @@ export class WorkspaceStore {
         } else {
           toast.success(`Discarded changes in ${outcome.completedPaths.length} files`);
         }
-      },
+    } else {
+      const notice = discardFailureNotice(failure);
+      toast[notice.uncertain ? "warning" : "error"](notice.title, { description: notice.description });
+    }
+    // The existing watcher scheduler deduplicates this with filesystem events.
+    // It runs after interactive work and never owns or repeats the mutation.
+    workspace.queueRepositoryStatusRefresh(repositoryId, (error) => {
+      if (!current()) return;
+      toast.warning("Discard status refresh failed", {
+        description: error.message,
+        action: { label: "Retry refresh", onClick: () => workspace.queueRepositoryStatusRefresh(repositoryId) },
+      });
     });
+    if (current()) {
+      const next = this.queuedGitActions[0];
+      this.queuedGitActions = this.queuedGitActions.slice(1);
+      if (next) void this.runGitAction(next);
+    }
   }
 
   applySelectedHunks(params: GitApplyHunksParams): void {

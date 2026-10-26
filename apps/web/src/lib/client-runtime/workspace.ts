@@ -51,6 +51,14 @@ export interface ClientWorkspaceOptions {
   recentLimit?: number;
 }
 
+/** A receipt may reconcile only the repository view that submitted its review. */
+export interface DiscardCheckpoint {
+  readonly repositoryId: string;
+  readonly generation: number;
+  readonly lifecycle: number;
+  readonly snapshot?: RepositorySnapshot;
+}
+
 /** Per-environment client-owned tabs, recents, and hydrated repository state. */
 export class ClientWorkspace {
   readonly environmentId: string;
@@ -69,6 +77,9 @@ export class ClientWorkspace {
   private nextRequestGeneration = 0;
   private readonly pendingChanges = new Map<string, RepositoryChangeKind>();
   private readonly pendingStatusPaths = new Map<string, Set<string>>();
+  private readonly discardCheckpoints = new Map<string, DiscardCheckpoint>();
+  private readonly statusRefreshErrors = new Map<string, (error: WorkspaceRepositoryError) => void>();
+  private readonly metadataRevisions = new Map<string, number>();
   private updateSubscriptions: Unsubscribe[] = [];
   private updateTimer?: ReturnType<typeof setTimeout>;
   private recoveryTimer?: ReturnType<typeof setInterval>;
@@ -115,6 +126,12 @@ export class ClientWorkspace {
         if (!payload || typeof payload !== "object" || Array.isArray(payload)) return;
         const { repositoryId, kind, paths } = payload;
         if (typeof repositoryId === "string" && (kind === "status" || kind === "snapshot")) {
+          if (this.disposed || !this._state.openRepositoryIds.includes(repositoryId)) return;
+          // Unfiltered status events also cover index and merge/rebase metadata.
+          // A targeted worktree edit must not enqueue a passive amend review.
+          if (kind === "status" && (!Array.isArray(paths) || !paths.length)) {
+            this.metadataRevisions.set(repositoryId, this.repositoryMetadataRevision(repositoryId) + 1);
+          }
           this.invalidate(repositoryId, kind, Array.isArray(paths) ? paths.filter((path): path is string => typeof path === "string") : []);
         }
       }),
@@ -145,10 +162,16 @@ export class ClientWorkspace {
     clearInterval(this.recoveryTimer);
     this.pendingChanges.clear();
     this.pendingStatusPaths.clear();
+    this.discardCheckpoints.clear();
+    this.statusRefreshErrors.clear();
+    this.metadataRevisions.clear();
   }
 
   private invalidate(repositoryId: string, kind: RepositoryChangeKind, paths: string[] = []): void {
     if (this.disposed || !this.updateSubscriptions.length || !this._state.openRepositoryIds.includes(repositoryId)) return;
+    // An observation arriving during a read makes that read stale, even when
+    // the file retains the same M/M status. Keep the follow-up invalidation.
+    this.beginRequest(repositoryId);
     this.pendingChanges.set(repositoryId, this.pendingChanges.get(repositoryId) === "snapshot" ? "snapshot" : kind);
     if (paths.length) {
       const pending = this.pendingStatusPaths.get(repositoryId) ?? new Set<string>();
@@ -160,6 +183,7 @@ export class ClientWorkspace {
 
   private scheduleChanges(): void {
     if (this.disposed || this.applyingChanges || this.updateTimer || !this.pendingChanges.size) return;
+    if (![...this.pendingChanges.keys()].some((id) => !this.discardCheckpoints.has(id))) return;
     this.updateTimer = setTimeout(() => {
       this.updateTimer = undefined;
       this.applyingChanges = true;
@@ -171,12 +195,23 @@ export class ClientWorkspace {
         this.pendingStatusPaths.clear();
         for (const [id, kind] of changes) {
           if (!this._state.openRepositoryIds.includes(id)) continue;
+          if (this.discardCheckpoints.has(id)) {
+            this.pendingChanges.set(id, this.pendingChanges.get(id) === "snapshot" ? "snapshot" : kind);
+            this.pendingStatusPaths.set(id, new Set([...(paths.get(id) ?? []), ...(this.pendingStatusPaths.get(id) ?? [])]));
+            continue;
+          }
           const changedPaths = [...(paths.get(id) ?? [])];
           this.bumpFileContentRevisions(id, changedPaths);
           if (kind === "snapshot" || !this._state.repositories[id]?.snapshot) {
             await this.refreshRepositories([id], { persist: false });
           } else {
             await this.refreshStatus(id);
+          }
+          if (!this.pendingChanges.has(id)) {
+            const notify = this.statusRefreshErrors.get(id);
+            this.statusRefreshErrors.delete(id);
+            const error = this._state.repositories[id]?.error;
+            if (error) notify?.(error);
           }
         }
       }).catch(() => undefined).finally(() => {
@@ -199,7 +234,7 @@ export class ClientWorkspace {
       }
       // Keep history identity stable while replacing the status view.
       this.updateRepository(id, (repository) => ({
-        ...repository, repository: result.repository, snapshot: { ...snapshot, status: result.status }, error: undefined,
+        ...repository, repository: result.repository, snapshot: { ...snapshot, status: result.status }, error: undefined, loading: false, refreshing: false,
       }));
     } catch (error) {
       if (this.isCurrentRequest(id, generation, lifecycle)) this.setRepositoryError(id, toWorkspaceError(error));
@@ -209,6 +244,51 @@ export class ClientWorkspace {
   /** Invalidates a mutable file preview after a local operation such as partial staging. */
   invalidateFileContent(repositoryId: string, paths: string[]): void {
     this.bumpFileContentRevisions(repositoryId, paths);
+  }
+
+  repositoryMetadataRevision(repositoryId: string): number {
+    return this.metadataRevisions.get(repositoryId) ?? 0;
+  }
+
+  beginDiscard(repositoryId: string): DiscardCheckpoint {
+    const id = assertRepositoryId(repositoryId);
+    if (this._state.repositories[id]?.refreshing) this.pendingChanges.set(id, "snapshot");
+    const checkpoint = {
+      repositoryId: id, generation: this.beginRequest(id), lifecycle: this.lifecycleGeneration,
+      snapshot: this._state.repositories[id]?.snapshot,
+    };
+    this.discardCheckpoints.set(id, checkpoint);
+    return checkpoint;
+  }
+
+  /** Apply only confirmed paths, preserving the index side of overlapping rows.
+   * Watcher observations and newer requests supersede this local projection;
+   * they reconcile through the existing bounded status scheduler instead. */
+  reconcileDiscard(checkpoint: DiscardCheckpoint, affectedPaths: string[], completedPaths: string[]): void {
+    const id = checkpoint.repositoryId;
+    if (this.discardCheckpoints.get(id) !== checkpoint) return;
+    this.discardCheckpoints.delete(id);
+    if (this.disposed || checkpoint.lifecycle !== this.lifecycleGeneration || !this._state.openRepositoryIds.includes(id)) return;
+    const snapshot = this._state.repositories[id]?.snapshot;
+    if (snapshot && snapshot === checkpoint.snapshot && this.isCurrentRequest(id, checkpoint.generation, checkpoint.lifecycle)) {
+      const completed = new Set(completedPaths);
+      const changedFiles = snapshot.status.changedFiles.flatMap((file) => {
+        if (!completed.has(file.path)) return [file];
+        if (["?", ".", " ", ""].includes(file.indexStatus)) return [];
+        return [{ ...file, worktreeStatus: "." }];
+      });
+      this.beginRequest(id);
+      this.updateRepository(id, (repository) => ({ ...repository, snapshot: { ...snapshot, status: { ...snapshot.status, changedFiles } } }));
+    }
+    this.bumpFileContentRevisions(id, affectedPaths);
+    this.scheduleChanges();
+  }
+
+  /** One coalesced, delayed read per repository; never retries a mutation. */
+  queueRepositoryStatusRefresh(repositoryId: string, onError?: (error: WorkspaceRepositoryError) => void): void {
+    if (this.disposed || !this._state.openRepositoryIds.includes(repositoryId)) return;
+    if (onError) this.statusRefreshErrors.set(repositoryId, onError);
+    this.invalidate(repositoryId, "status");
   }
 
   private bumpFileContentRevisions(repositoryId: string, paths: string[]): void {
@@ -419,6 +499,11 @@ export class ClientWorkspace {
       if (!this._state.openRepositoryIds.includes(id)) return;
       this.lifecycleGeneration += 1;
       this.requestGenerations.delete(id);
+      this.discardCheckpoints.delete(id);
+      this.statusRefreshErrors.delete(id);
+      this.metadataRevisions.delete(id);
+      this.pendingChanges.delete(id);
+      this.pendingStatusPaths.delete(id);
       const openRepositoryIds = this._state.openRepositoryIds.filter((candidate) => candidate !== id);
       const repositories = { ...this._state.repositories };
       delete repositories[id];
@@ -455,6 +540,11 @@ export class ClientWorkspace {
   private async forgetRepositoryOperation(id: string): Promise<ClientWorkspaceState> {
     this.lifecycleGeneration += 1;
     this.requestGenerations.delete(id);
+    this.discardCheckpoints.delete(id);
+    this.statusRefreshErrors.delete(id);
+    this.metadataRevisions.delete(id);
+    this.pendingChanges.delete(id);
+    this.pendingStatusPaths.delete(id);
 
     const openRepositoryIds = this._state.openRepositoryIds.filter((candidate) => candidate !== id);
     const repositories = { ...this._state.repositories };
@@ -496,7 +586,6 @@ export class ClientWorkspace {
       if (this._state.openRepositoryIds.includes(id)) {
         this.consumeStatusInvalidation(id);
         await this.refreshStatus(id);
-        if (!this._state.repositories[id]?.error) this.consumeStatusInvalidation(id);
       }
       return this.state;
     });
@@ -523,7 +612,12 @@ export class ClientWorkspace {
   }
 
   private consumeStatusInvalidation(repositoryId: string): void {
-    if (this.pendingChanges.get(repositoryId) === "status") this.pendingChanges.delete(repositoryId);
+    if (this.pendingChanges.get(repositoryId) === "status") {
+      this.pendingChanges.delete(repositoryId);
+      const paths = [...(this.pendingStatusPaths.get(repositoryId) ?? [])];
+      this.pendingStatusPaths.delete(repositoryId);
+      this.bumpFileContentRevisions(repositoryId, paths);
+    }
     this.clearUpdateTimerIfIdle();
   }
 
@@ -579,11 +673,16 @@ export class ClientWorkspace {
     } finally {
       for (const id of ids) {
         const generation = generations.get(id)!;
-        if (this.isCurrentRequest(id, generation, lifecycle)) {
+        // Reads are serialized here. A watcher or receipt can supersede their
+        // data generation while they own the loading flags; settle those flags
+        // and retain the full refresh demand for refs/stashes, not only status.
+        if (lifecycle === this.lifecycleGeneration && this._state.openRepositoryIds.includes(id)) {
+          if (!this.isCurrentRequest(id, generation, lifecycle)) this.pendingChanges.set(id, "snapshot");
           this.updateRepository(id, (repository) => ({ ...repository, loading: false, refreshing: false }));
         }
       }
       if (lifecycle === this.lifecycleGeneration) this.update({ refreshing: false });
+      this.scheduleChanges();
     }
 
     if (options.persist !== false) await this.persist();

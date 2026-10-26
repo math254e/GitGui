@@ -3,6 +3,8 @@ pub mod git {
     pub mod command;
     #[cfg(test)]
     mod file_view_measurement;
+    #[cfg(test)]
+    mod discard_measurement;
     pub mod graph;
     pub mod hunk_cache;
     pub mod operations;

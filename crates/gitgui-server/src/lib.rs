@@ -42,6 +42,7 @@ use gitgui_core::git::{
         load_repository_for_display as load_core_repository,
         load_repository_graph as load_core_repository_graph,
         load_repository_status as load_core_repository_status,
+        load_repository_status_from_root,
         load_working_tree_file_diff as load_core_working_tree_file_diff, resolve_repository,
         ChangedFile as CoreChangedFile, CommitFile as CoreCommitFile,
         CommitFileDiff as CoreCommitFileDiff, CommitGraph as CoreCommitGraph,
@@ -3781,9 +3782,8 @@ fn load_graph(
 }
 
 fn load_status(repository: &ConfiguredRepository) -> Result<CoreRepositoryStatus, StatusLoadError> {
-    resolve_repository(&repository.operation_path).map_err(|_| StatusLoadError::NotFound)?;
-    load_core_repository_status(&repository.operation_path)
-        .map(|snapshot| snapshot.status)
+    let info = resolve_repository(&repository.operation_path).map_err(|_| StatusLoadError::NotFound)?;
+    load_repository_status_from_root(&info.root)
         .map_err(StatusLoadError::Git)
 }
 
