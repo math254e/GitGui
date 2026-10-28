@@ -72,8 +72,10 @@ Copy T3 Code's concepts, terminology, layering, and infrastructure where they ap
 - execution of the installed Git executable;
 - repository discovery and validation;
 - parsing untrusted Git output;
-- status, history, diff, graph, branch, remote, and mutation behavior;
+- status, history, diff, graph, branch, tag, remote, and mutation behavior;
 - domain caches that are valid within one backend environment.
+
+Tag display, creation, and performance boundaries are documented in [tags](tags.md).
 
 ### Protocol
 

@@ -29,7 +29,9 @@ use gitgui_core::git::{
     command::GitError,
     hunk_cache::SharedHunkReviewCache,
     operations::{
-        commit as run_commit, create_branch as run_create_branch, fetch as run_fetch,
+        commit as run_commit, create_branch as run_create_branch, create_tag as run_create_tag,
+        delete_tag as run_delete_tag,
+        fetch as run_fetch,
         init_repository as run_init_repository, list_local_branches, pull as run_pull,
         push as run_push, stage as run_stage, stash_pop as run_stash_pop,
         stash_push as run_stash_push, switch_branch as run_switch_branch, unstage as run_unstage,
@@ -59,6 +61,8 @@ use gitgui_protocol::{
     EnvironmentDescriptor, FileDiffResult, GitAmendParams, GitApplyHunksParams, GitBranch,
     GitBranchCreateParams, GitBranchCreateResult, GitBranchListParams, GitBranchListResult,
     GitBranchSwitchParams, GitBranchSwitchResult, GitCommitParams, GitCommitResult,
+    GitTagCreateParams, GitTagCreateResult,
+    GitTagDeleteParams, GitTagDeleteResult,
     GitDiscardParams, GitFetchResult, GitHunkPreviewParams, GitPathsParams, GitPullResult,
     GitPushResult, GitRepositoryParams, GitStageResult, GitStashPopParams, GitStashPopResult,
     GitStashPushParams, GitStashPushResult, GitStatusParams, GitStatusResult, GitUnstageResult,
@@ -76,6 +80,8 @@ use gitgui_protocol::{
     CAPABILITY_GIT_AMEND, CAPABILITY_GIT_BRANCH_CREATE, CAPABILITY_GIT_BRANCH_DELETE,
     CAPABILITY_GIT_BRANCH_LIST, CAPABILITY_GIT_BRANCH_RENAME, CAPABILITY_GIT_BRANCH_SWITCH,
     CAPABILITY_GIT_COMMIT, CAPABILITY_GIT_COMMIT_FILES, CAPABILITY_GIT_COMMIT_FILE_DIFF,
+    CAPABILITY_GIT_TAG_CREATE,
+    CAPABILITY_GIT_TAG_DELETE,
     CAPABILITY_GIT_COMMIT_WORKING_TREE_FILES, CAPABILITY_GIT_COMMIT_WORKING_TREE_FILE_DIFF,
     CAPABILITY_GIT_DISCARD, CAPABILITY_GIT_FETCH, CAPABILITY_GIT_HUNKS,
     CAPABILITY_GIT_PREFETCH_COMMIT_DIFFS, CAPABILITY_GIT_PREFETCH_COMMIT_FILES,
@@ -88,7 +94,8 @@ use gitgui_protocol::{
     MAX_GRAPH_TARGETS, MAX_PREFETCH_COMMIT_DIFF_TARGETS, MAX_PREFETCH_COMMIT_HASHES,
     METHOD_GIT_AMEND, METHOD_GIT_AMEND_INFO, METHOD_GIT_APPLY_HUNKS, METHOD_GIT_BRANCH_CREATE,
     METHOD_GIT_BRANCH_DELETE, METHOD_GIT_BRANCH_LIST, METHOD_GIT_BRANCH_RENAME,
-    METHOD_GIT_BRANCH_SWITCH, METHOD_GIT_COMMIT, METHOD_GIT_COMMIT_FILES,
+    METHOD_GIT_BRANCH_SWITCH, METHOD_GIT_COMMIT, METHOD_GIT_COMMIT_FILES, METHOD_GIT_TAG_CREATE,
+    METHOD_GIT_TAG_DELETE,
     METHOD_GIT_COMMIT_FILE_DIFF, METHOD_GIT_DISCARD, METHOD_GIT_DISCARD_PREVIEW, METHOD_GIT_FETCH,
     METHOD_GIT_HUNK_PREVIEW, METHOD_GIT_PREFETCH_COMMIT_DIFFS, METHOD_GIT_PREFETCH_COMMIT_FILES,
     METHOD_GIT_PULL, METHOD_GIT_PUSH, METHOD_GIT_STAGE, METHOD_GIT_STASH_POP,
@@ -104,6 +111,9 @@ use gitgui_protocol::{
     METHOD_GIT_STASH_FILE_DIFF, METHOD_GIT_STASH_POP_TARGET, METHOD_GIT_STASH_PUSH_SELECTED,
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use gitgui_protocol::{GitTagTargetParams, GitTagMutationResult, GitTagDetails, GitTagApplyFetchParams, GitTagFetchConflict,
+    METHOD_GIT_TAG_CHECKOUT, METHOD_GIT_TAG_PUSH, METHOD_GIT_TAG_DETAILS, METHOD_GIT_TAG_APPLY_FETCH,
+    CAPABILITY_GIT_TAG_CHECKOUT, CAPABILITY_GIT_TAG_PUSH, CAPABILITY_GIT_TAG_DETAILS, CAPABILITY_GIT_TAG_APPLY_FETCH};
 use serde_json::{json, Value};
 use std::{
     collections::HashMap,
@@ -966,6 +976,11 @@ fn required_scope_for_method(method: &str) -> Option<&'static str> {
         | METHOD_GIT_PULL
         | METHOD_GIT_PUSH
         | METHOD_GIT_BRANCH_CREATE
+        | METHOD_GIT_TAG_CREATE
+        | METHOD_GIT_TAG_DELETE
+        | METHOD_GIT_TAG_CHECKOUT
+        | METHOD_GIT_TAG_PUSH
+        | METHOD_GIT_TAG_APPLY_FETCH
         | METHOD_GIT_BRANCH_SWITCH
         | METHOD_GIT_BRANCH_RENAME
         | METHOD_GIT_BRANCH_DELETE
@@ -984,6 +999,7 @@ fn required_scope_for_method(method: &str) -> Option<&'static str> {
         | METHOD_REPOSITORIES_GET_GRAPH
         | METHOD_REPOSITORIES_REFRESH
         | METHOD_GIT_STATUS
+        | METHOD_GIT_TAG_DETAILS
         | METHOD_GIT_HUNK_PREVIEW
         | METHOD_GIT_DISCARD_PREVIEW
         | METHOD_GIT_AMEND_INFO
@@ -1054,6 +1070,10 @@ async fn dispatch(request: RequestEnvelope, state: &ServerState) -> ResponseEnve
         METHOD_GIT_PUSH => git_push(request.id, request.params, state).await,
         METHOD_GIT_BRANCH_LIST => git_branch_list(request.id, request.params, state).await,
         METHOD_GIT_BRANCH_CREATE => git_branch_create(request.id, request.params, state).await,
+        METHOD_GIT_TAG_CREATE => git_tag_create(request.id, request.params, state).await,
+        METHOD_GIT_TAG_DELETE => git_tag_delete(request.id, request.params, state).await,
+        METHOD_GIT_TAG_CHECKOUT | METHOD_GIT_TAG_PUSH | METHOD_GIT_TAG_DETAILS => git_tag_target(request.id, &request.method, request.params, state).await,
+        METHOD_GIT_TAG_APPLY_FETCH => git_tag_apply_fetch(request.id, request.params, state).await,
         METHOD_GIT_BRANCH_SWITCH => git_branch_switch(request.id, request.params, state).await,
         METHOD_GIT_BRANCH_RENAME | METHOD_GIT_BRANCH_DELETE => {
             git_branch_mutation(request.id, &request.method, request.params, state).await
@@ -1761,18 +1781,35 @@ async fn git_commit(request_id: String, params: Value, state: &ServerState) -> R
 }
 
 async fn git_fetch(request_id: String, params: Value, state: &ServerState) -> ResponseEnvelope {
-    git_repository_action(
-        request_id,
-        params,
-        state,
-        "git.fetch",
-        run_fetch,
-        |repository, snapshot| GitFetchResult {
-            repository,
-            snapshot,
-        },
-    )
-    .await
+    let params = match parse_params::<GitRepositoryParams>(params, METHOD_GIT_FETCH) {
+        Ok(params) => params,
+        Err(error) => return ResponseEnvelope::error(request_id, error),
+    };
+    if let Err(error) = validate_repository_id(&params.repository_id) {
+        return ResponseEnvelope::error(request_id, error);
+    }
+    match run_git_action(state, &params.repository_id, run_fetch).await {
+        Ok((repository, snapshot, outcome)) => response_success(
+            request_id,
+            GitFetchResult {
+                repository,
+                snapshot,
+                remote: Some(outcome.remote),
+                tag_conflicts: Some(
+                    outcome
+                        .conflicts
+                        .into_iter()
+                        .map(|conflict| GitTagFetchConflict {
+                            name: conflict.name,
+                            local_object_id: conflict.local_object_id,
+                            remote_object_id: conflict.remote_object_id,
+                        })
+                        .collect(),
+                ),
+            },
+        ),
+        Err(error) => ResponseEnvelope::error(request_id, error),
+    }
 }
 
 async fn git_pull(request_id: String, params: Value, state: &ServerState) -> ResponseEnvelope {
@@ -1791,18 +1828,24 @@ async fn git_pull(request_id: String, params: Value, state: &ServerState) -> Res
 }
 
 async fn git_push(request_id: String, params: Value, state: &ServerState) -> ResponseEnvelope {
-    git_repository_action(
-        request_id,
-        params,
-        state,
-        "git.push",
-        run_push,
-        |repository, snapshot| GitPushResult {
-            repository,
-            snapshot,
-        },
-    )
-    .await
+    let params = match parse_params::<GitRepositoryParams>(params, METHOD_GIT_PUSH) {
+        Ok(params) => params,
+        Err(error) => return ResponseEnvelope::error(request_id, error),
+    };
+    if let Err(error) = validate_repository_id(&params.repository_id) {
+        return ResponseEnvelope::error(request_id, error);
+    }
+    match run_git_action(state, &params.repository_id, run_push).await {
+        Ok((repository, snapshot, outcome)) => response_success(
+            request_id,
+            GitPushResult {
+                repository,
+                snapshot,
+                tag_error: outcome.tag_error,
+            },
+        ),
+        Err(error) => ResponseEnvelope::error(request_id, error),
+    }
 }
 
 async fn git_repository_action<T, F, R>(
@@ -1905,6 +1948,207 @@ async fn git_branch_create(
         Ok((repository, snapshot, _)) => response_success(
             request_id,
             GitBranchCreateResult {
+                repository,
+                snapshot,
+            },
+        ),
+        Err(error) => ResponseEnvelope::error(request_id, error),
+    }
+}
+
+async fn git_tag_create(
+    request_id: String,
+    params: Value,
+    state: &ServerState,
+) -> ResponseEnvelope {
+    let params = match parse_params::<GitTagCreateParams>(params, METHOD_GIT_TAG_CREATE) {
+        Ok(params) => params,
+        Err(error) => return ResponseEnvelope::error(request_id, error),
+    };
+    if let Err(error) = validate_repository_id(&params.repository_id)
+        .and_then(|_| validate_branch_argument(&params.name, "name"))
+        .and_then(|_| validate_object_id(&params.target))
+        .and_then(|_| {
+            if matches!(params.target.len(), 40 | 64) {
+                Ok(())
+            } else {
+                Err(ProtocolError::new(
+                    error_codes::INVALID_PARAMS,
+                    "target must be a full commit object ID",
+                ))
+            }
+        })
+    {
+        return ResponseEnvelope::error(request_id, error);
+    }
+    match run_git_action(state, &params.repository_id, move |root| {
+        run_create_tag(root, &params.name, &params.target)
+    })
+    .await
+    {
+        Ok((repository, snapshot, _)) => response_success(
+            request_id,
+            GitTagCreateResult {
+                repository,
+                snapshot,
+            },
+        ),
+        Err(error) => ResponseEnvelope::error(request_id, error),
+    }
+}
+
+async fn git_tag_delete(
+    request_id: String,
+    params: Value,
+    state: &ServerState,
+) -> ResponseEnvelope {
+    let params = match parse_params::<GitTagDeleteParams>(params, METHOD_GIT_TAG_DELETE) {
+        Ok(params) => params,
+        Err(error) => return ResponseEnvelope::error(request_id, error),
+    };
+    if let Err(error) = validate_repository_id(&params.repository_id)
+        .and_then(|_| validate_branch_argument(&params.name, "name"))
+        .and_then(|_| validate_object_id(&params.expected_object_id))
+        .and_then(|_| {
+            if matches!(params.expected_object_id.len(), 40 | 64)
+                && params.expected_object_id.bytes().any(|b| b != b'0')
+            {
+                Ok(())
+            } else {
+                Err(ProtocolError::new(
+                    error_codes::INVALID_PARAMS,
+                    "expectedObjectId must be a full nonzero object ID",
+                ))
+            }
+        })
+    {
+        return ResponseEnvelope::error(request_id, error);
+    }
+    match run_git_action(state, &params.repository_id, move |root| {
+        run_delete_tag(root, &params.name, &params.expected_object_id)
+    })
+    .await
+    {
+        Ok((repository, snapshot, _)) => response_success(
+            request_id,
+            GitTagDeleteResult {
+                repository,
+                snapshot,
+            },
+        ),
+        Err(error) => ResponseEnvelope::error(request_id, error),
+    }
+}
+
+async fn git_tag_target(
+    request_id: String,
+    method: &str,
+    params: Value,
+    state: &ServerState,
+) -> ResponseEnvelope {
+    let params = match parse_params::<GitTagTargetParams>(params, method) {
+        Ok(params) => params,
+        Err(error) => return ResponseEnvelope::error(request_id, error),
+    };
+    if let Err(error) = validate_repository_id(&params.repository_id)
+        .and_then(|_| validate_branch_argument(&params.name, "name"))
+        .and_then(|_| validate_tag_object_id(&params.expected_object_id))
+    {
+        return ResponseEnvelope::error(request_id, error);
+    }
+    if method == METHOD_GIT_TAG_DETAILS {
+        let repository = match state.repository(&params.repository_id).await {
+            Some(repository) => repository,
+            None => {
+                return ResponseEnvelope::error(
+                    request_id,
+                    repository_not_configured_error(&params.repository_id),
+                )
+            }
+        };
+        return match spawn_blocking(move || {
+            gitgui_core::git::tag_operations::details(
+                &repository.operation_path,
+                &params.name,
+                &params.expected_object_id,
+            )
+        })
+        .await
+        {
+            Ok(Ok(details)) => response_success(
+                request_id,
+                GitTagDetails {
+                    annotated: details.annotated,
+                    message: details.message,
+                    tagger: details.tagger,
+                    timestamp: details.timestamp,
+                    has_signature: details.has_signature,
+                },
+            ),
+            Ok(Err(error)) => ResponseEnvelope::error(request_id, git_operation_error(error)),
+            Err(_) => git_failure(request_id, "Tag details worker failed"),
+        };
+    }
+    let checkout = method == METHOD_GIT_TAG_CHECKOUT;
+    match run_git_action(state, &params.repository_id, move |root| {
+        if checkout {
+            gitgui_core::git::tag_operations::checkout(
+                root,
+                &params.name,
+                &params.expected_object_id,
+            )
+        } else {
+            gitgui_core::git::tag_operations::push_tag(
+                root,
+                &params.name,
+                &params.expected_object_id,
+            )
+        }
+    })
+    .await
+    {
+        Ok((repository, snapshot, _)) => response_success(
+            request_id,
+            GitTagMutationResult {
+                repository,
+                snapshot,
+            },
+        ),
+        Err(error) => ResponseEnvelope::error(request_id, error),
+    }
+}
+
+async fn git_tag_apply_fetch(
+    request_id: String,
+    params: Value,
+    state: &ServerState,
+) -> ResponseEnvelope {
+    let params = match parse_params::<GitTagApplyFetchParams>(params, METHOD_GIT_TAG_APPLY_FETCH) {
+        Ok(params) => params,
+        Err(error) => return ResponseEnvelope::error(request_id, error),
+    };
+    if let Err(error) = validate_repository_id(&params.repository_id) {
+        return ResponseEnvelope::error(request_id, error);
+    }
+    let conflicts = params
+        .conflicts
+        .into_iter()
+        .map(
+            |conflict| gitgui_core::git::tag_operations::TagFetchConflict {
+                name: conflict.name,
+                local_object_id: conflict.local_object_id,
+                remote_object_id: conflict.remote_object_id,
+            },
+        )
+        .collect::<Vec<_>>();
+    match run_git_action(state, &params.repository_id, move |root| {
+        gitgui_core::git::tag_operations::apply_fetched_tags(root, &conflicts)
+    })
+    .await
+    {
+        Ok((repository, snapshot, _)) => response_success(
+            request_id,
+            GitTagMutationResult {
                 repository,
                 snapshot,
             },
@@ -2679,6 +2923,17 @@ fn validate_object_id(hash: &str) -> Result<(), ProtocolError> {
         return Err(ProtocolError::new(
             error_codes::INVALID_PARAMS,
             "commit and parent hashes must be hexadecimal object IDs",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_tag_object_id(hash: &str) -> Result<(), ProtocolError> {
+    validate_object_id(hash)?;
+    if !matches!(hash.len(), 40 | 64) || hash.bytes().all(|byte| byte == b'0') {
+        return Err(ProtocolError::new(
+            error_codes::INVALID_PARAMS,
+            "A full nonzero tag object ID is required",
         ));
     }
     Ok(())
@@ -3684,6 +3939,12 @@ fn implemented_capabilities() -> Vec<String> {
         CAPABILITY_GIT_PUSH,
         CAPABILITY_GIT_BRANCH_LIST,
         CAPABILITY_GIT_BRANCH_CREATE,
+        CAPABILITY_GIT_TAG_CREATE,
+        CAPABILITY_GIT_TAG_DELETE,
+        CAPABILITY_GIT_TAG_CHECKOUT,
+        CAPABILITY_GIT_TAG_PUSH,
+        CAPABILITY_GIT_TAG_DETAILS,
+        CAPABILITY_GIT_TAG_APPLY_FETCH,
         CAPABILITY_GIT_BRANCH_SWITCH,
         CAPABILITY_GIT_BRANCH_RENAME,
         CAPABILITY_GIT_BRANCH_DELETE,
@@ -3920,6 +4181,7 @@ fn protocol_commit_ref(reference: gitgui_core::git::repository::CommitRef) -> Pr
         name: reference.name,
         short_name: reference.short_name,
         target: reference.target,
+        object_id: reference.object_id,
         ref_type: match reference.ref_type {
             gitgui_core::git::repository::CommitRefType::LocalBranch => {
                 ProtocolCommitRefType::LocalBranch

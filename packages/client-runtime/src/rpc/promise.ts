@@ -17,6 +17,10 @@ import type {
   GitAmendParams,
   GitApplyHunksParams,
   GitBranchCreateParams,
+  GitTagCreateParams,
+  GitTagDeleteParams,
+  GitTagTargetParams,
+  GitTagApplyFetchParams,
   GitBranchRenameParams,
   GitBranchDeleteParams,
   GitWorktreeRemoveParams,
@@ -350,6 +354,30 @@ export class GitGuiClient {
       ...params,
       repositoryId: assertRepositoryId(params.repositoryId),
     });
+  }
+
+  createTag(params: GitTagCreateParams) {
+    return this.call("git.tag.create", { ...params, repositoryId: assertRepositoryId(params.repositoryId) });
+  }
+
+  deleteTag(params: GitTagDeleteParams) {
+    return this.call("git.tag.delete", { ...params, repositoryId: assertRepositoryId(params.repositoryId) });
+  }
+
+  checkoutTag(params: GitTagTargetParams) {
+    return this.call("git.tag.checkout", { ...params, repositoryId: assertRepositoryId(params.repositoryId) });
+  }
+
+  pushTag(params: GitTagTargetParams) {
+    return this.call("git.tag.push", { ...params, repositoryId: assertRepositoryId(params.repositoryId) });
+  }
+
+  getTagDetails(params: GitTagTargetParams, signal?: AbortSignal) {
+    return this.call("git.tag.details", { ...params, repositoryId: assertRepositoryId(params.repositoryId) }, signal);
+  }
+
+  applyFetchedTags(params: GitTagApplyFetchParams) {
+    return this.call("git.tag.apply_fetch", { ...params, repositoryId: assertRepositoryId(params.repositoryId) });
   }
 
   switchBranch(params: GitBranchSwitchParams) {

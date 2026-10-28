@@ -91,6 +91,13 @@
         onSelectRef={(ref) => store.selectRef(ref)}
         canRenameBranch={store.canRenameBranch}
         canDeleteBranch={store.canDeleteBranch}
+        canDeleteTag={store.canDeleteTag}
+        canCheckoutTag={store.canCheckoutTag}
+        canPushTag={store.canPushTag}
+        onCheckoutTag={(tag) => store.checkoutTag(tag)}
+        onPushTag={(tag) => store.pushTag(tag)}
+        loadTagDetails={(tag) => store.loadTagDetails(tag)}
+        onDeleteTag={(tag) => store.openDeleteTagDialog(tag)}
         canRemoveWorktree={store.canRemoveWorktree}
         onRemoveWorktree={(worktree, deleteBranch) => store.openRemoveWorktreeDialog(worktree, deleteBranch)}
         onRenameBranch={(ref) => store.openRenameBranchDialog(ref)}
@@ -129,6 +136,13 @@
         onSelectRef={(ref) => store.selectRef(ref)}
         canRenameBranch={store.canRenameBranch}
         canDeleteBranch={store.canDeleteBranch}
+        canDeleteTag={store.canDeleteTag}
+        canCheckoutTag={store.canCheckoutTag}
+        canPushTag={store.canPushTag}
+        onCheckoutTag={(tag) => store.checkoutTag(tag)}
+        onPushTag={(tag) => store.pushTag(tag)}
+        loadTagDetails={(tag) => store.loadTagDetails(tag)}
+        onDeleteTag={(tag) => store.openDeleteTagDialog(tag)}
         canRemoveWorktree={store.canRemoveWorktree}
         onRemoveWorktree={(worktree, deleteBranch) => store.openRemoveWorktreeDialog(worktree, deleteBranch)}
         onRenameBranch={(ref) => store.openRenameBranchDialog(ref)}
@@ -168,6 +182,8 @@
               onSelectCommit={(commit) => store.selectCommit(commit)}
               onCompareCommitToWorkingTree={(commit) => store.compareCommitToWorkingTree(commit)}
               onCreateBranch={(commit) => store.openBranchDialog(commit)}
+              onCreateTag={(commit) => store.openTagDialog(commit)}
+              canCreateTag={store.canCreateTag}
               canRenameBranch={store.canRenameBranch}
               canDeleteBranch={store.canDeleteBranch}
               canRemoveWorktree={store.canRemoveWorktree}
@@ -262,6 +278,13 @@
             onSelectRef={(ref) => store.selectRef(ref)}
             canRenameBranch={store.canRenameBranch}
             canDeleteBranch={store.canDeleteBranch}
+            canDeleteTag={store.canDeleteTag}
+            canCheckoutTag={store.canCheckoutTag}
+            canPushTag={store.canPushTag}
+            onCheckoutTag={(tag) => store.checkoutTag(tag)}
+            onPushTag={(tag) => store.pushTag(tag)}
+            loadTagDetails={(tag) => store.loadTagDetails(tag)}
+            onDeleteTag={(tag) => store.openDeleteTagDialog(tag)}
             canRemoveWorktree={store.canRemoveWorktree}
             onRemoveWorktree={(worktree, deleteBranch) => store.openRemoveWorktreeDialog(worktree, deleteBranch)}
             onRenameBranch={(ref) => store.openRenameBranchDialog(ref)}
@@ -309,6 +332,8 @@
                   onSelectCommit={(commit) => store.selectCommit(commit)}
                   onCompareCommitToWorkingTree={(commit) => store.compareCommitToWorkingTree(commit)}
                   onCreateBranch={(commit) => store.openBranchDialog(commit)}
+                  onCreateTag={(commit) => store.openTagDialog(commit)}
+                  canCreateTag={store.canCreateTag}
                   canRenameBranch={store.canRenameBranch}
                   canDeleteBranch={store.canDeleteBranch}
                   canRemoveWorktree={store.canRemoveWorktree}

@@ -175,6 +175,15 @@ messages, with requests addressed by `id`, `method`, and `params`.
   table and the registry drift apart. So a method, its payload, and its result
   are checked against the server's own definitions, which is what `effect/rpc`
   gives T3 Code.
+- The GitGui-owned `git.tag.create` method in `rpc/protocol.ts` takes a full
+  reviewed commit ID and returns a repository snapshot. Its promise adapter
+  uses the same session call as other Git mutations; no transport change is needed.
+- `git.tag.delete` compares the unpeeled reviewed tag object ID atomically and
+  returns the same snapshot shape. The optional `CommitRef.objectId` is generated
+  from Rust; this remains a GitGui domain contract extension to the vendored table.
+- Tag checkout/push, bounded annotation details, and reviewed fetch replacements
+  extend that same table. Main fetch/push responses add optional conflict/warning
+  fields; no session, reconnect, or transport behavior changes.
 - `rpc/session.ts` multiplexes requests, responses, and events over
   `effect/socket` instead of building an `RpcClient.Protocol`.
 - `rpc/client.ts` exposes one `request` and one `subscribeEvents` instead of a

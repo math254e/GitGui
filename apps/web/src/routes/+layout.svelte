@@ -10,6 +10,9 @@
   } from "$lib/workspace/routes";
   import DiscardChangesDialog from "$lib/components/DiscardChangesDialog.svelte";
   import DeleteBranchDialog from "$lib/components/DeleteBranchDialog.svelte";
+  import DeleteTagDialog from "$lib/components/DeleteTagDialog.svelte";
+  import TagFetchConflictDialog from "$lib/components/TagFetchConflictDialog.svelte";
+  import { tagName } from "$lib/types/tags";
   import RemoveWorktreeDialog from "$lib/components/RemoveWorktreeDialog.svelte";
   import GitActionStatusBar from "$lib/components/GitActionStatusBar.svelte";
   import GitNameDialog from "$lib/components/GitNameDialog.svelte";
@@ -130,6 +133,19 @@
   onConfirm={() => store.confirmDeleteBranch()}
   onCancel={() => { if (!store.gitActionPending) store.deleteBranchDialog = null; }}
 />
+
+<DeleteTagDialog
+  open={store.deleteTagDialog !== null}
+  tagName={store.deleteTagDialog ? tagName(store.deleteTagDialog.tag) : ""}
+  loading={store.gitActionPending}
+  error={store.deleteTagDialog?.error ?? ""}
+  onConfirm={() => store.confirmDeleteTag()}
+  onCancel={() => { if (!store.gitActionPending) store.deleteTagDialog = null; }}
+/>
+
+<TagFetchConflictDialog review={store.tagFetchReview} loading={store.gitActionPending}
+  onToggle={(name, selected) => store.toggleFetchedTag(name, selected)} onConfirm={() => store.confirmFetchedTags()}
+  onCancel={() => { if (!store.gitActionPending) store.tagFetchReview = null; }} />
 
 <RemoveWorktreeDialog
   open={store.removeWorktreeDialog !== null}

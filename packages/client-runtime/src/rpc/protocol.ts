@@ -18,6 +18,12 @@
  * - GitGui-owned branch rename/delete methods use reviewed local ref targets
  *   and return mutation outcomes before the client refreshes repository state.
  * - Reviewed worktree removal also reports branch and catalog cleanup outcomes.
+ * - GitGui-owned lightweight tag creation accepts a full reviewed commit ID
+ *   and returns a snapshot through the ordinary repository mutation contract.
+ * - Reviewed tag deletion compares the unpeeled tag object ID atomically and
+ *   returns a snapshot through that same mutation contract.
+ * - GitGui tag checkout/push, annotation details, and reviewed fetch replacement
+ *   extend the domain table. Main fetch/push include tags in one network call.
  * - Accepted stash feature contracts include selected capture, reviewed actions,
  *   and saved-object reads. The Rust feature list is a subset of its accepted
  *   registry; advertised capabilities still determine server availability.
@@ -34,6 +40,14 @@ import type {
   GitApplyHunksParams,
   GitBranchCreateParams,
   GitBranchCreateResult,
+  GitTagCreateParams,
+  GitTagCreateResult,
+  GitTagDeleteParams,
+  GitTagDeleteResult,
+  GitTagTargetParams,
+  GitTagMutationResult,
+  GitTagApplyFetchParams,
+  GitTagDetails,
   GitBranchRenameParams,
   GitBranchDeleteParams,
   GitWorktreeRemoveParams,
@@ -170,6 +184,12 @@ export interface GitGuiRpcMethods {
     readonly input: GitBranchSwitchParams;
     readonly output: GitBranchSwitchResult;
   };
+  "git.tag.create": { readonly input: GitTagCreateParams; readonly output: GitTagCreateResult };
+  "git.tag.delete": { readonly input: GitTagDeleteParams; readonly output: GitTagDeleteResult };
+  "git.tag.checkout": { readonly input: GitTagTargetParams; readonly output: GitTagMutationResult };
+  "git.tag.push": { readonly input: GitTagTargetParams; readonly output: GitTagMutationResult };
+  "git.tag.details": { readonly input: GitTagTargetParams; readonly output: GitTagDetails };
+  "git.tag.apply_fetch": { readonly input: GitTagApplyFetchParams; readonly output: GitTagMutationResult };
   "git.branch.rename": { readonly input: GitBranchRenameParams; readonly output: null };
   "git.branch.delete": { readonly input: GitBranchDeleteParams; readonly output: null };
   "git.worktree.remove": { readonly input: GitWorktreeRemoveParams; readonly output: GitWorktreeRemoveResult };
@@ -223,6 +243,12 @@ export const WS_METHOD_NAMES = [
   "git.push",
   "git.branch.list",
   "git.branch.create",
+  "git.tag.create",
+  "git.tag.delete",
+  "git.tag.checkout",
+  "git.tag.push",
+  "git.tag.details",
+  "git.tag.apply_fetch",
   "git.branch.switch",
   "git.branch.rename",
   "git.branch.delete",
@@ -282,6 +308,12 @@ export const WS_METHODS = {
   gitPush: "git.push",
   gitBranchList: "git.branch.list",
   gitBranchCreate: "git.branch.create",
+  gitTagCreate: "git.tag.create",
+  gitTagDelete: "git.tag.delete",
+  gitTagCheckout: "git.tag.checkout",
+  gitTagPush: "git.tag.push",
+  gitTagDetails: "git.tag.details",
+  gitTagApplyFetch: "git.tag.apply_fetch",
   gitBranchSwitch: "git.branch.switch",
   gitBranchRename: "git.branch.rename",
   gitBranchDelete: "git.branch.delete",

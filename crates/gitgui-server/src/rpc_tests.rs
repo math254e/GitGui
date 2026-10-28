@@ -12,6 +12,212 @@ pub(super) type Client = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
 pub(super) const GIT_FIXTURE_DEADLINE: Duration = Duration::from_secs(120);
 
 #[tokio::test]
+async fn tag_creation_requires_operate_scope_and_returns_the_reviewed_tag_snapshot() {
+    let root = repository();
+    let target = git(root.path(), &["rev-parse", "HEAD"]);
+    let state = state(root.path());
+    let id = state.repositories.read().await[0].summary.id.clone();
+    let params = json!({"repositoryId": id, "name": "releases/v1.0.0", "target": target});
+    assert!(state
+        .info
+        .capabilities
+        .iter()
+        .any(|value| value == CAPABILITY_GIT_TAG_CREATE));
+    let (mut reader, _, reader_server) =
+        socket(state.clone(), vec![SCOPE_REPOSITORY_READ.into()]).await;
+    send(&mut reader, "denied", METHOD_GIT_TAG_CREATE, params.clone()).await;
+    assert_eq!(
+        receive(&mut reader).await["error"]["code"],
+        error_codes::FORBIDDEN
+    );
+    assert!(git(root.path(), &["tag", "--list"]).is_empty());
+    reader.close(None).await.unwrap();
+    reader_server.abort();
+
+    let (mut client, _, server) = socket(state, vec![SCOPE_REPOSITORY_OPERATE.into()]).await;
+    for target in ["HEAD", &target[..8], "--all"] {
+        send(
+            &mut client,
+            "invalid",
+            METHOD_GIT_TAG_CREATE,
+            json!({"repositoryId": id, "name": "bad", "target": target}),
+        )
+        .await;
+        assert_eq!(
+            receive(&mut client).await["error"]["code"],
+            error_codes::INVALID_PARAMS
+        );
+    }
+    send(&mut client, "create", METHOD_GIT_TAG_CREATE, params.clone()).await;
+    let response = receive(&mut client).await;
+    assert_eq!(response["ok"], true, "{response}");
+    let reference = response["result"]["snapshot"]["refs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["name"] == "refs/tags/releases/v1.0.0")
+        .unwrap();
+    assert_eq!(reference["target"], target);
+    assert_eq!(reference["objectId"], target);
+    assert_eq!(reference["refType"], "tag");
+    send(&mut client, "duplicate", METHOD_GIT_TAG_CREATE, params).await;
+    assert_eq!(receive(&mut client).await["ok"], false);
+    assert_eq!(
+        git(root.path(), &["rev-parse", "refs/tags/releases/v1.0.0"]),
+        target
+    );
+    client.close(None).await.unwrap();
+    server.abort();
+}
+
+#[tokio::test]
+async fn tag_deletion_is_scoped_and_compares_the_unpeeled_reviewed_object() {
+    let root = repository();
+    let head = git(root.path(), &["rev-parse", "HEAD"]);
+    git(root.path(), &["config", "tag.gpgSign", "false"]);
+    git(
+        root.path(),
+        &["tag", "-a", "reviewed", "-m", "first", &head],
+    );
+    git(root.path(), &["branch", "reviewed"]);
+    let reviewed = git(root.path(), &["rev-parse", "refs/tags/reviewed"]);
+    let state = state(root.path());
+    let id = state.repositories.read().await[0].summary.id.clone();
+    assert!(state
+        .info
+        .capabilities
+        .iter()
+        .any(|value| value == CAPABILITY_GIT_TAG_DELETE));
+    let params = json!({"repositoryId": id, "name": "reviewed", "expectedObjectId": reviewed});
+    let (mut reader, _, reader_server) =
+        socket(state.clone(), vec![SCOPE_REPOSITORY_READ.into()]).await;
+    send(
+        &mut reader,
+        "snapshot",
+        METHOD_REPOSITORIES_GET_SNAPSHOT,
+        json!({"repositoryId": id}),
+    )
+    .await;
+    let response = receive(&mut reader).await;
+    let reference = response["result"]["snapshot"]["refs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["name"] == "refs/tags/reviewed")
+        .unwrap();
+    assert_eq!(reference["target"], head);
+    assert_eq!(reference["objectId"], reviewed);
+    send(&mut reader, "denied", METHOD_GIT_TAG_DELETE, params.clone()).await;
+    assert_eq!(
+        receive(&mut reader).await["error"]["code"],
+        error_codes::FORBIDDEN
+    );
+    reader.close(None).await.unwrap();
+    reader_server.abort();
+    let (mut client, _, server) = socket(state, vec![SCOPE_REPOSITORY_OPERATE.into()]).await;
+    send(
+        &mut client,
+        "invalid",
+        METHOD_GIT_TAG_DELETE,
+        json!({"repositoryId": id, "name": "reviewed", "expectedObjectId": "HEAD"}),
+    )
+    .await;
+    assert_eq!(
+        receive(&mut client).await["error"]["code"],
+        error_codes::INVALID_PARAMS
+    );
+    git(
+        root.path(),
+        &["tag", "-f", "-a", "reviewed", "-m", "replacement", &head],
+    );
+    let replacement = git(root.path(), &["rev-parse", "refs/tags/reviewed"]);
+    send(&mut client, "stale", METHOD_GIT_TAG_DELETE, params).await;
+    assert_eq!(receive(&mut client).await["ok"], false);
+    assert_eq!(
+        git(root.path(), &["rev-parse", "refs/tags/reviewed"]),
+        replacement
+    );
+    send(
+        &mut client,
+        "delete",
+        METHOD_GIT_TAG_DELETE,
+        json!({"repositoryId": id, "name": "reviewed", "expectedObjectId": replacement}),
+    )
+    .await;
+    let response = receive(&mut client).await;
+    assert_eq!(response["ok"], true, "{response}");
+    assert!(!response["result"]["snapshot"]["refs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|r| r["name"] == "refs/tags/reviewed"));
+    assert_eq!(
+        git(root.path(), &["rev-parse", "refs/heads/reviewed"]),
+        head
+    );
+    client.close(None).await.unwrap();
+    server.abort();
+}
+
+#[tokio::test]
+async fn tag_checkout_and_details_use_explicit_scopes_and_reviewed_objects() {
+    let root = repository();
+    git(
+        root.path(),
+        &[
+            "-c",
+            "tag.gpgSign=false",
+            "tag",
+            "-a",
+            "release",
+            "-m",
+            "Release annotation",
+        ],
+    );
+    let object = git(root.path(), &["rev-parse", "refs/tags/release"]);
+    let state = state(root.path());
+    let id = state.repositories.read().await[0].summary.id.clone();
+    let params = json!({"repositoryId": id, "name": "release", "expectedObjectId": object});
+    let (mut reader, _, reader_server) =
+        socket(state.clone(), vec![SCOPE_REPOSITORY_READ.into()]).await;
+    for method in [
+        METHOD_GIT_TAG_CHECKOUT,
+        METHOD_GIT_TAG_PUSH,
+        METHOD_GIT_TAG_APPLY_FETCH,
+    ] {
+        send(&mut reader, "denied", method, params.clone()).await;
+        assert_eq!(
+            receive(&mut reader).await["error"]["code"],
+            error_codes::FORBIDDEN
+        );
+    }
+    send(
+        &mut reader,
+        "details",
+        METHOD_GIT_TAG_DETAILS,
+        params.clone(),
+    )
+    .await;
+    let response = receive(&mut reader).await;
+    assert_eq!(response["ok"], true, "{response}");
+    assert_eq!(response["result"]["message"], "Release annotation");
+    assert_eq!(response["result"]["annotated"], true);
+    reader.close(None).await.unwrap();
+    reader_server.abort();
+    let (mut client, _, server) = socket(state, vec![SCOPE_REPOSITORY_OPERATE.into()]).await;
+    send(&mut client, "checkout", METHOD_GIT_TAG_CHECKOUT, params).await;
+    let response = receive(&mut client).await;
+    assert_eq!(response["ok"], true, "{response}");
+    assert!(response["result"]["snapshot"]["status"]["currentBranch"].is_null());
+    assert_eq!(
+        fs::read_to_string(root.path().join("file.txt")).unwrap(),
+        "after\n"
+    );
+    client.close(None).await.unwrap();
+    server.abort();
+}
+
+#[tokio::test]
 async fn worktree_removal_is_scoped_and_cleans_its_catalog_entry() {
     let root = repository();
     // The fixture has a modified tracked file in the main worktree only.

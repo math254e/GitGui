@@ -2,7 +2,7 @@
   import { X } from "@lucide/svelte";
   import { tick } from "svelte";
 
-  export type GitNameDialogKind = "branch" | "renameBranch" | "stash";
+  export type GitNameDialogKind = "branch" | "renameBranch" | "tag" | "stash";
 
   export type GitNameDialogProps = {
     open: boolean;
@@ -34,14 +34,14 @@
 
   let nameInput = $state<HTMLInputElement | null>(null);
   let dialog: HTMLDialogElement;
-  const isBranch = $derived(kind !== "stash");
-  const title = $derived(kind === "renameBranch" ? "Rename branch" : isBranch ? "New branch" : "New stash");
-  const label = $derived(isBranch ? "Branch name" : "Stash message (optional)");
+  const isBranch = $derived(kind === "branch" || kind === "renameBranch");
+  const title = $derived(kind === "renameBranch" ? "Rename branch" : kind === "tag" ? "New tag" : isBranch ? "New branch" : "New stash");
+  const label = $derived(kind === "tag" ? "Tag name" : isBranch ? "Branch name" : "Stash message (optional)");
   const placeholder = $derived(
-    isBranch ? "feature/describe-the-change" : "before upgrading dependencies",
+    kind === "tag" ? "v1.0.0" : isBranch ? "feature/describe-the-change" : "before upgrading dependencies",
   );
   const actionLabel = $derived(
-    kind === "renameBranch" ? "Rename branch" : isBranch ? "Create branch" : "Stash changes",
+    kind === "renameBranch" ? "Rename branch" : kind === "tag" ? "Create tag" : isBranch ? "Create branch" : "Stash changes",
   );
 
   $effect(() => {
@@ -55,7 +55,7 @@
 
   function submit(event: SubmitEvent) {
     event.preventDefault();
-    if (!loading && (isBranch ? value.trim().length > 0 : true)) {
+    if (!loading && (kind === "stash" || value.trim().length > 0)) {
       onSubmit();
     }
   }
@@ -84,7 +84,7 @@
   </header>
 
   <form class="px-4 py-4" onsubmit={submit}>
-    {#if kind === "branch"}
+    {#if kind === "branch" || kind === "tag"}
       <p class="mb-3 flex items-center gap-2 text-xs text-[var(--app-theme-text-secondary)]">From <code title={startPoint}>{startPoint ? startPoint.slice(0, 8) : "HEAD"}</code></p>
     {/if}
     <label class="block text-xs font-medium text-[var(--app-theme-text-secondary)]" for="git-name-dialog-input">
@@ -128,7 +128,7 @@
       <button
         class="inline-flex h-8 items-center justify-center rounded-[2px] border border-[var(--app-theme-accent)] bg-[var(--app-theme-accent-surface)] px-3 text-sm font-medium text-[var(--app-theme-accent-surface-foreground)] transition-colors hover:bg-[var(--app-theme-sidebar-row-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus)] disabled:cursor-not-allowed disabled:opacity-45"
         type="submit"
-        disabled={loading || (isBranch && !value.trim())}
+        disabled={loading || (kind !== "stash" && !value.trim())}
       >
         {loading ? "Working…" : actionLabel}
       </button>

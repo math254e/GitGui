@@ -108,6 +108,14 @@ pub const METHOD_GIT_PUSH: &str = "git.push";
 pub const METHOD_GIT_BRANCH_LIST: &str = "git.branch.list";
 /// Canonical method for creating a local branch.
 pub const METHOD_GIT_BRANCH_CREATE: &str = "git.branch.create";
+/// Create a lightweight local tag at a reviewed commit.
+pub const METHOD_GIT_TAG_CREATE: &str = "git.tag.create";
+/// Delete only the literal tag object reviewed by the client.
+pub const METHOD_GIT_TAG_DELETE: &str = "git.tag.delete";
+pub const METHOD_GIT_TAG_CHECKOUT: &str = "git.tag.checkout";
+pub const METHOD_GIT_TAG_PUSH: &str = "git.tag.push";
+pub const METHOD_GIT_TAG_DETAILS: &str = "git.tag.details";
+pub const METHOD_GIT_TAG_APPLY_FETCH: &str = "git.tag.apply_fetch";
 /// Canonical method for switching the current branch.
 pub const METHOD_GIT_BRANCH_SWITCH: &str = "git.branch.switch";
 /// Canonical method for renaming a reviewed local branch.
@@ -177,6 +185,12 @@ pub const WS_METHOD_NAMES: &[&str] = &[
     METHOD_GIT_PUSH,
     METHOD_GIT_BRANCH_LIST,
     METHOD_GIT_BRANCH_CREATE,
+    METHOD_GIT_TAG_CREATE,
+    METHOD_GIT_TAG_DELETE,
+    METHOD_GIT_TAG_CHECKOUT,
+    METHOD_GIT_TAG_PUSH,
+    METHOD_GIT_TAG_DETAILS,
+    METHOD_GIT_TAG_APPLY_FETCH,
     METHOD_GIT_BRANCH_SWITCH,
     METHOD_GIT_BRANCH_RENAME,
     METHOD_GIT_BRANCH_DELETE,
@@ -276,6 +290,12 @@ pub const CAPABILITY_GIT_PUSH: &str = "git.push";
 pub const CAPABILITY_GIT_BRANCH_LIST: &str = "git.branch.list";
 /// Capability advertised when local branch creation is available.
 pub const CAPABILITY_GIT_BRANCH_CREATE: &str = "git.branch.create";
+pub const CAPABILITY_GIT_TAG_CREATE: &str = "git.tag.create";
+pub const CAPABILITY_GIT_TAG_DELETE: &str = "git.tag.delete";
+pub const CAPABILITY_GIT_TAG_CHECKOUT: &str = "git.tag.checkout";
+pub const CAPABILITY_GIT_TAG_PUSH: &str = "git.tag.push";
+pub const CAPABILITY_GIT_TAG_DETAILS: &str = "git.tag.details";
+pub const CAPABILITY_GIT_TAG_APPLY_FETCH: &str = "git.tag.apply_fetch";
 /// Capability advertised when branch switching is available.
 pub const CAPABILITY_GIT_BRANCH_SWITCH: &str = "git.branch.switch";
 pub const CAPABILITY_GIT_BRANCH_RENAME: &str = "git.branch.rename";
@@ -1056,6 +1076,12 @@ pub struct GitRepositoryParams {
 pub struct GitFetchResult {
     pub repository: RepositorySummary,
     pub snapshot: RepositorySnapshot,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub remote: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub tag_conflicts: Option<Vec<GitTagFetchConflict>>,
 }
 
 /// Result of pulling the current configured branch.
@@ -1072,6 +1098,9 @@ pub struct GitPullResult {
 pub struct GitPushResult {
     pub repository: RepositorySummary,
     pub snapshot: RepositorySnapshot,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub tag_error: Option<String>,
 }
 
 /// Parameters for listing local branches.
@@ -1120,6 +1149,80 @@ pub struct GitBranchCreateParams {
 pub struct GitBranchCreateResult {
     pub repository: RepositorySummary,
     pub snapshot: RepositorySnapshot,
+}
+
+/// Create a lightweight tag without changing HEAD or replacing an existing tag.
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GitTagCreateParams {
+    pub repository_id: String,
+    pub name: String,
+    /// Full commit object ID captured when opening the graph action.
+    pub target: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GitTagCreateResult {
+    pub repository: RepositorySummary,
+    pub snapshot: RepositorySnapshot,
+}
+
+/// Delete a local tag only if its unpeeled object ID still matches the review.
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GitTagDeleteParams {
+    pub repository_id: String,
+    pub name: String,
+    pub expected_object_id: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GitTagDeleteResult {
+    pub repository: RepositorySummary,
+    pub snapshot: RepositorySnapshot,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GitTagTargetParams {
+    pub repository_id: String,
+    pub name: String,
+    pub expected_object_id: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GitTagMutationResult {
+    pub repository: RepositorySummary,
+    pub snapshot: RepositorySnapshot,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GitTagFetchConflict {
+    pub name: String,
+    pub local_object_id: String,
+    pub remote_object_id: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GitTagApplyFetchParams {
+    pub repository_id: String,
+    pub conflicts: Vec<GitTagFetchConflict>,
+}
+
+/// Annotation metadata for one reviewed tag. Signatures are detected, not verified.
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GitTagDetails {
+    pub annotated: bool,
+    pub message: Option<String>,
+    pub tagger: Option<String>,
+    pub timestamp: Option<i64>,
+    pub has_signature: bool,
 }
 
 /// Parameters for switching to a local branch.
@@ -1630,6 +1733,10 @@ pub struct CommitRef {
     pub name: String,
     pub short_name: String,
     pub target: String,
+    /// Literal tag object ID before peeling. Omitted for branches and older servers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub object_id: Option<String>,
     pub ref_type: CommitRefType,
 }
 

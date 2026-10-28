@@ -40,6 +40,12 @@ export const WS_METHOD_NAMES = [
   "git.push",
   "git.branch.list",
   "git.branch.create",
+  "git.tag.create",
+  "git.tag.delete",
+  "git.tag.checkout",
+  "git.tag.push",
+  "git.tag.details",
+  "git.tag.apply_fetch",
   "git.branch.switch",
   "git.branch.rename",
   "git.branch.delete",
@@ -603,11 +609,11 @@ export type GitRepositoryParams = {
  */
 repositoryId: string, };
 
-export type GitFetchResult = { repository: RepositorySummary, snapshot: RepositorySnapshot, };
+export type GitFetchResult = { repository: RepositorySummary, snapshot: RepositorySnapshot, remote?: string, tagConflicts?: Array<GitTagFetchConflict>, };
 
 export type GitPullResult = { repository: RepositorySummary, snapshot: RepositorySnapshot, };
 
-export type GitPushResult = { repository: RepositorySummary, snapshot: RepositorySnapshot, };
+export type GitPushResult = { repository: RepositorySummary, snapshot: RepositorySnapshot, tagError?: string, };
 
 export type GitBranchListParams = { repositoryId: string, };
 
@@ -630,6 +636,28 @@ startPoint?: string,
 checkout: boolean, };
 
 export type GitBranchCreateResult = { repository: RepositorySummary, snapshot: RepositorySnapshot, };
+
+export type GitTagCreateParams = { repositoryId: string, name: string,
+/**
+ * Full commit object ID captured when opening the graph action.
+ */
+target: string, };
+
+export type GitTagCreateResult = { repository: RepositorySummary, snapshot: RepositorySnapshot, };
+
+export type GitTagDeleteParams = { repositoryId: string, name: string, expectedObjectId: string, };
+
+export type GitTagDeleteResult = { repository: RepositorySummary, snapshot: RepositorySnapshot, };
+
+export type GitTagTargetParams = { repositoryId: string, name: string, expectedObjectId: string, };
+
+export type GitTagMutationResult = { repository: RepositorySummary, snapshot: RepositorySnapshot, };
+
+export type GitTagFetchConflict = { name: string, localObjectId: string, remoteObjectId: string, };
+
+export type GitTagApplyFetchParams = { repositoryId: string, conflicts: Array<GitTagFetchConflict>, };
+
+export type GitTagDetails = { annotated: boolean, message: string | null, tagger: string | null, timestamp: number | null, hasSignature: boolean, };
 
 export type GitBranchSwitchParams = { repositoryId: string, name: string,
 /**
@@ -940,7 +968,11 @@ export type GraphEdge = { from: string, to: string, edgeType: GraphEdgeType, };
 
 export type GraphEdgeType = "normal" | "merge";
 
-export type CommitRef = { name: string, shortName: string, target: string, refType: CommitRefType, };
+export type CommitRef = { name: string, shortName: string, target: string,
+/**
+ * Literal tag object ID before peeling. Omitted for branches and older servers.
+ */
+objectId?: string, refType: CommitRefType, };
 
 export type CommitRefType = "localBranch" | "remoteBranch" | "tag";
 

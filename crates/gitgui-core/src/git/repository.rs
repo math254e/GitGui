@@ -103,6 +103,9 @@ pub struct CommitRef {
     pub name: String,
     pub short_name: String,
     pub target: String,
+    /// Literal tag object ID before peeling, used to review destructive actions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub object_id: Option<String>,
     pub ref_type: CommitRefType,
 }
 
@@ -179,9 +182,8 @@ fn load_repository_impl(path: &str, display: bool) -> Result<RepositorySnapshot,
             let target = if history_hashes.contains(reference.target.as_str()) {
                 reference.target.clone()
             } else {
-                // Ref metadata peels only one tag layer. Ordinary tags may
-                // be nested; peel their literal target fully. Trees/blobs are
-                // valid tag targets, but contribute no commit history roots.
+                // Trees/blobs are valid tag targets, but contribute no commit
+                // history roots. Check the literal object's fully peeled type.
                 // Saved stash objects themselves are never peeled this way.
                 let raw = super::stash::read_git(
                     &info.root,
@@ -821,7 +823,7 @@ fn load_refs(root: &Path) -> Result<Vec<CommitRef>, GitError> {
     let output = GitCommand::run(
         &[
             "for-each-ref",
-            "--format=%(refname)%09%(refname:short)%09%(objectname)%09%(*objectname)",
+            "--format=%(refname)%09%(refname:short)%09%(objectname)%09%(*objectname)%09%(*objecttype)",
             "refs/heads",
             "refs/remotes",
             "refs/tags",
@@ -829,7 +831,48 @@ fn load_refs(root: &Path) -> Result<Vec<CommitRef>, GitError> {
         Some(root),
     )?;
 
-    Ok(output.lines().filter_map(parse_commit_ref).collect())
+    let mut refs = Vec::new();
+    let mut nested = Vec::new();
+    for line in output.lines() {
+        if let Some(reference) = parse_commit_ref(line) {
+            if reference.ref_type == CommitRefType::Tag && line.split('\t').nth(4) == Some("tag") {
+                nested.push(refs.len());
+            }
+            refs.push(reference);
+        }
+    }
+    if !nested.is_empty() {
+        // for-each-ref peels one layer. Fully peel nested tags together so even
+        // a large tag catalog never launches one Git process per tag.
+        let targets = nested
+            .iter()
+            .map(|&index| format!("{}^{{}}\n", refs[index].target))
+            .collect::<String>();
+        let peeled = GitCommand::run_with_stdin(
+            &[
+                "--no-replace-objects",
+                "cat-file",
+                "--batch-check=%(objectname) %(objecttype)",
+            ],
+            Some(root),
+            targets.as_bytes(),
+        )?;
+        let lines = peeled.lines().collect::<Vec<_>>();
+        if lines.len() != nested.len() {
+            return Err(content_error("Malformed nested tag targets"));
+        }
+        for (index, line) in nested.into_iter().zip(lines) {
+            let fields = line.split_whitespace().collect::<Vec<_>>();
+            if fields.len() != 2
+                || !super::stash::is_oid(fields[0])
+                || !matches!(fields[1], "commit" | "tree" | "blob")
+            {
+                return Err(content_error("Invalid nested tag target"));
+            }
+            refs[index].target = fields[0].to_owned();
+        }
+    }
+    Ok(refs)
 }
 
 fn load_worktrees(root: &Path) -> Result<Vec<WorktreeInfo>, GitError> {
@@ -938,6 +981,7 @@ fn parse_commit_ref(line: &str) -> Option<CommitRef> {
         name: name.to_string(),
         short_name: short_name.to_string(),
         target: target.to_string(),
+        object_id: (ref_type == CommitRefType::Tag).then(|| object_name.to_string()),
         ref_type,
     })
 }
@@ -1263,6 +1307,18 @@ mod tests {
             root,
             &["tag", "-a", "annotated", "-m", "release", &annotated_tag],
         );
+        run_test_git(
+            root,
+            &[
+                "tag",
+                "-a",
+                "nested",
+                "-m",
+                "nested release",
+                "refs/tags/annotated",
+            ],
+        );
+        run_test_git(root, &["tag", "tree-tag", &tree]);
 
         for name in [
             "refs/t3/checkpoints/test/turn/0",
@@ -1291,6 +1347,17 @@ mod tests {
         );
 
         let snapshot = load_repository(root.to_str().unwrap()).unwrap();
+        for name in ["refs/tags/annotated", "refs/tags/nested"] {
+            assert_eq!(
+                snapshot
+                    .refs
+                    .iter()
+                    .find(|reference| reference.name == name)
+                    .unwrap()
+                    .target,
+                annotated_tag
+            );
+        }
         let actual: HashSet<String> = snapshot
             .commits
             .iter()
@@ -1559,6 +1626,7 @@ mod tests {
             parse_commit_ref("refs/tags/v1.0.0\tv1.0.0\ttag-object\tcommit-object").unwrap();
 
         assert_eq!(parsed.target, "commit-object");
+        assert_eq!(parsed.object_id.as_deref(), Some("tag-object"));
         assert_eq!(parsed.ref_type, CommitRefType::Tag);
     }
 

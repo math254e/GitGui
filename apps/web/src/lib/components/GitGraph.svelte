@@ -1,10 +1,12 @@
 <script lang="ts">
-  import { Cloud, Monitor } from "@lucide/svelte";
+  import { Cloud, Monitor, Tag } from "@lucide/svelte";
   import { onDestroy, tick, untrack } from "svelte";
   import { dismissContextMenu, showContextMenu, type ContextMenuItem } from "$lib/contextMenu";
   import { branchMenuItems } from "$lib/workspace/branch-menu";
   import { GraphRenderIndex, visibleRowRange, captureHistoryAnchor, restoreHistoryAnchor } from "$lib/git-graph/viewport";
   import { drawGitGraphCanvas } from "$lib/git-graph/canvas-renderer";
+  import { buildRefBadges } from "$lib/git-graph/ref-badges";
+  import { tagName } from "$lib/types/tags";
   import { APP_THEME_VARIABLES, GRAPH_THEME_COLOR_ROLES } from "$lib/theme/types";
   import type { CommitInfo, CommitRef, GraphCommit, RepositorySnapshot, StashInfo, WorktreeInfo } from "$lib/types/repository";
 
@@ -44,6 +46,8 @@
     onSelectCommit: (commit: CommitInfo) => void;
     onCompareCommitToWorkingTree: (commit: CommitInfo) => void;
     onCreateBranch?: (commit: CommitInfo) => void;
+    onCreateTag?: (commit: CommitInfo) => void;
+    canCreateTag?: boolean;
     onRenameBranch?: (branch: CommitRef) => void;
     onDeleteBranch?: (branch: CommitRef) => void;
     canRenameBranch?: boolean;
@@ -76,6 +80,8 @@
     onSelectCommit,
     onCompareCommitToWorkingTree,
     onCreateBranch,
+    onCreateTag,
+    canCreateTag = false,
     onRenameBranch,
     onDeleteBranch,
     canRenameBranch = false,
@@ -86,7 +92,7 @@
     onRemoveWorktree,
   }: Props = $props();
   let columns = $state<HistoryColumn[]>([
-    { id: "branch", label: "Branch", width: 118, visible: true },
+    { id: "branch", label: "Refs", width: 118, visible: true },
     { id: "graph", label: "Graph", width: 92, visible: true },
     { id: "message", label: "Message", width: 520, visible: true },
   ]);
@@ -166,7 +172,8 @@
       checkedOut: snapshot?.status.currentBranch === branch.shortName || (snapshot?.worktrees.some((worktree) => worktree.branch === branch.shortName) ?? false),
     });
     const items: ContextMenuItem[] = [
-      { id: "create", label: "Create branch here…", icon: "git-branch", disabled: pending || !onCreateBranch },
+      { id: "create", label: "Branch...", icon: "git-branch", disabled: pending || !onCreateBranch },
+      { id: "createTag", label: "Tag...", icon: "tag", disabled: pending || !canCreateTag || !onCreateTag },
       { id: "compare", label: "Compare to working tree", icon: "git-branch" },
     ];
     if (clickedBranch) {
@@ -189,6 +196,7 @@
         onCompareCommitToWorkingTree(commit);
       }
       if (selected === "create") onCreateBranch?.(commit);
+      if (selected === "createTag") onCreateTag?.(commit);
       for (const branch of branches) {
         if (selected === `rename:${branch.name}`) onRenameBranch?.(branch);
         if (selected === `delete:${branch.name}`) onDeleteBranch?.(branch);
@@ -341,6 +349,7 @@
     visibleColumns.reduce((total, column) => total + renderedColumnWidth(column), 0),
   );
   const refsByTarget = $derived(groupRefsByTarget(historySnapshot?.refs ?? []));
+  const refBadgesByTarget = $derived(buildRefBadges(refsByTarget));
   const branchRefByFirstParentCommit = $derived(groupBranchRefByFirstParentCommit(historySnapshot));
   const branchRefByLineCommit = $derived(groupBranchRefByLineCommit(historySnapshot));
   const branchRefByLaneCommit = $derived(groupBranchRefByLaneCommit(historySnapshot, graphCommitByHash, refsByTarget));
@@ -961,6 +970,7 @@
   }
 
   function displayRefName(ref: CommitRef) {
+    if (ref.refType === "tag") return tagName(ref);
     if (ref.refType !== "remoteBranch") {
       return ref.shortName;
     }
@@ -1129,6 +1139,7 @@
             {@const stash = row.stash}
             {@const graphCommit = row.graphCommit}
             {@const commitRefs = refsByTarget.get(commit.hash) ?? []}
+            {@const refBadges = refBadgesByTarget.get(commit.hash)}
             {@const ghostRef = branchRefByLineCommit.get(commit.hash) ?? nearestDescendantRefs.get(commit.hash) ?? branchRefByMergeTargetCommit.get(commit.hash) ?? branchRefByLaneCommit.get(commit.hash) ?? branchRefByFirstParentCommit.get(commit.hash)}
             <li aria-setsize={graphRows.length + Number(hasChanges)} aria-posinset={rowRange.start + index + Number(hasChanges) + 1}>
               <button
@@ -1155,9 +1166,11 @@
                   }`}
                 >
                     {#if !stash}
-                      {#each commitRefs as ref (refKey(ref))}
+                      {#each refBadges?.refs ?? [] as ref (refKey(ref))}
                         <span
                           data-local-branch={ref.refType === "localBranch" ? ref.name : undefined}
+                          data-tag={ref.refType === "tag" ? ref.name : undefined}
+                          title={ref.refType === "tag" ? `Tag: ${displayRefName(ref)}` : ref.name}
                           class="relative z-30 flex max-w-full items-center gap-0.5 rounded-[2px] border px-0.5 py-0 text-[10px] font-semibold leading-3.5 hover:z-[100] hover:max-w-none hover:whitespace-nowrap"
                           style={refBadgeStyle(ref.refType, graphCommit)}
                         >
@@ -1165,10 +1178,16 @@
                             <Cloud class="h-2.5 w-2.5 shrink-0" size={10} strokeWidth={2.4} />
                           {:else if ref.refType === "localBranch"}
                             <Monitor class="h-2.5 w-2.5 shrink-0" size={10} strokeWidth={2.4} />
+                          {:else}
+                            <Tag class="h-2.5 w-2.5 shrink-0" size={10} strokeWidth={2.4} />
                           {/if}
                           <span class="truncate">{displayRefName(ref)}</span>
                         </span>
                       {/each}
+                      {#if refBadges?.additionalTags}
+                        <span class="shrink-0 rounded-[2px] border border-[var(--app-theme-border)] px-0.5 text-[10px] text-[var(--app-theme-text-muted)]"
+                          title={`${refBadges.additionalTags} more tags. Browse them in the Tags sidebar.`}>+{refBadges.additionalTags} tags</span>
+                      {/if}
                     {/if}
                     {#if !stash && !commitRefs.length && (hoveredRowHash === commit.hash || contextMenuTarget?.hash === commit.hash || selectedCommit?.hash === commit.hash)}
                       {#if ghostRef}

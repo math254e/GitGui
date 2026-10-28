@@ -8,6 +8,9 @@ pub mod git {
     pub mod graph;
     pub mod hunk_cache;
     pub mod operations;
+    pub mod tag_operations;
+    #[cfg(test)]
+    mod tag_workflows_tests;
     pub mod stash_actions;
     pub mod repository;
     pub mod stash_selected;

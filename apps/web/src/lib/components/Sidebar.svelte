@@ -2,7 +2,10 @@
   import BranchTree from "$lib/components/BranchTree.svelte";
   import FileTreeChevron from "$lib/components/FileTreeChevron.svelte";
   import WorktreeTree from "$lib/components/WorktreeTree.svelte";
+  import TagTree from "$lib/components/TagTree.svelte";
+  import { tagName } from "$lib/types/tags";
   import type { CommitInfo, CommitRef, RepositorySnapshot, StashInfo, WorktreeInfo } from "$lib/types/repository";
+  import type { GitTagDetails } from "@gitgui/contracts";
 
   import StashTree from "./StashTree.svelte";
   import { unsupportedStashActions, type StashCapabilities } from "$lib/workspace/stash-menu";
@@ -26,6 +29,13 @@
     canDeleteBranch?: boolean;
     onRenameBranch?: (branch: CommitRef) => void;
     onDeleteBranch?: (branch: CommitRef) => void;
+    canDeleteTag?: boolean;
+    onDeleteTag?: (tag: CommitRef) => void;
+    canCheckoutTag?: boolean;
+    canPushTag?: boolean;
+    onCheckoutTag?: (tag: CommitRef) => void;
+    onPushTag?: (tag: CommitRef) => void;
+    loadTagDetails?: (tag: CommitRef) => Promise<GitTagDetails>;
     canRemoveWorktree?: boolean;
     onRemoveWorktree?: (worktree: WorktreeInfo, deleteBranch: boolean) => void;
     onRenameWorktreeBranch?: (worktree: WorktreeInfo) => void;
@@ -34,6 +44,7 @@
   type SidebarSections = {
     LocalBranches: boolean;
     RemoteBranches: boolean;
+    Tags: boolean;
     Worktrees: boolean;
     Stashes: boolean;
   };
@@ -42,6 +53,7 @@
   const defaultOpen: SidebarSections = {
     LocalBranches: true,
     RemoteBranches: true,
+    Tags: true,
     Worktrees: true,
     Stashes: false,
   };
@@ -60,6 +72,9 @@
     canDeleteBranch = false,
     onRenameBranch,
     onDeleteBranch,
+    canDeleteTag = false,
+    onDeleteTag,
+    canCheckoutTag = false, canPushTag = false, onCheckoutTag, onPushTag, loadTagDetails,
     canRemoveWorktree = false,
     onRemoveWorktree,
     onRenameWorktreeBranch,
@@ -70,6 +85,13 @@
 
   const localBranches = $derived(snapshot?.refs.filter((ref) => ref.refType === "localBranch") ?? []);
   const remoteBranches = $derived(snapshot?.refs.filter((ref) => ref.refType === "remoteBranch") ?? []);
+  const tagCollator = new Intl.Collator(undefined, { numeric: true });
+  const repositoryRefs = $derived(snapshot?.refs ?? []);
+  const repositoryCommits = $derived(snapshot?.commits ?? []);
+  const tags = $derived(repositoryRefs.filter((ref) => ref.refType === "tag")
+    .sort((a, b) => tagCollator.compare(tagName(a), tagName(b))));
+  const commitHashes = $derived(new Set(repositoryCommits.map((commit) => commit.hash)));
+  const commitsByHash = $derived(new Map(repositoryCommits.map((commit) => [commit.hash, commit])));
   const checkedOutBranches = $derived(new Set(snapshot?.worktrees.flatMap((worktree) => worktree.branch ? [worktree.branch] : []) ?? []));
 
   function toggle(section: keyof typeof open) {
@@ -112,6 +134,7 @@
       return {
         LocalBranches: typeof value.LocalBranches === "boolean" ? value.LocalBranches : fallback.LocalBranches,
         RemoteBranches: typeof value.RemoteBranches === "boolean" ? value.RemoteBranches : fallback.RemoteBranches,
+        Tags: typeof value.Tags === "boolean" ? value.Tags : fallback.Tags,
         Worktrees: typeof value.Worktrees === "boolean" ? value.Worktrees : fallback.Worktrees,
         Stashes: typeof value.Stashes === "boolean" ? value.Stashes : fallback.Stashes,
       };
@@ -197,6 +220,25 @@
             />
           {:else}
             <p class="px-2 py-1 text-sm text-[var(--app-theme-text-subtle)]">No remote branches.</p>
+          {/if}
+        </div>
+      {/if}
+    </section>
+
+    <section class={`flex min-h-0 flex-col border-b border-[var(--app-theme-sidebar-border)] py-2 last:border-b-0 ${open.Tags ? 'flex-1' : 'flex-none'}`}>
+      <button type="button" onclick={() => toggle("Tags")} aria-expanded={open.Tags} aria-controls="gitgui-tags"
+        class="group mb-1 inline-flex items-center gap-1 pl-1.5 text-xs font-bold uppercase text-[var(--app-theme-sidebar-muted-foreground)] transition-colors hover:text-[var(--app-theme-accent-surface-foreground)]">
+        <FileTreeChevron expanded={open.Tags} />
+        <span>Tags {snapshot ? `(${tags.length})` : ""}</span>
+      </button>
+      {#if open.Tags}
+        <div id="gitgui-tags" class="min-h-0 flex-1 overflow-hidden">
+          {#if tags.length}
+            <TagTree {tags} {commitHashes} {visibleRefKeys} contextKey={stateKey}
+              selectedCommitHash={selectedCommit?.hash ?? null} onSelectRef={handleSelectRef} {onToggleRefs} {canDeleteTag} {onDeleteTag}
+              {canCheckoutTag} {canPushTag} {onCheckoutTag} {onPushTag} {commitsByHash} {loadTagDetails} />
+          {:else}
+            <p class="px-2 py-1 text-sm text-[var(--app-theme-text-subtle)]">No tags.</p>
           {/if}
         </div>
       {/if}

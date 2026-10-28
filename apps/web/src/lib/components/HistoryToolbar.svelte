@@ -52,7 +52,7 @@
       aria-busy={pendingKind === "fetch"}
       class="group inline-flex h-11 min-w-14 shrink-0 flex-col items-center justify-center gap-0.5 px-2 py-1 text-[11px] font-semibold leading-4 text-[var(--app-theme-toolbar-foreground)] transition-colors hover:bg-[var(--app-theme-toolbar-control-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus)] disabled:cursor-not-allowed disabled:opacity-45"
       disabled={actionsDisabled}
-      title="Fetch from remote"
+      title="Fetch branches and tags from remote"
       type="button"
       onclick={onFetch}
     >
@@ -86,7 +86,7 @@
       aria-busy={pendingKind === "push"}
       class="group inline-flex h-11 min-w-14 shrink-0 flex-col items-center justify-center gap-0.5 px-2 py-1 text-[11px] font-semibold leading-4 text-[var(--app-theme-toolbar-foreground)] transition-colors hover:bg-[var(--app-theme-toolbar-control-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus)] disabled:cursor-not-allowed disabled:opacity-45"
       disabled={actionsDisabled}
-      title="Push to remote"
+      title="Push branch updates and tags to remote"
       type="button"
       onclick={onPush}
     >

@@ -26,6 +26,9 @@ import type {
   GitDiscardResult,
   GitWorktreeRemoveResult,
   RepositorySummary,
+  GitTagDetails,
+  GitFetchResult,
+  GitPushResult,
 } from "@gitgui/contracts";
 import { type ClientWorkspace, type ClientWorkspaceState } from "$lib/client-runtime";
 import { reconcileWorkingTreeFile } from "$lib/client-runtime/file-selection";
@@ -33,6 +36,9 @@ import { readDesktopBridge } from "$lib/connection/platform";
 import type { WebApplicationRuntime, WebApplicationRuntimeState } from "$lib/connection/runtime";
 import { readBranchSwitchMergePreference, resolveProjectsLocation } from "$lib/preferences";
 import { graphRefKey, isCurrentBranchRef } from "$lib/types/branch-visibility";
+import { tagName, tagNameError } from "$lib/types/tags";
+import { graphTargets } from "$lib/git-graph/targets";
+import { parseTagConflicts, type TagFetchReview } from "./tag-sync";
 import type { CommitFile, CommitInfo, CommitRef, RepositorySnapshot, StashInfo, WorktreeInfo } from "$lib/types/repository";
 import { removableWorktree } from "./worktree-menu";
 import { captureStashActionContext, reconcileSelectedStash } from "./stash-selection";
@@ -79,6 +85,9 @@ const clamp = (value: number, min: number, max: number) =>
   Math.min(max, Math.max(min, Math.round(value)));
 
 export class WorkspaceStore {
+  tagFetchReview = $state<TagFetchReview | null>(null);
+  private readonly tagDetailsCache = new Map<string, Promise<GitTagDetails>>();
+  private tagDetailsEnvironment: string | null = null;
   /* ---------------------------------------------------------------------- */
   /* Connection runtime projection                                            */
   /* ---------------------------------------------------------------------- */
@@ -150,7 +159,7 @@ export class WorkspaceStore {
   stashReview = $state<StashDialog | null>(null);
   repositoryPathValue = $state("");
   repositoryPathError = $state("");
-  gitNameDialogKind = $state<"branch" | "renameBranch" | "stash" | null>(null);
+  gitNameDialogKind = $state<"branch" | "renameBranch" | "tag" | "stash" | null>(null);
   gitNameDialogValue = $state("");
   gitNameDialogError = $state("");
   gitNameDialogCheckout = $state(true);
@@ -165,6 +174,12 @@ export class WorkspaceStore {
     environmentId: string;
     branch: CommitRef;
     force: boolean;
+    error: string;
+  } | null>(null);
+  deleteTagDialog = $state<{
+    repositoryId: string;
+    environmentId: string;
+    tag: CommitRef;
     error: string;
   } | null>(null);
   removeWorktreeDialog = $state<{
@@ -205,9 +220,17 @@ export class WorkspaceStore {
     this.openRepos.find((repo) => repo.id === this.activeRepositoryId) ?? null,
   );
   snapshot = $derived(this.activeRepository?.snapshot ?? null);
+  private graphSourceRefs = $derived(this.snapshot?.refs ?? []);
+  private graphSourceCommits = $derived(this.snapshot?.commits ?? []);
+  private graphCurrentBranch = $derived(this.snapshot?.status.currentBranch);
+  private graphHeadOid = $derived(this.snapshot?.status.headOid);
   gitActionPending = $derived(this.gitAction !== null);
   canRenameBranch = $derived(!this.gitActionPending && (this.client?.serverWelcome.capabilities.includes("git.branch.rename") ?? false));
   canDeleteBranch = $derived(!this.gitActionPending && (this.client?.serverWelcome.capabilities.includes("git.branch.delete") ?? false));
+  canCreateTag = $derived(!this.gitActionPending && (this.client?.serverWelcome.capabilities.includes("git.tag.create") ?? false));
+  canDeleteTag = $derived(!this.gitActionPending && (this.client?.serverWelcome.capabilities.includes("git.tag.delete") ?? false));
+  canCheckoutTag = $derived(!this.gitActionPending && (this.client?.serverWelcome.capabilities.includes("git.tag.checkout") ?? false));
+  canPushTag = $derived(!this.gitActionPending && (this.client?.serverWelcome.capabilities.includes("git.tag.push") ?? false));
   canRemoveWorktree = $derived(!this.gitActionPending && (this.client?.serverWelcome.capabilities.includes("git.worktree.remove") ?? false));
   stashCapabilities = $derived({
     selected: this.supportsStash("selected"), apply: this.supportsStash("apply"),
@@ -248,20 +271,22 @@ export class WorkspaceStore {
       (this.sidebarStateKey !== null && this.loadedBranchVisibilityKey === this.sidebarStateKey),
   );
   visibleGraphRefs = $derived(
-    (this.snapshot?.refs ?? []).filter(
+    this.graphSourceRefs.filter(
       (ref) =>
-        ref.refType === "tag" ||
-        isCurrentBranchRef(ref, this.snapshot?.status.currentBranch) ||
+        isCurrentBranchRef(ref, this.graphCurrentBranch) ||
         !this.hiddenGraphRefKeys.has(graphRefKey(ref)),
     ),
   );
   visibleGraphRefKeys = $derived(new Set(this.visibleGraphRefs.map((ref) => graphRefKey(ref))));
-  graphTargetCommitHashes = $derived([
-    ...new Set([
-      ...(this.snapshot?.status.headOid ? [this.snapshot.status.headOid] : []),
+  graphHasHiddenRefs = $derived(
+    this.graphSourceRefs.some((ref) =>
+      !isCurrentBranchRef(ref, this.graphCurrentBranch) && this.hiddenGraphRefKeys.has(graphRefKey(ref)),
+    ),
+  );
+  graphTargetCommitHashes = $derived(this.graphHasHiddenRefs ? graphTargets(this.graphSourceCommits, [
+      ...(this.graphHeadOid ? [this.graphHeadOid] : []),
       ...this.visibleGraphRefs.map((ref) => ref.target),
-    ]),
-  ]);
+  ]) : []);
   graphTargetKey = $derived(
     this.activeRepositoryId && this.snapshot
       ? `${this.activeRepositoryId}\0${this.visibleGraphRefs
@@ -272,30 +297,17 @@ export class WorkspaceStore {
   filteredGraphView = $derived(
     this.activeRepositoryId ? this.filteredGraphViews.get(this.activeRepositoryId) ?? null : null,
   );
-  graphHasHiddenRefs = $derived(
-    Boolean(
-      this.snapshot?.refs.some(
-        (ref) =>
-          ref.refType !== "tag" &&
-          !isCurrentBranchRef(ref, this.snapshot?.status.currentBranch) &&
-          this.hiddenGraphRefKeys.has(graphRefKey(ref)),
-      ),
-    ),
-  );
   graphSnapshot = $derived(
     !this.snapshot || !this.graphVisibilityReady
       ? null
-      : this.filteredGraphView?.key === this.graphTargetKey ||
-          (this.filteredGraphView && this.graphHasHiddenRefs)
-        ? {
-            ...this.snapshot,
-            commits: this.filteredGraphView.commits,
-            graph: this.filteredGraphView.graph,
-            refs: this.filteredGraphView.refs,
-          }
-        : this.graphHasHiddenRefs
-          ? null
-          : this.snapshot,
+      : {
+          ...this.snapshot,
+          ...(this.filteredGraphView && this.graphHasHiddenRefs && this.filteredGraphView.sourceGraph === this.snapshot.graph
+            ? { commits: this.filteredGraphView.commits, graph: this.filteredGraphView.graph }
+            : {}),
+          // Badges update immediately while the server prepares filtered lanes.
+          refs: this.graphHasHiddenRefs ? this.visibleGraphRefs : this.snapshot.refs,
+        },
   );
 
   selectedGraphItem = $derived(this.activeRepository?.selectedGraphItem ?? null);
@@ -460,6 +472,14 @@ export class WorkspaceStore {
       if (branchDialog && (branchDialog.repositoryId !== this.activeRepositoryId || branchDialog.environmentId !== this.workspaceState?.environmentId)) {
         this.deleteBranchDialog = null;
       }
+      const tagDialog = this.deleteTagDialog;
+      if (tagDialog && (tagDialog.repositoryId !== this.activeRepositoryId || tagDialog.environmentId !== this.workspaceState?.environmentId)) {
+        this.deleteTagDialog = null;
+      }
+      const fetchReview = this.tagFetchReview;
+      if (fetchReview && (fetchReview.repositoryId !== this.activeRepositoryId || fetchReview.environmentId !== this.workspaceState?.environmentId)) this.tagFetchReview = null;
+      const detailsEnvironment = this.workspaceState?.environmentId ?? null;
+      if (detailsEnvironment !== this.tagDetailsEnvironment) { this.tagDetailsCache.clear(); this.tagDetailsEnvironment = detailsEnvironment; }
       const worktreeDialog = this.removeWorktreeDialog;
       if (worktreeDialog && (worktreeDialog.repositoryId !== this.activeRepositoryId || worktreeDialog.environmentId !== this.workspaceState?.environmentId)) {
         this.removeWorktreeDialog = null;
@@ -1090,6 +1110,7 @@ export class WorkspaceStore {
   selectRef(ref: CommitRef): void {
     const commit = this.snapshot?.commits.find((candidate) => candidate.hash === ref.target);
     if (commit && this.activeRepositoryId) {
+      if (ref.refType === "tag" && this.hiddenGraphRefKeys.has(graphRefKey(ref))) this.toggleGraphRefs([ref], true);
       this.scrollToCommit = {
         id: ++this.nextScrollCommandId,
         repositoryId: this.activeRepositoryId,
@@ -1416,11 +1437,21 @@ export class WorkspaceStore {
   }
 
   fetchRepository(): void {
+    const client = this.client, repositoryId = this.activeRepositoryId, environmentId = this.workspaceState?.environmentId;
+    if (!client || !repositoryId || !environmentId) return;
     this.requestGitAction({
       kind: "fetch",
       label: "Fetching",
       successMessage: "Fetched from remote",
-      action: (repositoryId) => this.client!.fetch(repositoryId),
+      action: (repositoryId) => client.fetch(repositoryId),
+      onSucceeded: (result) => {
+        const receipt = result as GitFetchResult;
+        const conflicts = parseTagConflicts(receipt.tagConflicts);
+        if (conflicts === null) { toast.warning("Fetch completed; tag conflict details were invalid"); return; }
+        if (conflicts.length && repositoryId === this.activeRepositoryId && environmentId === this.workspaceState?.environmentId) {
+          this.tagFetchReview = { repositoryId, environmentId, remote: receipt.remote ?? "remote", conflicts, selectedNames: new Set(conflicts.map((conflict) => conflict.name)), error: "" };
+        } else toast.success("Fetched branches and tags");
+      },
     });
   }
 
@@ -1439,6 +1470,61 @@ export class WorkspaceStore {
       label: "Pushing",
       successMessage: "Pushed to remote",
       action: (repositoryId) => this.client!.push(repositoryId),
+      onSucceeded: (result) => {
+        const receipt = result as GitPushResult;
+        if (typeof receipt.tagError === "string" && receipt.tagError) toast.warning("Push completed with rejected refs", { description: receipt.tagError });
+        else toast.success("Pushed branches and tags");
+      },
+    });
+  }
+
+  checkoutTag(tag: CommitRef): void {
+    const client = this.client;
+    if (!client || !this.canCheckoutTag || !tag.objectId) return;
+    const params = { name: tagName(tag), expectedObjectId: tag.objectId };
+    this.requestGitAction({ kind: "checkoutTag", label: `Checking out ${params.name}`, successMessage: `Checked out ${params.name} (detached HEAD)`,
+      action: (repositoryId) => client.checkoutTag({ repositoryId, ...params }) });
+  }
+
+  pushTag(tag: CommitRef): void {
+    const client = this.client;
+    if (!client || !this.canPushTag || !tag.objectId) return;
+    const params = { name: tagName(tag), expectedObjectId: tag.objectId };
+    this.requestGitAction({ kind: "pushTag", label: `Pushing tag ${params.name}`, successMessage: `Pushed tag ${params.name}`,
+      action: (repositoryId) => client.pushTag({ repositoryId, ...params }) });
+  }
+
+  loadTagDetails(tag: CommitRef): Promise<GitTagDetails> {
+    const client = this.client, repositoryId = this.activeRepositoryId, environmentId = this.workspaceState?.environmentId;
+    if (!client || !repositoryId || !environmentId || !tag.objectId) return Promise.reject(new Error("Tag details unavailable"));
+    if (tag.objectId === tag.target) return Promise.resolve({ annotated: false, message: null, tagger: null, timestamp: null, hasSignature: false });
+    if (!client.serverWelcome.capabilities.includes("git.tag.details")) return Promise.reject(new Error("Annotation details are unavailable on this server"));
+    const key = `${environmentId}\0${repositoryId}\0${tag.name}\0${tag.objectId}`;
+    const cached = this.tagDetailsCache.get(key);
+    if (cached) return cached;
+    const promise = client.getTagDetails({ repositoryId, name: tagName(tag), expectedObjectId: tag.objectId }).catch((error) => { this.tagDetailsCache.delete(key); throw error; });
+    if (this.tagDetailsCache.size >= 64) this.tagDetailsCache.delete(this.tagDetailsCache.keys().next().value!);
+    this.tagDetailsCache.set(key, promise);
+    return promise;
+  }
+
+  toggleFetchedTag(name: string, selected: boolean): void {
+    if (!this.tagFetchReview || this.gitActionPending) return;
+    const next = new Set(this.tagFetchReview.selectedNames);
+    if (selected) next.add(name); else next.delete(name);
+    this.tagFetchReview.selectedNames = next;
+  }
+
+  confirmFetchedTags(): void {
+    const review = this.tagFetchReview, client = this.client;
+    if (!review || !client || this.gitActionPending || review.repositoryId !== this.activeRepositoryId || review.environmentId !== this.workspaceState?.environmentId) return;
+    if (!client.serverWelcome.capabilities.includes("git.tag.apply_fetch")) { review.error = "This server cannot apply reviewed tag replacements."; return; }
+    const conflicts = review.conflicts.filter((conflict) => review.selectedNames.has(conflict.name));
+    if (!conflicts.length) return;
+    this.requestGitAction({ kind: "replaceFetchedTags", label: "Updating fetched tags", successMessage: `Updated ${conflicts.length} local tags`,
+      action: (repositoryId) => client.applyFetchedTags({ repositoryId, conflicts }),
+      onApplied: () => { if (this.tagFetchReview === review) this.tagFetchReview = null; },
+      onFailed: (error) => { if (this.tagFetchReview !== review) return false; review.error = summarizeGitError(error); return true; },
     });
   }
 
@@ -1649,7 +1735,7 @@ export class WorkspaceStore {
     });
   }
 
-  private prepareGitNameDialog(kind: "branch" | "renameBranch" | "stash"): boolean {
+  private prepareGitNameDialog(kind: "branch" | "renameBranch" | "tag" | "stash"): boolean {
     const repositoryId = this.activeRepositoryId;
     const environmentId = this.workspaceState?.environmentId;
     if (!repositoryId || !environmentId || !this.client || this.gitActionPending) return false;
@@ -1675,6 +1761,12 @@ export class WorkspaceStore {
     }
   }
 
+  openTagDialog(commit: CommitInfo): void {
+    if (this.canCreateTag && this.prepareGitNameDialog("tag")) {
+      this.gitNameDialogContext = { ...this.gitNameDialogContext!, startPoint: commit.hash };
+    }
+  }
+
   openStashDialog(): void {
     this.prepareGitNameDialog("stash");
   }
@@ -1695,6 +1787,34 @@ export class WorkspaceStore {
     const context = this.gitNameDialogContext;
     const client = this.client;
     if (!context || !client || this.gitActionPending || context.repositoryId !== this.activeRepositoryId || context.environmentId !== this.workspaceState?.environmentId) return;
+
+    if (this.gitNameDialogKind === "tag") {
+      if (!this.canCreateTag || !context.startPoint) return;
+      const error = tagNameError(name);
+      if (error || this.snapshot?.refs.some((ref) => ref.name === `refs/tags/${name}`)) {
+        this.gitNameDialogError = error ?? "A tag with this name already exists.";
+        return;
+      }
+      const target = context.startPoint;
+      this.requestGitAction({
+        kind: "createTag",
+        label: "Creating tag",
+        successMessage: `Created tag ${name}`,
+        action: (repositoryId) => client.createTag({ repositoryId, name, target }),
+        onApplied: () => {
+          if (this.gitNameDialogContext === context) {
+            this.toggleGraphRefs([{ name: `refs/tags/${name}`, shortName: name, target, refType: "tag" }], true);
+            this.clearGitNameDialog();
+          }
+        },
+        onFailed: (caught) => {
+          if (this.gitNameDialogContext !== context) return false;
+          this.gitNameDialogError = summarizeGitError(caught);
+          return true;
+        },
+      });
+      return;
+    }
 
     if (this.gitNameDialogKind === "branch" || this.gitNameDialogKind === "renameBranch") {
       if (!name) {
@@ -1727,6 +1847,33 @@ export class WorkspaceStore {
           message: name || undefined,
           includeUntracked: true,
         }),
+    });
+  }
+
+  openDeleteTagDialog(tag: CommitRef): void {
+    const repositoryId = this.activeRepositoryId;
+    const environmentId = this.workspaceState?.environmentId;
+    if (!repositoryId || !environmentId || !this.canDeleteTag || tag.refType !== "tag" || !tag.objectId) return;
+    this.deleteTagDialog = { repositoryId, environmentId, tag: { ...tag }, error: "" };
+  }
+
+  confirmDeleteTag(): void {
+    const dialog = this.deleteTagDialog;
+    const client = this.client;
+    const expectedObjectId = dialog?.tag.objectId;
+    if (!dialog || !client || !expectedObjectId || !this.canDeleteTag || dialog.repositoryId !== this.activeRepositoryId || dialog.environmentId !== this.workspaceState?.environmentId) return;
+    const name = tagName(dialog.tag);
+    this.requestGitAction({
+      kind: "deleteTag",
+      label: "Deleting tag",
+      successMessage: `Deleted tag ${name}`,
+      action: (repositoryId) => client.deleteTag({ repositoryId, name, expectedObjectId }),
+      onApplied: () => { if (this.deleteTagDialog === dialog) this.deleteTagDialog = null; },
+      onFailed: (error) => {
+        if (this.deleteTagDialog !== dialog) return false;
+        dialog.error = summarizeGitError(error);
+        return true;
+      },
     });
   }
 
@@ -1819,7 +1966,7 @@ export class WorkspaceStore {
         onClick: () => {
           if (context.repositoryId !== this.activeRepositoryId || context.environmentId !== this.workspaceState?.environmentId) {
             toast.error("Open the original repository to review deletion.");
-          } else if (this.gitActionPending || this.gitNameDialogKind || this.deleteBranchDialog || this.removeWorktreeDialog || this.discardDialog || this.repositoryPathDialogOpen) {
+          } else if (this.gitActionPending || this.gitNameDialogKind || this.deleteBranchDialog || this.deleteTagDialog || this.tagFetchReview || this.removeWorktreeDialog || this.discardDialog || this.repositoryPathDialogOpen) {
             toast.error("Finish the current action before reviewing deletion.");
           } else {
             onReview();
