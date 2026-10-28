@@ -2,7 +2,9 @@
   import { FileTree } from "@pierre/trees";
   import { onMount } from "svelte";
   import { BRANCH_ICON_PATH, BRANCH_ICON_TRANSFORM } from "$lib/icons/branch";
-  import type { CommitRef, CommitRefType, WorktreeInfo } from "$lib/types/repository";
+  import type { CommitInfo, CommitRef, CommitRefType, RepositoryStatus, WorktreeInfo } from "$lib/types/repository";
+  import TreeDetailsHoverCard from "./TreeDetailsHoverCard.svelte";
+  import BranchHoverDetails from "./BranchHoverDetails.svelte";
   import { graphRefKey, isCurrentBranchRef } from "$lib/types/branch-visibility";
   import { dismissContextMenu, showContextMenu } from "$lib/contextMenu";
   import { branchMenuItems } from "$lib/workspace/branch-menu";
@@ -11,6 +13,8 @@
     refs: CommitRef[];
     refType: Extract<CommitRefType, "localBranch" | "remoteBranch">;
     currentBranch?: string | null;
+    status?: RepositoryStatus | null;
+    commitsByHash?: ReadonlyMap<string, CommitInfo>;
     treeId: string;
     selectedCommitHash?: string | null;
     visibleRefKeys?: ReadonlySet<string>;
@@ -32,6 +36,8 @@
     refs,
     refType,
     currentBranch = null,
+    status = null,
+    commitsByHash = new Map<string, CommitInfo>(),
     treeId,
     selectedCommitHash = null,
     visibleRefKeys = new Set<string>(),
@@ -53,7 +59,6 @@
   let tree = $state<FileTree | null>(null);
   let treeHeight = $state(26);
   let lastTreeSignature = $state("");
-  let branchByPath = new Map<string, CommitRef>();
   let syncingSelection = false;
   const contextMenuOwner = {};
 
@@ -92,6 +97,7 @@
   `;
 
   const branchRefs = $derived(normalizeRefs(refs, refType));
+  const branchByPath = $derived(new Map(branchRefs.map((ref) => [ref.shortName, ref])));
   const branchPaths = $derived(branchRefs.map((ref) => ref.shortName));
   const selectedBranchPaths = $derived(
     new Set(
@@ -226,9 +232,6 @@
 
   $effect(() => {
     const currentTree = tree;
-    const nextBranchMap = new Map(branchRefs.map((ref) => [ref.shortName, ref]));
-    branchByPath = nextBranchMap;
-
     const visibilitySignature = branchRefs
       .map((ref) => `${graphRefKey(ref)}\0${isRefVisible(ref)}`)
       .join("\0");
@@ -533,3 +536,9 @@
   onkeydowncapture={handleContextMenuKey}
   style={`height: ${treeHeight}px; --trees-bg-override: var(--app-theme-sidebar); --trees-fg-override: var(--app-theme-sidebar-foreground); --trees-fg-muted-override: var(--app-theme-sidebar-muted-foreground); --trees-border-color-override: var(--app-theme-sidebar-border); --trees-selected-bg-override: var(--app-theme-sidebar-row-selected); --trees-selected-fg-override: var(--app-theme-accent-surface-foreground); --trees-accent-override: var(--app-theme-accent); --trees-focus-ring-color-override: var(--app-theme-focus); --trees-border-radius-override: 4px; --trees-font-family-override: inherit; --trees-font-size-override: 13px; --trees-padding-inline-override: 0px; --trees-item-padding-x-override: 3px; --trees-item-row-gap-override: 3px; --trees-level-gap-override: 6px; --trees-item-height: 26px;`}
 ></div>
+
+<TreeDetailsHoverCard host={tree ? host : null} {contextKey} getItem={(path) => branchByPath.get(path)} excludeDecoration>
+  {#snippet children(branch)}
+    <BranchHoverDetails {branch} commit={commitsByHash.get(branch.target)} {status} {worktrees} />
+  {/snippet}
+</TreeDetailsHoverCard>

@@ -184,6 +184,8 @@
               {onRenameBranch}
               {onDeleteBranch}
               currentBranch={snapshot?.status.currentBranch}
+              status={snapshot?.status}
+              {commitsByHash}
               selectedCommitHash={selectedCommit?.hash ?? null}
               {visibleRefKeys}
               onSelectRef={handleSelectRef}
@@ -213,6 +215,8 @@
               refs={remoteBranches}
               refType="remoteBranch"
               treeId="gitgui-remote-branches"
+              contextKey={stateKey}
+              {commitsByHash}
               selectedCommitHash={selectedCommit?.hash ?? null}
               {visibleRefKeys}
               onSelectRef={handleSelectRef}
@@ -277,7 +281,7 @@
       {#if open.Stashes}
         <div class="min-h-0 flex-1 overflow-auto">
           {#if snapshot?.stashes?.length}
-            <StashTree stashes={snapshot.stashes} {selectedStash}
+            <StashTree stashes={snapshot.stashes} {selectedStash} {commitsByHash}
               contextKey={stashContextKey ?? stateKey} capabilities={stashCapabilities}
               onSelect={onSelectStash} onAction={onStashAction} />
           {:else}

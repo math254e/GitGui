@@ -64,7 +64,7 @@
 {#if visible && anchor}
   <div use:portal bind:this={card} {id} role="tooltip"
     onpointerenter={() => { inside = true; }} onpointerleave={() => { inside = false; }}
-    class="fixed z-[500] max-h-[min(420px,calc(100vh-16px))] w-[340px] max-w-[calc(100vw-16px)] overflow-auto rounded-[3px] border border-[var(--app-theme-border)] bg-[var(--app-theme-surface-overlay)] p-3 text-[var(--app-theme-text)] shadow-xl"
+    class="fixed z-[500] max-h-[min(420px,calc(100vh-16px))] w-[348px] max-w-[calc(100vw-16px)] overflow-auto rounded-[3px] border border-[var(--app-theme-border)] bg-[var(--app-theme-surface-overlay)] p-3 text-[var(--app-theme-text)] shadow-xl"
     style:left={`${left}px`} style:top={`${top}px`}>
     {@render children()}
   </div>

@@ -25,7 +25,7 @@
 <p class="break-all text-sm font-semibold">{tagName(tag)}</p>
 <p class="mt-0.5 text-xs text-[var(--app-theme-text-muted)]">{annotated ? "Annotated tag" : "Lightweight tag"}{details?.hasSignature ? " · Signature present (not verified)" : ""}</p>
 <dl class="mt-3 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1.5 text-xs">
-  <dt class="text-[var(--app-theme-text-muted)]">Target</dt><dd class="break-all font-mono">{tag.target}</dd>
+  <dt class="text-[var(--app-theme-text-muted)]">Target</dt><dd class="whitespace-nowrap font-mono">{tag.target}</dd>
   {#if author}<dt class="text-[var(--app-theme-text-muted)]">{annotated ? "Tagger" : "Author"}</dt><dd class="break-words">{author}</dd>{/if}
   {#if timestamp != null}<dt class="text-[var(--app-theme-text-muted)]">Date</dt><dd>{new Date(timestamp * 1000).toLocaleString()}</dd>{/if}
 </dl>

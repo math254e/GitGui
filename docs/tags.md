@@ -30,8 +30,8 @@ existing limit of 256 independent history roots still applies.
 
 ## Creation
 
-A normal commit's context menu includes **Create tag here…**, beside branch
-creation. The compact name dialog captures the commit's full object ID and its
+A normal commit's context menu includes **Tag...**, beside **Branch...**.
+The compact name dialog captures the commit's full object ID and its
 repository/environment context when opened. Changing selection cannot change
 that target. Local validation catches invalid or already known names immediately;
 server failures preserve the input for correction. Creation is local and
@@ -81,7 +81,7 @@ confirmation and prevent a stale request.
 
 ## Checkout and remote synchronization
 
-The sidebar menu offers **Checkout tag** for commit tags and **Push tag** for a
+The sidebar menu offers **Checkout &lt;name&gt;** for commit tags and **Push tag** for a
 reviewed tag. Checkout uses the reviewed object, peels it to a commit, and calls
 `git switch --detach`; Git protects conflicting local changes. Success identifies
 detached HEAD in the notification. Push sends only that tag's immutable reviewed
@@ -118,9 +118,9 @@ Mutations return the existing snapshot shape for immediate application.
 
 `DetailsHoverCard.svelte` owns the shared delayed, portalled card surface,
 positioning, pointer retention, focus description, and Escape/scroll dismissal.
-Its snippet content is independent of tags, so branch and stash cards can reuse
-it later. `TagHoverDetails.svelte` supplies tag content from the current snapshot
-and optional annotation metadata.
+Its snippet content is shared by tag, branch, and stash cards.
+`TagHoverDetails.svelte` supplies tag content from the current snapshot and
+optional annotation metadata.
 
 Lightweight cards require no additional Git command. Annotated cards wait 300ms
 before requesting metadata. One bounded `for-each-ref` reads and verifies the
@@ -130,3 +130,19 @@ immutable object ID; environment changes clear it. Repeated hovers reuse it.
 Fields include type, full target ID, commit subject, author/tagger, date, and
 annotation. A present signature is labelled unverified; hovering never starts
 signature verification or loads another repository snapshot.
+
+Local and remote-tracking branches use `BranchHoverDetails.svelte`: full branch
+name, tip commit, author, date, and commit subject. Local branches also show
+checked-out worktree paths; the current branch can show the snapshot's upstream
+ahead/behind counts. Counts are never inferred for other branches.
+`StashHoverDetails.svelte` shows the stash selector, message, creation date,
+original branch (or Unknown), stash object ID, and original base commit with its
+subject when available. These cards read only the existing snapshot and start
+no RPC requests or Git commands.
+
+`TreeDetailsHoverCard.svelte` connects the virtualized branch/stash trees to the
+same delayed card surface. Event delegation handles pointer and keyboard focus
+inside the tree's shadow root without adding listeners per row. Folders and
+branch visibility controls do not open cards. Opening a context menu, changing
+repository/environment, scrolling, recycling a hovered row, or disposing the
+tree dismisses its card without changing selection.

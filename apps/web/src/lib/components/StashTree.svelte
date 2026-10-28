@@ -1,16 +1,19 @@
 <script lang="ts">
   import { FileTree } from "@pierre/trees";
   import { onMount } from "svelte";
-  import type { StashInfo } from "@gitgui/contracts";
+  import type { CommitInfo, StashInfo } from "@gitgui/contracts";
+  import TreeDetailsHoverCard from "./TreeDetailsHoverCard.svelte";
+  import StashHoverDetails from "./StashHoverDetails.svelte";
   import { dismissContextMenu, showContextMenu } from "$lib/contextMenu";
   import { stashMenuItems, type StashCapabilities } from "$lib/workspace/stash-menu";
   import type { StashAction } from "$lib/workspace/stash-operations";
 
-  let { stashes, selectedStash = null, contextKey, capabilities, onSelect, onAction }: {
+  let { stashes, selectedStash = null, contextKey, capabilities, onSelect, onAction, commitsByHash = new Map<string, CommitInfo>() }: {
     stashes: StashInfo[];
     selectedStash?: StashInfo | null;
     contextKey: string | null;
     capabilities: StashCapabilities;
+    commitsByHash?: ReadonlyMap<string, CommitInfo>;
     onSelect: (stash: StashInfo) => void;
     onAction: (action: StashAction, stash: StashInfo) => void;
   } = $props();
@@ -83,7 +86,6 @@
         const stash = stashByPath.get(item.path);
         return stash ? {
           text: stash.message,
-          title: `${stash.selector}: ${stash.message}\nOriginal branch: ${stash.branch ?? "Unknown"}\nBase: ${stash.baseHash}`,
         } : null;
       },
       onSelectionChange: (paths) => {
@@ -212,3 +214,9 @@
   onclickcapture={handleClick} oncontextmenu={handleContextMenu} onkeydowncapture={handleKeydown}
   style={`height: ${Math.max(1, stashes.length) * 26}px; --trees-bg-override: var(--app-theme-sidebar); --trees-fg-override: var(--app-theme-sidebar-foreground); --trees-fg-muted-override: var(--app-theme-sidebar-muted-foreground); --trees-border-color-override: var(--app-theme-sidebar-border); --trees-selected-bg-override: var(--app-theme-sidebar-row-active); --trees-selected-fg-override: var(--app-theme-accent-surface-foreground); --trees-accent-override: var(--app-theme-accent); --trees-focus-ring-color-override: var(--app-theme-focus); --trees-font-family-override: inherit; --trees-font-size-override: 13px; --trees-padding-inline-override: 0px; --trees-item-padding-x-override: 3px; --trees-item-row-gap-override: 3px; --trees-level-gap-override: 6px; --trees-item-height: 26px;`}
 ></div>
+
+<TreeDetailsHoverCard host={tree ? host : null} {contextKey} getItem={(path) => stashByPath.get(path)}>
+  {#snippet children(stash)}
+    <StashHoverDetails {stash} baseCommit={commitsByHash.get(stash.baseHash)} />
+  {/snippet}
+</TreeDetailsHoverCard>
