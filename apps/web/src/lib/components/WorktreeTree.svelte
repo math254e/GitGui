@@ -1,12 +1,15 @@
 <script lang="ts">
   import { FileTree } from "@pierre/trees";
   import { onMount } from "svelte";
-  import type { WorktreeInfo } from "$lib/types/repository";
+  import type { CommitInfo, WorktreeInfo } from "$lib/types/repository";
+  import TreeDetailsHoverCard from "./TreeDetailsHoverCard.svelte";
+  import WorktreeHoverDetails from "./WorktreeHoverDetails.svelte";
   import { dismissContextMenu, showContextMenu } from "$lib/contextMenu";
   import { worktreeMenuItems } from "$lib/workspace/worktree-menu";
 
   type Props = {
     worktrees: WorktreeInfo[];
+    commitsByHash?: ReadonlyMap<string, CommitInfo>;
     treeId: string;
     onSwitchWorktree?: (path: string) => void;
     contextKey?: string | null;
@@ -24,6 +27,7 @@
 
   let {
     worktrees,
+    commitsByHash = new Map<string, CommitInfo>(),
     treeId,
     onSwitchWorktree,
     contextKey = null,
@@ -38,7 +42,6 @@
   let tree = $state<FileTree | null>(null);
   let treeHeight = $state(26);
   let lastTreeSignature = $state("");
-  let worktreeByPath = new Map<string, WorktreeInfo>();
   const contextMenuOwner = {};
   $effect(() => { void contextKey; dismissContextMenu(contextMenuOwner); });
 
@@ -55,6 +58,7 @@
   `;
 
   const entries = $derived(createEntries(worktrees));
+  const worktreeByPath = $derived(new Map(entries.map((entry) => [entry.path, entry.worktree])));
   const treePaths = $derived(entries.map((entry) => entry.path));
 
   onMount(() => {
@@ -172,7 +176,6 @@
 
   $effect(() => {
     const currentTree = tree;
-    worktreeByPath = new Map(entries.map((entry) => [entry.path, entry.worktree]));
 
     const signature = entries
       .map((entry) => `${entry.path}\0${entry.worktree.current}\0${entry.worktree.path}`)
@@ -328,3 +331,9 @@
   onkeydowncapture={handleContextKey}
   style={`height: ${treeHeight}px; --trees-bg-override: var(--app-theme-sidebar); --trees-fg-override: var(--app-theme-sidebar-foreground); --trees-fg-muted-override: var(--app-theme-sidebar-muted-foreground); --trees-border-color-override: var(--app-theme-sidebar-border); --trees-selected-bg-override: var(--app-theme-sidebar-row-active); --trees-selected-fg-override: var(--app-theme-accent-surface-foreground); --trees-accent-override: var(--app-theme-accent); --trees-focus-ring-color-override: var(--app-theme-focus); --trees-font-family-override: inherit; --trees-font-size-override: 13px; --trees-padding-inline-override: 0px; --trees-item-padding-x-override: 3px; --trees-item-row-gap-override: 3px; --trees-level-gap-override: 6px; --trees-item-height: 26px;`}
 ></div>
+
+<TreeDetailsHoverCard host={tree ? host : null} {contextKey} getItem={(path) => worktreeByPath.get(path)}>
+  {#snippet children(worktree)}
+    <WorktreeHoverDetails {worktree} commit={worktree.headOid ? commitsByHash.get(worktree.headOid) : undefined} />
+  {/snippet}
+</TreeDetailsHoverCard>

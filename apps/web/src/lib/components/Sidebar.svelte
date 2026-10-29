@@ -260,7 +260,7 @@
       {#if open.Worktrees}
         <div class="min-h-0 flex-1 overflow-auto">
           {#if snapshot?.worktrees?.length}
-            <WorktreeTree worktrees={snapshot.worktrees} treeId="gitgui-worktrees" contextKey={stateKey} {onSwitchWorktree}
+            <WorktreeTree worktrees={snapshot.worktrees} {commitsByHash} treeId="gitgui-worktrees" contextKey={stateKey} {onSwitchWorktree}
               {canRenameBranch} {canDeleteBranch} {canRemoveWorktree} {onRenameWorktreeBranch} {onRemoveWorktree} />
           {:else}
             <p class="px-2 py-1 text-sm text-[var(--app-theme-text-subtle)]">No worktrees.</p>

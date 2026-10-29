@@ -118,7 +118,7 @@ Mutations return the existing snapshot shape for immediate application.
 
 `DetailsHoverCard.svelte` owns the shared delayed, portalled card surface,
 positioning, pointer retention, focus description, and Escape/scroll dismissal.
-Its snippet content is shared by tag, branch, and stash cards.
+Its snippet content is shared by tag, branch, stash, and worktree cards.
 `TagHoverDetails.svelte` supplies tag content from the current snapshot and
 optional annotation metadata.
 
@@ -138,9 +138,12 @@ ahead/behind counts. Counts are never inferred for other branches.
 `StashHoverDetails.svelte` shows the stash selector, message, creation date,
 original branch (or Unknown), stash object ID, and original base commit with its
 subject when available. These cards read only the existing snapshot and start
-no RPC requests or Git commands.
+no RPC requests or Git commands. `WorktreeHoverDetails.svelte` likewise uses only
+the snapshot: folder name, full path, branch or detached HEAD, tip commit,
+author, date, and subject when available. It identifies main/linked and current
+worktrees and handles unborn worktrees without displaying an all-zero hash.
 
-`TreeDetailsHoverCard.svelte` connects the virtualized branch/stash trees to the
+`TreeDetailsHoverCard.svelte` connects the virtualized branch/stash/worktree trees to the
 same delayed card surface. Event delegation handles pointer and keyboard focus
 inside the tree's shadow root without adding listeners per row. Folders and
 branch visibility controls do not open cards. Opening a context menu, changing

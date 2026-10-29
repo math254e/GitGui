@@ -5,6 +5,7 @@ import type { CommitInfo, CommitRef, StashInfo } from "$lib/types/repository";
 import { dismissContextMenu } from "$lib/contextMenu";
 import BranchTree from "./BranchTree.svelte";
 import StashTree from "./StashTree.svelte";
+import WorktreeTree from "./WorktreeTree.svelte";
 import StashTreeLifecycle from "./__tests__/StashTreeLifecycle.svelte";
 
 const commit: CommitInfo = { hash: "a".repeat(40), parents: [], author: "Branch author", timestamp: 1700000000, message: "Implement sidebar" };
@@ -31,6 +32,32 @@ async function openCard() { await tick(); await vi.advanceTimersByTimeAsync(300)
 function card() { return document.querySelector<HTMLElement>('[role="tooltip"]'); }
 
 describe("sidebar detail cards", () => {
+  it("shows worktree snapshot details without switching repositories, preserving double-click navigation", async () => {
+    const container = target(), onSwitchWorktree = vi.fn();
+    const worktree = { path: "D:\\work\\sidebar", branch: branch.shortName, headOid: commit.hash, current: true, isMain: false };
+    component = mount(WorktreeTree, { target: container, props: { worktrees: [worktree], treeId: "hover-worktree", contextKey: "env:repo", commitsByHash: new Map([[commit.hash, commit]]), onSwitchWorktree } });
+    flushSync(); await tick(); const { row } = rows(container);
+    hover(row); await openCard();
+    for (const text of ["sidebar", "Linked worktree", "Current worktree", worktree.path, branch.shortName, commit.hash, commit.author, commit.message]) expect(card()?.textContent).toContain(text);
+    expect(onSwitchWorktree).not.toHaveBeenCalled();
+    row.dispatchEvent(new MouseEvent("dblclick", { bubbles: true, composed: true, cancelable: true }));
+    expect(onSwitchWorktree).toHaveBeenCalledExactlyOnceWith(worktree.path);
+    row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, composed: true, cancelable: true })); await tick();
+    expect(card()).toBeNull();
+  });
+
+  it.each([null, "0".repeat(40), commit.hash])("handles detached or unborn worktrees without commit metadata (%s)", async (headOid) => {
+    const container = target();
+    component = mount(WorktreeTree, { target: container, props: { worktrees: [{ path: "/work/main", branch: null, headOid, current: false, isMain: true }], treeId: "hover-detached", contextKey: "env:repo" } });
+    flushSync(); await tick(); const { row } = rows(container);
+    row.focus(); await openCard();
+    expect(card()?.textContent).toContain("Main worktree");
+    expect(card()?.textContent).not.toContain("Current worktree");
+    expect(card()?.textContent).toContain(headOid === commit.hash ? "Detached HEAD" : "No commit yet");
+    if (headOid === commit.hash) expect(card()?.textContent).toContain(commit.hash);
+    expect(card()?.textContent).not.toContain("Author");
+  });
+
   it("shows current branch snapshot details after a delay without selecting or switching", async () => {
     const container = target(), onSelectRef = vi.fn(), onSwitchBranch = vi.fn();
     component = mount(BranchTree, { target: container, props: { refs: [branch], refType: "localBranch", treeId: "hover-local", contextKey: "env:repo", currentBranch: branch.shortName,
