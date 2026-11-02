@@ -23,7 +23,7 @@ export function normalizeUpdateFeedUrl(value: unknown): string | null {
   if (typeof value !== "string" || !value.trim()) return null;
   try {
     const url = new URL(value.trim());
-    if (url.protocol !== "https:" || url.username || url.password || url.hash) return null;
+    if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash) return null;
     return url.toString().replace(/\/$/, "");
   } catch {
     return null;

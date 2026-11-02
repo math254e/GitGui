@@ -18,17 +18,22 @@
   import GitNameDialog from "$lib/components/GitNameDialog.svelte";
   import RepositoryPathDialog from "$lib/components/RepositoryPathDialog.svelte";
   import TopMenu from "$lib/components/TopMenu.svelte";
+  import { readDesktopBridge } from "$lib/connection/platform";
+  import { provideDesktopUi } from "$lib/updates/context.svelte";
 
   let { children } = $props();
   const runtime = provideWebApplicationRuntime();
   const store = provideWorkspaceStore(runtime);
+  const desktopUi = provideDesktopUi(readDesktopBridge());
 
   onMount(() => {
+    desktopUi.updates?.start();
     void runtime.start();
     store.start();
   });
 
   onDestroy(() => {
+    desktopUi.updates?.stop();
     void runtime.stop();
     store.dispose();
   });

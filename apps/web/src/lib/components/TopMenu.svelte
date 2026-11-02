@@ -11,6 +11,7 @@
 
 <script lang="ts">
   import { Home, Settings, TreeDeciduous, X } from "@lucide/svelte";
+  import DesktopUpdateControl from "$lib/updates/DesktopUpdateControl.svelte";
 
   type Props = {
     activeView: "start" | "repo" | "settings" | "create";
@@ -93,6 +94,7 @@
     {/if}
   </div>
 
+  <DesktopUpdateControl />
   <button
     class={`flex h-full w-12 shrink-0 items-center justify-center border-l border-[var(--app-theme-toolbar-border)] transition ${
       activeView === "settings"

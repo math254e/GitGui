@@ -7,7 +7,8 @@
     writeProjectsLocationPreference,
     writeBranchSwitchMergePreference,
   } from "$lib/preferences";
-  import type { DesktopUpdateStatus } from "@gitgui/contracts/desktop";
+  import { getDesktopUi } from "$lib/updates/context.svelte";
+  import { getDesktopReleaseUrl, getReleaseNotesPreview, type DesktopUpdateSnapshot } from "$lib/updates/controller";
 
   type BranchSwitchMode = "normal" | "merge";
 
@@ -16,21 +17,23 @@
   );
   let projectsLocation = $state("");
   let projectsLocationCanBrowse = $state(false);
-  let updateStatus = $state<DesktopUpdateStatus>({ phase: "disabled" });
+  const desktopUi = getDesktopUi();
+  let updateSnapshot = $state<DesktopUpdateSnapshot | null>(desktopUi.updates?.getSnapshot() ?? null);
+  let updateUnsubscribe: (() => void) | undefined;
   let notice = $state("");
-  let unsubscribeUpdates: (() => void) | undefined;
+  const updateStatus = $derived(updateSnapshot?.status ?? { phase: "disabled" as const });
+  const notesPreview = $derived(getReleaseNotesPreview(updateStatus.releaseNotes));
+  const releaseUrl = $derived(getDesktopReleaseUrl(updateStatus));
+  const updateBusy = $derived(Boolean(updateSnapshot?.pendingAction) || updateStatus.phase === "checking" || updateStatus.phase === "downloading" || updateStatus.phase === "installing");
 
   onMount(() => {
-    projectsLocationCanBrowse = Boolean(window.desktopBridge);
+    projectsLocationCanBrowse = desktopUi.pickFolder !== null;
     void loadProjectsLocation();
-    if (window.desktopBridge) {
-      void window.desktopBridge.getUpdateStatus().then((status) => (updateStatus = status));
-      unsubscribeUpdates = window.desktopBridge.onUpdateStatus((status) => (updateStatus = status));
-    }
+    updateUnsubscribe = desktopUi.updates?.subscribe((next) => (updateSnapshot = next));
   });
 
   onDestroy(() => {
-    unsubscribeUpdates?.();
+    updateUnsubscribe?.();
   });
 
   function setBranchSwitchMode(mode: BranchSwitchMode) {
@@ -56,7 +59,7 @@
     if (!projectsLocationCanBrowse) return;
 
     try {
-      const selectedPath = await window.desktopBridge?.pickFolder();
+      const selectedPath = await desktopUi.pickFolder?.();
       if (typeof selectedPath === "string") {
         projectsLocation = selectedPath;
         writeProjectsLocationPreference(selectedPath);
@@ -67,12 +70,20 @@
     }
   }
 
-  async function checkForUpdates() {
-    updateStatus = await window.desktopBridge?.checkForUpdates() ?? updateStatus;
+  function checkForUpdates() {
+    void desktopUi.updates?.check();
   }
 
-  async function installUpdate() {
-    await window.desktopBridge?.installUpdate();
+  function statusSummary(status: typeof updateStatus): string {
+    if (status.phase === "disabled") return status.message ?? "Updates are disabled for this desktop build.";
+    if (status.phase === "current") return "GitGui is up to date.";
+    if (status.phase === "available") return `Version ${status.availableVersion ?? ""} is available.`.trim();
+    if (status.phase === "downloaded") return `Version ${status.downloadedVersion ?? status.availableVersion ?? ""} is ready to install.`.trim();
+    if (status.phase === "checking") return "Checking for updates…";
+    if (status.phase === "downloading") return `Downloading update${typeof status.downloadPercent === "number" ? ` · ${Math.floor(status.downloadPercent)}%` : "…"}`;
+    if (status.phase === "installing") return "Installing update…";
+    if (status.phase === "error") return status.message ?? "Update failed.";
+    return status.message ?? "Updates have not been checked yet.";
   }
 </script>
 
@@ -126,20 +137,24 @@
                 </label>
               </section>
 
-              {#if window.desktopBridge}
+              {#if desktopUi.updates}
                 <section class="py-7" aria-labelledby="general-updates">
                   <div class="flex flex-wrap items-center justify-between gap-4">
                     <div>
                       <h3 id="general-updates" class="text-sm font-semibold text-[var(--app-theme-text)]">Desktop updates</h3>
                       <p class="mt-1 text-xs text-[var(--app-theme-text-subtle)]">
-                        {updateStatus.message ?? (updateStatus.version ? `${updateStatus.phase} · ${updateStatus.version}` : updateStatus.phase)}
+                        {#if updateStatus.currentVersion}Version {updateStatus.currentVersion} · {/if}
+                        {updateStatus.message ?? statusSummary(updateStatus)}
                       </p>
+                      {#if updateStatus.checkedAt}
+                        <p class="mt-1 text-xs text-[var(--app-theme-text-subtle)]">Last checked {new Date(updateStatus.checkedAt).toLocaleString()}</p>
+                      {/if}
+                      {#if notesPreview}
+                        <p class="mt-2 max-w-[620px] whitespace-pre-line text-xs leading-5 text-[var(--app-theme-text-subtle)]">{notesPreview}</p>
+                        {#if releaseUrl}<a class="mt-1 inline-block text-xs text-[var(--app-theme-accent)] underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus)]" href={releaseUrl} target="_blank" rel="noreferrer">Release notes on GitHub</a>{/if}
+                      {/if}
                     </div>
-                    {#if updateStatus.phase === "downloaded"}
-                      <button type="button" onclick={installUpdate} class="h-8 rounded-md bg-[var(--app-theme-accent)] px-3 text-xs font-semibold text-[var(--app-theme-accent-foreground)]">Restart and install</button>
-                    {:else}
-                      <button type="button" onclick={checkForUpdates} disabled={updateStatus.phase === "checking" || updateStatus.phase === "disabled"} class="h-8 rounded-md border border-[var(--app-theme-border)] bg-[var(--app-theme-surface-raised)] px-3 text-xs font-semibold text-[var(--app-theme-text-muted)] disabled:opacity-50">Check for updates</button>
-                    {/if}
+                    <button type="button" onclick={checkForUpdates} disabled={updateBusy || updateStatus.phase === "disabled"} class="h-8 rounded-md border border-[var(--app-theme-border)] bg-[var(--app-theme-surface-raised)] px-3 text-xs font-semibold text-[var(--app-theme-text-muted)] transition hover:bg-[var(--app-theme-sidebar-row-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus)] disabled:cursor-not-allowed disabled:opacity-50">{updateBusy && updateStatus.phase === "checking" ? "Checking…" : "Check for updates"}</button>
                   </div>
                 </section>
               {/if}

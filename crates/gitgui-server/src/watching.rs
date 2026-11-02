@@ -244,6 +244,7 @@ pub(super) async fn run(state: Weak<ServerState>) {
         if state.lifecycle().await != ServerLifecycle::Ready {
             return;
         }
+        let Some(_work) = state.work.enter() else { continue; };
         if state.repository_events.receiver_count() == 0 {
             watches.clear();
             continue;

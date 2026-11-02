@@ -5,6 +5,7 @@
 //! operations; repository paths never cross the wire after catalog lookup.
 
 mod auth;
+pub mod local_control;
 mod rpc_queue;
 #[cfg(test)]
 mod rpc_tests;
@@ -412,6 +413,8 @@ pub struct ServerHandle {
     local_addr: SocketAddr,
     shutdown: Option<oneshot::Sender<()>>,
     task: JoinHandle<Result<(), std::io::Error>>,
+    #[cfg(test)]
+    state: Arc<ServerState>,
 }
 
 impl ServerHandle {
@@ -450,6 +453,8 @@ pub async fn start(config: ServerConfig) -> Result<ServerHandle, ServerError> {
     let router = router(state.clone(), web_dir);
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
     let shutdown_state = state.clone();
+    #[cfg(test)]
+    let handle_state = state.clone();
     let task = tokio::spawn(async move {
         let result = axum::serve(listener, router)
             .with_graceful_shutdown(async move {
@@ -459,9 +464,7 @@ pub async fn start(config: ServerConfig) -> Result<ServerHandle, ServerError> {
                     .await;
             })
             .await;
-        state.set_lifecycle(ServerLifecycle::Stopped).await;
-        watcher.abort();
-        stash_worker.abort();
+        finish_shutdown(&state, watcher, stash_worker).await;
         result
     });
 
@@ -470,11 +473,28 @@ pub async fn start(config: ServerConfig) -> Result<ServerHandle, ServerError> {
         local_addr,
         shutdown: Some(shutdown_tx),
         task,
+        #[cfg(test)]
+        state: handle_state,
     })
 }
 
 /// Runs a foreground server until Ctrl-C or a termination signal is received.
 pub async fn run(config: ServerConfig) -> Result<(), ServerError> {
+    run_internal(config, None).await
+}
+
+/// Desktop-owned inherited pipe only; never exposed through HTTP or Git RPC.
+pub async fn run_with_control(
+    config: ServerConfig,
+    control: tokio::sync::mpsc::Receiver<local_control::Input>,
+) -> Result<(), ServerError> {
+    run_internal(config, Some(control)).await
+}
+
+async fn run_internal(
+    config: ServerConfig,
+    control: Option<tokio::sync::mpsc::Receiver<local_control::Input>>,
+) -> Result<(), ServerError> {
     validate_bind_security(&config).map_err(ServerError::Configuration)?;
     let startup = prepare_startup(&config)
         .await
@@ -492,14 +512,39 @@ pub async fn run(config: ServerConfig) -> Result<(), ServerError> {
 
     log_bind_address(local_addr, &config);
     emit_ready_line(local_addr);
+    let shutdown_state = state.clone();
     let result = axum::serve(listener, router)
-        .with_graceful_shutdown(shutdown_signal(state.clone()))
+        .with_graceful_shutdown(async move {
+            let state = shutdown_state;
+            tokio::select! {
+                _ = shutdown_signal(state.clone()) => {},
+                _ = async {
+                    match control {
+                        Some(input) => local_control::run(&state, input, std::io::stdout(), Duration::from_secs(30)).await,
+                        None => std::future::pending().await,
+                    }
+                } => {},
+            }
+            state.set_lifecycle(ServerLifecycle::Stopping).await;
+        })
         .await
         .map_err(ServerError::Io);
-    watcher.abort();
-    stash_worker.abort();
-    state.set_lifecycle(ServerLifecycle::Stopped).await;
+    finish_shutdown(&state, watcher, stash_worker).await;
     result
+}
+
+// Do not abort tasks awaiting spawn_blocking: that only loses ownership of the
+// Git process. Workers exit cooperatively and detached dispatches retain permits.
+async fn finish_shutdown(
+    state: &ServerState,
+    watcher: JoinHandle<()>,
+    stash_worker: JoinHandle<()>,
+) {
+    state.set_lifecycle(ServerLifecycle::Stopping).await;
+    let _ = tokio::join!(watcher, stash_worker);
+    state.work.drained().await;
+    state.sockets.drained().await;
+    state.set_lifecycle(ServerLifecycle::Stopped).await;
 }
 
 fn router(state: Arc<ServerState>, web_dir: Option<PathBuf>) -> Router {
@@ -680,6 +725,9 @@ async fn websocket(
     Query(query): Query<WebSocketQuery>,
     upgrade: WebSocketUpgrade,
 ) -> Response {
+    if *state.stopping.borrow() {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
     if let Some(origin) = headers.get(axum::http::header::ORIGIN) {
         let Ok(origin) = origin.to_str() else {
             return StatusCode::FORBIDDEN.into_response();
@@ -719,125 +767,144 @@ struct WebSocketQuery {
 }
 
 async fn handle_socket(mut socket: WebSocket, state: Arc<ServerState>, session: AuthSession) {
+    let Some(_socket_work) = state.sockets.enter() else {
+        return;
+    };
+    let mut stopping = state.stopping.subscribe();
+    if *stopping.borrow() {
+        return;
+    }
     let mut queue = rpc_queue::RequestQueue::default();
     let mut tasks = JoinSet::new();
     let mut events = watching::can_read(&session).then(|| state.repository_events.subscribe());
-    let welcome = WelcomeMessage::for_environment(
-        state.info.environment_id.clone(),
-        state.info.protocol_version,
-        state.info.capabilities.clone(),
-    );
-    if send_json(&mut socket, &welcome).await.is_err() {
-        return;
-    }
-
-    loop {
-        while let Some(request) = queue.next() {
-            let state = state.clone();
-            let session = session.clone();
-            tasks.spawn(async move {
-                let id = request.id.clone();
-                let method = request.method.clone();
-                let started = std::time::Instant::now();
-                let response =
-                    std::panic::AssertUnwindSafe(dispatch_authorized(request, &state, &session))
-                        .catch_unwind()
-                        .await
-                        .unwrap_or_else(|_| internal_error(id.clone(), "RPC worker failed"));
-                let text = serde_json::to_string(&response);
-                if matches!(
-                    method.as_str(),
-                    "git.commit_file_diff"
-                        | "git.working_tree_file_diff"
-                        | "git.hunk_preview"
-                        | "git.apply_hunks"
-                        | "git.stage"
-                        | "git.unstage"
-                        | "repositories.refresh"
-                ) {
-                    if let Ok(text) = &text {
-                        tracing::info!(
-                            target: "gitgui::rpc",
-                            method,
-                            dispatch_ms = started.elapsed().as_secs_f64() * 1000.0,
-                            response_bytes = text.len().min(u32::MAX as usize),
-                            "RPC dispatch completed"
-                        );
-                    }
-                }
-                (id, text)
-            });
+    // Cancellation here releases transport even if a peer stops reading. The
+    // JoinSet lives outside this future, so started Git dispatches still detach.
+    let transport = async {
+        let welcome = WelcomeMessage::for_environment(
+            state.info.environment_id.clone(),
+            state.info.protocol_version,
+            state.info.capabilities.clone(),
+        );
+        if send_json(&mut socket, &welcome).await.is_err() {
+            return;
         }
-        let frame = tokio::select! {
-            result = tasks.join_next(), if !tasks.is_empty() => {
-                if let Some(Ok((id, text))) = result {
-                    if queue.finish(&id) {
-                        match text {
-                            Ok(text) => { if send_text(&mut socket, text).await.is_err() { break; } }
-                            Err(error) => {
-                                warn!(error = %error, "failed to serialize WebSocket response");
-                                break;
+
+        loop {
+            while let Some(request) = queue.next() {
+                let state = state.clone();
+                let session = session.clone();
+                tasks.spawn(async move {
+                    let id = request.id.clone();
+                    let method = request.method.clone();
+                    let started = std::time::Instant::now();
+                    let response =
+                        std::panic::AssertUnwindSafe(dispatch_authorized(request, &state, &session))
+                            .catch_unwind()
+                            .await
+                            .unwrap_or_else(|_| internal_error(id.clone(), "RPC worker failed"));
+                    let text = serde_json::to_string(&response);
+                    if matches!(
+                        method.as_str(),
+                        "git.commit_file_diff"
+                            | "git.working_tree_file_diff"
+                            | "git.hunk_preview"
+                            | "git.apply_hunks"
+                            | "git.stage"
+                            | "git.unstage"
+                            | "repositories.refresh"
+                    ) {
+                        if let Ok(text) = &text {
+                            tracing::info!(
+                                target: "gitgui::rpc",
+                                method,
+                                dispatch_ms = started.elapsed().as_secs_f64() * 1000.0,
+                                response_bytes = text.len().min(u32::MAX as usize),
+                                "RPC dispatch completed"
+                            );
+                        }
+                    }
+                    (id, text)
+                });
+            }
+            let frame = tokio::select! {
+                result = tasks.join_next(), if !tasks.is_empty() => {
+                    if let Some(Ok((id, text))) = result {
+                        if queue.finish(&id) {
+                            match text {
+                                Ok(text) => { if send_text(&mut socket, text).await.is_err() { break; } }
+                                Err(error) => {
+                                    warn!(error = %error, "failed to serialize WebSocket response");
+                                    break;
+                                }
                             }
                         }
                     }
+                    continue;
                 }
-                continue;
-            }
-            frame = socket.next() => match frame { Some(frame) => frame, None => break },
-            event = async {
-                match events.as_mut() {
-                    Some(events) => events.recv().await,
-                    None => std::future::pending().await,
-                }
-            } => {
-                match event {
-                    Ok(event) => { if send_json(&mut socket, &event).await.is_err() { break; } }
-                    // A slow client must rehydrate through its existing session
-                    // supervisor rather than keep silently stale repository state.
-                    Err(_) => { let _ = socket.close().await; break; }
-                }
-                continue;
-            }
-        };
-        match frame {
-            Ok(Message::Text(text)) => {
-                if process_text_frame(&mut socket, &mut queue, &session, text.as_str())
-                    .await
-                    .is_err()
-                {
-                    break;
-                }
-            }
-            Ok(Message::Binary(bytes)) => {
-                let result = match std::str::from_utf8(&bytes) {
-                    Ok(text) => process_text_frame(&mut socket, &mut queue, &session, text).await,
-                    Err(_) => {
-                        let error = ProtocolErrorMessage::new(ProtocolError::new(
-                            error_codes::INVALID_REQUEST,
-                            "binary frames must contain UTF-8 JSON",
-                        ));
-                        send_json(&mut socket, &error).await
+                frame = socket.next() => match frame { Some(frame) => frame, None => break },
+                event = async {
+                    match events.as_mut() {
+                        Some(events) => events.recv().await,
+                        None => std::future::pending().await,
                     }
-                };
-                if result.is_err() {
+                } => {
+                    match event {
+                        Ok(event) => { if send_json(&mut socket, &event).await.is_err() { break; } }
+                        // A slow client must rehydrate through its existing session
+                        // supervisor rather than keep silently stale repository state.
+                        Err(_) => { let _ = socket.close().await; break; }
+                    }
+                    continue;
+                }
+            };
+            match frame {
+                Ok(Message::Text(text)) => {
+                    if process_text_frame(&mut socket, &mut queue, &session, text.as_str())
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                Ok(Message::Binary(bytes)) => {
+                    let result = match std::str::from_utf8(&bytes) {
+                        Ok(text) => process_text_frame(&mut socket, &mut queue, &session, text).await,
+                        Err(_) => {
+                            let error = ProtocolErrorMessage::new(ProtocolError::new(
+                                error_codes::INVALID_REQUEST,
+                                "binary frames must contain UTF-8 JSON",
+                            ));
+                            send_json(&mut socket, &error).await
+                        }
+                    };
+                    if result.is_err() {
+                        break;
+                    }
+                }
+                Ok(Message::Ping(payload)) => {
+                    if socket.send(Message::Pong(payload)).await.is_err() {
+                        break;
+                    }
+                }
+                Ok(Message::Pong(_)) => {}
+                Ok(Message::Close(_)) => {
+                    let _ = socket.close().await;
                     break;
                 }
-            }
-            Ok(Message::Ping(payload)) => {
-                if socket.send(Message::Pong(payload)).await.is_err() {
+                Err(error) => {
+                    warn!(error = %error, "WebSocket receive failed");
                     break;
                 }
-            }
-            Ok(Message::Pong(_)) => {}
-            Ok(Message::Close(_)) => {
-                let _ = socket.close().await;
-                break;
-            }
-            Err(error) => {
-                warn!(error = %error, "WebSocket receive failed");
-                break;
             }
         }
+    };
+    tokio::select! {
+        biased;
+        _ = stopping.changed() => {},
+        _ = transport => {},
+    }
+    if *stopping.borrow() {
+        let _ = tokio::time::timeout(Duration::from_secs(1), socket.send(Message::Close(None))).await;
     }
     // Drop queued requests, but let started dispatches finish with their locks
     // intact. Aborting a spawn_blocking await cannot stop the Git worker.
@@ -944,6 +1011,29 @@ async fn dispatch_authorized(
     if let Some(error) = authorization_error(&request.method, session) {
         return ResponseEnvelope::error(request.id, error);
     }
+    // Every repository-scoped request may start Git (even a read can refresh
+    // caches/catalog state). Pause them all to hold a genuinely quiet barrier.
+    let _work = if required_scope_for_method(&request.method).is_some()
+        && !matches!(
+            request.method.as_str(),
+            METHOD_SERVER_GET_INFO | METHOD_SERVER_GET_STATUS
+        )
+    {
+        match state.work.enter() {
+            Some(work) => Some(work),
+            None => {
+                return ResponseEnvelope::error(
+                    request.id,
+                    ProtocolError::new(
+                        error_codes::SERVER_BUSY,
+                        "The server is preparing a desktop update",
+                    ),
+                )
+            }
+        }
+    } else {
+        None
+    };
     dispatch(request, state).await
 }
 
@@ -3133,6 +3223,9 @@ fn internal_response(message: &str) -> ResponseEnvelope {
 
 struct ServerState {
     info: ServerInfo,
+    work: Arc<local_control::WorkGate>,
+    sockets: Arc<local_control::WorkGate>,
+    stopping: tokio::sync::watch::Sender<bool>,
     started_at: SystemTime,
     lifecycle: RwLock<ServerLifecycle>,
     repositories: RwLock<Vec<ConfiguredRepository>>,
@@ -3243,6 +3336,9 @@ impl ServerState {
                 bind_address: local_addr.to_string(),
                 capabilities,
             },
+            work: Arc::default(),
+            sockets: Arc::default(),
+            stopping: tokio::sync::watch::channel(false).0,
             started_at: SystemTime::now(),
             lifecycle: RwLock::new(ServerLifecycle::Ready),
             repositories: RwLock::new(repositories),
@@ -3414,6 +3510,9 @@ impl ServerState {
 
     async fn set_lifecycle(&self, lifecycle: ServerLifecycle) {
         if lifecycle != ServerLifecycle::Ready {
+            self.work.pause();
+            self.sockets.pause();
+            self.stopping.send_replace(true);
             self.stash_preparation.stop();
             self.stash_cache.clear();
         }

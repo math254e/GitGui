@@ -44,9 +44,23 @@ export interface DesktopSshHost {
 }
 
 export interface DesktopUpdateStatus {
-  phase: "disabled" | "idle" | "checking" | "available" | "current" | "downloaded" | "error";
+  phase: "disabled" | "idle" | "checking" | "available" | "current" | "downloading" | "downloaded" | "installing" | "error";
+  currentVersion?: string;
+  availableVersion?: string;
+  downloadedVersion?: string;
+  downloadPercent?: number;
+  checkedAt?: string;
+  errorContext?: "check" | "download" | "install";
+  releaseNotes?: string;
+  releaseUrl?: string;
+  /** Compatibility display alias; use the explicit version fields for actions. */
   version?: string;
   message?: string;
+}
+
+export interface DesktopUpdateActionResult {
+  accepted: boolean;
+  status: DesktopUpdateStatus;
 }
 
 export interface DesktopBridge {
@@ -64,7 +78,8 @@ export interface DesktopBridge {
   disconnectSshConnection(target: DesktopSshTarget): Promise<void>;
   getUpdateStatus(): Promise<DesktopUpdateStatus>;
   checkForUpdates(): Promise<DesktopUpdateStatus>;
-  installUpdate(): Promise<void>;
+  downloadUpdate(): Promise<DesktopUpdateActionResult>;
+  installUpdate(expectedVersion?: string): Promise<DesktopUpdateActionResult>;
   onUpdateStatus(listener: (status: DesktopUpdateStatus) => void): () => void;
   onDeepLink(listener: (url: string) => void): () => void;
   onApplicationWakeup(listener: () => void): () => void;

@@ -15,3 +15,4 @@ apps/web/build/
 apps/desktop/dist/
 apps/desktop/resources/server/
 packages/ssh/dist/
+/release/

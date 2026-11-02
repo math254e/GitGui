@@ -1,8 +1,10 @@
 appId: dev.gitgui.desktop
 productName: GitGui
+artifactName: GitGui-${version}-${os}-${arch}.${ext}
+# package-desktop.mjs overrides these with absolute, isolated staging paths.
 directories:
-  app: apps/desktop
-  output: ../../release
+  output: release
+  buildResources: apps/desktop/build
 files:
   - dist/**/*
   - package.json
@@ -11,15 +13,27 @@ extraResources:
     to: web
   - from: apps/desktop/resources/server
     to: server
+publish:
+  provider: github
+  owner: math254e
+  repo: GitGui
+  channel: latest
+  releaseType: release
 win:
-  target: nsis
-  icon: apps/desktop/build/icon.ico
-mac:
-  target: dmg
-  icon: apps/desktop/build/icon.icns
+  target:
+    - target: nsis
+      arch: [x64]
+  icon: icon.ico
+  signExecutable: false
+  verifyUpdateCodeSignature: false
+nsis:
+  differentialPackage: true
 linux:
   target:
-    - AppImage
-    - deb
-  icon: apps/desktop/build/icon.png
+    - target: AppImage
+      arch: [x64]
+  executableName: gitgui
+  icon: icon.png
+  category: Development
 asar: true
+npmRebuild: false

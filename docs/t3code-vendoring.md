@@ -331,6 +331,40 @@ written differently here. The behavior is unchanged.
 
 ## Re-syncing with a newer T3 Code
 
+### Desktop updater adaptations
+
+The desktop updater is adapted separately from the client-runtime snapshot
+above. Its source is the inspected reference checkout at
+`70cd258d8aac43ea57494527b00bf36de3efa6c0`; this does not change the client
+runtime's pinned snapshot or Effect version. The desktop files record their
+own provenance and are not covered by `scripts/t3code-vendored.json` hashes.
+
+- `apps/desktop/src/updates/update-machine.ts` adapts T3's `updateMachine.ts`
+  to GitGui's `phase`-based desktop bridge, plain-text release notes, and an
+  explicit installing phase.
+- `apps/desktop/src/updates/desktop-updates.ts` adapts `DesktopUpdates.ts`
+  to the existing Promise-based Electron lifecycle and an injected engine/local
+  server boundary. Startup/polling, explicit download/install, serialization,
+  queued-installer preservation, and failure recovery follow T3. Only stable
+  Windows/Linux releases are enabled; macOS, nightly/channel switching, and
+  remote request/commit handling are deferred.
+- `apps/desktop/src/updates/electron-updater.ts` follows T3's narrow
+  `ElectronUpdater.ts` adapter boundary. Unsigned Windows builds omit publisher
+  signature verification by the selected packaging policy; payload checksums
+  remain enabled. The installed 6.8.9 updater's stale install latch is cleared
+  only when the service admits an install, so asynchronous spawn failures can
+  be retried after recovery without allowing concurrent installs.
+- Rust's inherited desktop control and Git drain translate the desktop-owned
+  stop boundary without copying T3's service launcher or remote update protocol.
+  The Svelte root adapter/UI replace T3's React integration. See
+  [desktop control](../crates/gitgui-server/DESKTOP_CONTROL.md) and
+  [desktop releases](desktop-releases.md).
+
+Review these files against their recorded source when updating the desktop
+updater; do not bulk-sync the shared client runtime to that different snapshot.
+
+### Client-runtime re-sync procedure
+
 1. Select a clean T3 Code checkout at the desired snapshot and inspect its changes.
 2. Update the commit and tag in `scripts/t3code-vendored.json` and in all headers.
 3. Run `npm run vendor:sync`. Read the drift report; use

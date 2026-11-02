@@ -158,6 +158,11 @@ pub fn git_command() -> Command {
     #[cfg(test)]
     test_metrics::git();
     let mut command = Command::new("git");
+    // The desktop server keeps stdin open for its private control channel.
+    // Git must never inherit that handle: on Windows the Git launcher can
+    // wait on it indefinitely, and children must not consume control input.
+    // Commands that need input explicitly replace this with Stdio::piped().
+    command.stdin(Stdio::null());
 
     #[cfg(windows)]
     command.creation_flags(CREATE_NO_WINDOW);
@@ -170,6 +175,18 @@ pub fn git_command() -> Command {
     command.env("GIT_OPTIONAL_LOCKS", "0");
 
     command
+}
+
+#[cfg(test)]
+mod tests {
+    use super::GitCommand;
+
+    #[test]
+    fn explicit_git_input_still_overrides_the_closed_default_stdin() {
+        let result = GitCommand::run_with_stdin(&["hash-object", "--stdin"], None, b"hello\n")
+            .expect("Git commands with explicit input must retain their own pipe");
+        assert_eq!(result.trim(), "ce013625030ba8dba906f756967f9e9ca394464a");
+    }
 }
 
 // Per-thread counters keep the ignored file-view measurement independent of

@@ -2,6 +2,7 @@ import { join, normalize, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   app,
+  autoUpdater as nativeAutoUpdater,
   BrowserWindow,
   dialog,
   ipcMain,
@@ -9,7 +10,6 @@ import {
   protocol,
   type IpcMainInvokeEvent,
 } from "electron";
-import electronUpdater from "electron-updater";
 import type {
   DesktopConnectionRegistration,
   DesktopCredential,
@@ -19,9 +19,9 @@ import type {
 import { SshEnvironmentManager } from "@gitgui/ssh";
 import { BackendManager } from "./backend-manager.js";
 import { DesktopStateStore } from "./state-store.js";
-import { extractDeepLink, normalizeDeepLink, normalizeUpdateFeedUrl } from "./lifecycle.js";
-
-const { autoUpdater } = electronUpdater;
+import { extractDeepLink, normalizeDeepLink } from "./lifecycle.js";
+import { DesktopUpdates } from "./updates/desktop-updates.js";
+import { packagedUpdateEngine, updateDisabledReason } from "./updates/electron-updater.js";
 
 const DEVELOPMENT_ORIGIN = "http://127.0.0.1:1420";
 const APPLICATION_ORIGIN = "gitgui://app";
@@ -45,9 +45,9 @@ let stateStore: DesktopStateStore;
 let ssh: SshEnvironmentManager;
 let quitting = false;
 let pendingDeepLink = extractDeepLink(process.argv);
-let updateFeedUrl: string | null = null;
-let updateTimer: NodeJS.Timeout | undefined;
-let updateStatus: DesktopUpdateStatus = { phase: "disabled", message: "Updates are available in packaged builds." };
+let updates: DesktopUpdates;
+let updateQuitReady = false;
+let ignoreUpdaterQuit = false;
 
 app.on("open-url", (event, url) => {
   event.preventDefault();
@@ -62,11 +62,12 @@ app.whenReady().then(async () => {
     requestPassword: (target, prompt) => promptForSecret(target, prompt),
     requestHostTrust: (target) => promptForHostTrust(target),
   });
+  initializeUpdates();
   registerApplicationProtocol();
   registerIpc();
   await createMainWindow();
   registerDesktopProtocol();
-  initializeUpdates();
+  updates.start();
 
   app.on("activate", async () => {
     if (BrowserWindow.getAllWindows().length === 0) await createMainWindow();
@@ -89,12 +90,22 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", (event) => {
+  if (ignoreUpdaterQuit) { ignoreUpdaterQuit = false; event.preventDefault(); return; }
+  if (updates?.isInstallActive && !updateQuitReady) { event.preventDefault(); return; }
   if (quitting) return;
   event.preventDefault();
   quitting = true;
-  if (updateTimer) clearInterval(updateTimer);
+  updates?.dispose();
   void Promise.allSettled([backend?.shutdown(), ssh?.close()]).finally(() => app.quit());
 });
+
+nativeAutoUpdater.on("before-quit-for-update", () => {
+  // electron-updater can schedule app.quit before an asynchronous install error.
+  // A failed attempt must not later turn its scheduled quit into a normal quit.
+  ignoreUpdaterQuit = !updateQuitReady || !updates?.isInstallActive;
+});
+
+app.on("will-quit", () => updates?.dispose());
 
 async function createMainWindow(): Promise<void> {
   const window = new BrowserWindow({
@@ -118,7 +129,7 @@ async function createMainWindow(): Promise<void> {
       window.webContents.send("desktop:deep-link", pendingDeepLink);
       pendingDeepLink = null;
     }
-    window.webContents.send("desktop:updates:status", updateStatus);
+    window.webContents.send("desktop:updates:status", updates.status);
   });
   window.on("closed", () => { if (mainWindow === window) mainWindow = null; });
   window.webContents.setWindowOpenHandler(({ url }) => {
@@ -169,11 +180,14 @@ function registerIpc(): void {
   ipcMain.handle("desktop:ssh:discover", trusted(() => ssh.discoverHosts()));
   ipcMain.handle("desktop:ssh:ensure", trusted((_event, target: DesktopSshTarget) => ssh.ensureEnvironment(target)));
   ipcMain.handle("desktop:ssh:disconnect", trusted((_event, target: DesktopSshTarget) => ssh.disconnectEnvironment(target)));
-  ipcMain.handle("desktop:updates:status", trusted(() => updateStatus));
-  ipcMain.handle("desktop:updates:check", trusted(() => checkForUpdates()));
-  ipcMain.handle("desktop:updates:install", trusted(() => {
-    if (updateStatus.phase !== "downloaded") throw new Error("No downloaded GitGui update is ready to install");
-    autoUpdater.quitAndInstall();
+  ipcMain.handle("desktop:updates:status", trusted(() => updates.status));
+  ipcMain.handle("desktop:updates:check", trusted(() => updates.check()));
+  ipcMain.handle("desktop:updates:download", trusted(() => updates.download()));
+  ipcMain.handle("desktop:updates:install", trusted((_event, expectedVersion?: string) => {
+    if (expectedVersion !== undefined && (typeof expectedVersion !== "string" || expectedVersion.length > 64)) {
+      throw new Error("Invalid expected update version");
+    }
+    return updates.install(expectedVersion);
   }));
 }
 
@@ -183,38 +197,29 @@ function registerDesktopProtocol(): void {
 }
 
 function initializeUpdates(): void {
-  if (!app.isPackaged) return;
-  updateFeedUrl = normalizeUpdateFeedUrl(process.env.GITGUI_UPDATE_FEED_URL);
-  if (!updateFeedUrl) {
-    setUpdateStatus({ phase: "disabled", message: "No secure update feed is configured." });
-    return;
-  }
-  autoUpdater.setFeedURL({ provider: "generic", url: updateFeedUrl });
-  autoUpdater.on("checking-for-update", () => setUpdateStatus({ phase: "checking" }));
-  autoUpdater.on("update-available", () => setUpdateStatus({ phase: "available" }));
-  autoUpdater.on("update-not-available", () => setUpdateStatus({ phase: "current", version: app.getVersion() }));
-  autoUpdater.on("update-downloaded", (info) => setUpdateStatus({ phase: "downloaded", version: info.version }));
-  autoUpdater.on("error", (error) => setUpdateStatus({ phase: "error", message: error.message }));
-  setUpdateStatus({ phase: "idle" });
-  setTimeout(() => void checkForUpdates(), 15_000).unref();
-  updateTimer = setInterval(() => void checkForUpdates(), 6 * 60 * 60 * 1_000);
-  updateTimer.unref();
-}
-
-async function checkForUpdates(): Promise<DesktopUpdateStatus> {
-  if (!updateFeedUrl) return updateStatus;
-  setUpdateStatus({ phase: "checking" });
-  try {
-    await autoUpdater.checkForUpdates();
-  } catch (error) {
-    setUpdateStatus({ phase: "error", message: error instanceof Error ? error.message : "Update check failed." });
-  }
-  return updateStatus;
-}
-
-function setUpdateStatus(status: DesktopUpdateStatus): void {
-  updateStatus = status;
-  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("desktop:updates:status", status);
+  const { engine, hasFeed } = packagedUpdateEngine(process.resourcesPath);
+  updates = new DesktopUpdates(engine, {
+    async stopForInstall() {
+      await backend.shutdownForUpdate();
+      await ssh.close();
+      quitting = true;
+      updateQuitReady = true;
+    },
+    async recoverFromInstall() {
+      updateQuitReady = false;
+      quitting = false;
+      await backend.recoverAfterUpdate();
+      mainWindow?.webContents.send("desktop:application-wakeup");
+    },
+  }, {
+    currentVersion: app.getVersion(),
+    releaseBaseUrl: "https://github.com/math254e/GitGui/releases",
+    disabledReason: updateDisabledReason(app.isPackaged, process.platform, process.env.APPIMAGE,
+      hasFeed, process.env.GITGUI_DISABLE_AUTO_UPDATE === "1"),
+  });
+  updates.subscribe((status: DesktopUpdateStatus) => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("desktop:updates:status", status);
+  });
 }
 
 function queueDeepLink(value: string | null): void {

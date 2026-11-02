@@ -21,8 +21,11 @@
     "vendor:sync": "node scripts/vendor-t3code.mjs",
     "preview": "npm run preview -w @gitgui/web",
     "check": "npm run protocol:generate && npm run check --workspaces --if-present",
-    "test": "node --test scripts/vendor-t3code.test.mjs && npm run test --workspaces --if-present && cargo test --workspace",
-    "electron:package": "npm run server:prepare -- --release && npm run build && npm run desktop:build && electron-builder --config apps/desktop/electron-builder.yml"
+    "test": "node --test scripts/*.test.mjs && npm run test --workspaces --if-present && cargo test --workspace",
+    "release:version": "node scripts/release-versions.mjs",
+    "release:validate": "node scripts/validate-desktop-artifacts.mjs",
+    "release:test": "node --test scripts/release-versions.test.mjs scripts/desktop-packaging.test.mjs",
+    "electron:package": "node scripts/package-desktop.mjs"
   },
   "license": "MIT",
   "devDependencies": {
