@@ -59,8 +59,8 @@ app.whenReady().then(async () => {
   stateStore = new DesktopStateStore(join(app.getPath("userData"), "desktop-state.json"));
   ssh = new SshEnvironmentManager({
     stateDirectory: join(app.getPath("userData"), "ssh"),
-    requestPassword: (target, prompt) => promptForSecret(target, prompt),
-    requestHostTrust: (target) => promptForHostTrust(target),
+    requestPassword: (target, prompt, signal) => promptForSecret(target, prompt, signal),
+    requestHostTrust: (target, signal) => promptForHostTrust(target, signal),
   });
   initializeUpdates();
   registerApplicationProtocol();
@@ -252,7 +252,8 @@ function isAllowedRendererUrl(value: string): boolean {
   return value.startsWith(`${APPLICATION_ORIGIN}/`) || value === DEVELOPMENT_ORIGIN || value.startsWith(`${DEVELOPMENT_ORIGIN}/`);
 }
 
-async function promptForSecret(target: DesktopSshTarget, prompt: string): Promise<string | null> {
+async function promptForSecret(target: DesktopSshTarget, prompt: string, signal: AbortSignal): Promise<string | null> {
+  if (signal.aborted) return null;
   const parent = mainWindow ?? undefined;
   const window = new BrowserWindow({
     parent,
@@ -277,6 +278,7 @@ async function promptForSecret(target: DesktopSshTarget, prompt: string): Promis
     const finish = (value: string | null) => {
       if (settled) return;
       settled = true;
+      signal.removeEventListener("abort", onAbort);
       ipcMain.removeListener("desktop:secret-prompt:response", onResponse);
       if (!window.isDestroyed()) window.close();
       resolve(value);
@@ -285,14 +287,18 @@ async function promptForSecret(target: DesktopSshTarget, prompt: string): Promis
       if (event.sender !== window.webContents) return;
       finish(typeof value === "string" ? value : null);
     };
+    const onAbort = () => finish(null);
+    signal.addEventListener("abort", onAbort, { once: true });
     ipcMain.on("desktop:secret-prompt:response", onResponse);
     window.once("closed", () => finish(null));
     void window.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`).catch(() => finish(null));
   });
 }
 
-async function promptForHostTrust(target: DesktopSshTarget): Promise<boolean> {
+async function promptForHostTrust(target: DesktopSshTarget, signal: AbortSignal): Promise<boolean> {
+  if (signal.aborted) return false;
   const options = {
+    signal,
     type: "warning" as const,
     title: "Confirm SSH host",
     message: `Trust ${target.host} and add its host key to your OpenSSH known_hosts file?`,

@@ -97,7 +97,10 @@ of the inspected T3 snapshot, not required Rust or Svelte differences.
   `updateMachine.ts:reduceDesktopUpdateStateOnUpdateAvailable`: preserve the
   installer only for a matching offer; replace it for a different offer. A
   matching offer can refresh its notes, retaining existing notes only when the
-  feed omits them. Expected-version installation rejects stale confirmations.
+  feed omits them. Expected-version installation waits up to 90 seconds for an
+  admitted background check, then revalidates the version and reserves the
+  install action. Changed versions and timed-out checks refuse installation;
+  disposal releases waiting callers. Unversioned calls do not wait.
 - `release-notes.ts` copies T3's entity decoder and strip-before-decode order
   from `releaseNotes.ts`. GitGui keeps bounded plain text instead of grouped
   summaries: six notes, 32,000 input characters, 8,000 output characters.
@@ -113,15 +116,20 @@ of the inspected T3 snapshot, not required Rust or Svelte differences.
   can each produce an annotation, as separate boundary observations.
 - `main.ts` and `packages/ssh/src/index.ts` translate T3's early install
   reservation and `tunnel.ts` manager/entry scopes into GitGui's existing Promise
-  manager: close SSH admission synchronously before backend preparation, track
-  pending setup and disposal, and drain both before installation can quit.
+  manager: close SSH admission synchronously before backend preparation, cancel
+  pending setup, and drain resource disposal before installation can quit.
   Results arriving after closure are disposed instead of registered. Recovery
   reopens admission only after the backend is restored, before emitting wakeup;
   failed recovery leaves admission closed. Normal shutdown uses the same drain.
   Existing managed/external remote-process ownership remains unchanged. T3's
-  Effect scope cancellation is not copied literally into the Promise manager;
-  this adaptation waits for pending setup, including any outstanding prompt,
-  rather than adding a second cancellation/retry owner.
+  Effect scope cancellation is translated to an AbortController per acquisition.
+  Close aborts launch-result waits, readiness probes, and outstanding prompts;
+  the password window closes and native host-trust dialogs receive the signal.
+  Late answers cannot start a retry after recovery. T3's one-second probe budget
+  covers both HTTP headers and body consumption, inside GitGui's existing
+  60-second overall readiness budget. Prompts expire after T3's three-minute
+  budget. Cleanup cancels deadline timers and listeners; owned remote cleanup
+  retains its existing 15-second budget. No new connection retry owner is added.
 
 The SSH race combined snapshot-only cleanup introduced in `369e98c` with updater
 cleanup added in `7e49ce0`. The regression tests exercise the real manager through
@@ -134,9 +142,29 @@ Source for these corrections remains T3 commit
 the applicable upstream implementation and failure tests together, then record
 each concrete adaptation rather than claiming file-for-file updater vendoring.
 
-Combined correction validation: 58 desktop tests and 13 SSH tests passed;
+Combined correction validation: 66 desktop tests and 19 SSH tests passed;
 both package TypeScript checks and the SSH/desktop production TypeScript build
-passed. Installed upgrades were not repeated as part of these corrections.
+passed. Regression coverage includes unanswered prompts, stalled descriptor
+headers/bodies, a real streaming HTTP body that never finishes, prompt/probe
+deadlines, and confirmed installs overlapping matching/replacement/failed checks.
+Installed upgrades were not repeated as part of these corrections.
+
+### Deferred remote launch cleanup (release decision)
+
+The follow-up review found a remaining P2 in launch cancellation: if the remote
+script has already started its detached managed server but its launch result has
+not arrived, cancellation kills the local SSH process without stopping that
+remote server. Late launch output is ignored. If the server's ownership metadata
+was written, a later attempt can reuse it without the lost bootstrap credential,
+potentially preventing first-time onboarding. The cancellation tests establish
+local cleanup, not complete remote launch cleanup.
+
+The maintainer explicitly deferred this issue to the remote architecture review
+while authorizing the next desktop release. That work must retain ownership
+during launch, record it before readiness, and drain bounded, ownership-checked
+remote cleanup on cancellation, including a launcher still running. The cleanup
+claims above apply to acquired resources with known ownership; they do not
+establish cleanup for an interrupted remote launch before its result arrives.
 
 ## GitGui starting point before implementation
 

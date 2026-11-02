@@ -12,6 +12,9 @@ import { defaultUpdateDiagnosticSink, reportUpdateFailure, type UpdateDiagnostic
 import { downloadComplete, initialUpdateState, isStableVersion, noUpdate, releaseNotesText,
   startCheck, updateAvailable, updateFailure, type UpdateAction } from "./update-machine.js";
 
+// T3 DesktopUpdates.ts PREPARED_INSTALL_CHECK_WAIT, same upstream snapshot.
+const PREPARED_INSTALL_CHECK_WAIT_MS = 90_000;
+
 export interface UpdateEngineEvents {
   available(info: unknown): void;
   current(): void;
@@ -53,6 +56,7 @@ export class DesktopUpdates {
   private started = false;
   private disposed = false;
   private installerInvoked = false;
+  private readonly checkWaiters = new Set<() => void>();
 
   constructor(private readonly engine: UpdateEngine, private readonly lifecycle: UpdateLifecycle,
     private readonly options: DesktopUpdatesOptions) {
@@ -136,7 +140,10 @@ export class DesktopUpdates {
       this.report("check", "ElectronUpdaterCheckForUpdatesError");
       this.set(updateFailure(this.state, "check"));
     }
-    finally { if (this.action === "check") this.action = null; }
+    finally {
+      if (this.action === "check") this.action = null;
+      for (const finished of [...this.checkWaiters]) finished();
+    }
     return this.status;
   }
 
@@ -160,6 +167,13 @@ export class DesktopUpdates {
   }
 
   async install(expectedVersion?: string): Promise<DesktopUpdateActionResult> {
+    // T3's prepared install waits for an admitted check, then revalidates both
+    // version and action ownership. The wait itself never reserves installation.
+    while (this.started && !this.disposed && this.state.phase !== "disabled"
+      && this.action === "check" && expectedVersion !== undefined) {
+      if (this.state.downloadedVersion !== expectedVersion) return this.result(false);
+      if (!await this.waitForCheck()) return this.result(false);
+    }
     if (!this.canAct() || this.state.phase !== "downloaded" || !this.state.downloadedVersion
       || (expectedVersion !== undefined && expectedVersion !== this.state.downloadedVersion)) return this.result(false);
     this.action = "install";
@@ -185,6 +199,7 @@ export class DesktopUpdates {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    for (const finished of [...this.checkWaiters]) finished();
     clearTimeout(this.startupTimer);
     clearInterval(this.pollTimer);
     this.engine.cancelDownload();
@@ -194,6 +209,15 @@ export class DesktopUpdates {
 
   private canAct(): boolean {
     return this.started && !this.disposed && this.state.phase !== "disabled" && this.action === null;
+  }
+
+  private waitForCheck(): Promise<boolean> {
+    return new Promise((resolve) => {
+      const finish = () => { cleanup(); resolve(true); };
+      const timer = setTimeout(() => { cleanup(); resolve(false); }, PREPARED_INSTALL_CHECK_WAIT_MS);
+      const cleanup = () => { clearTimeout(timer); this.checkWaiters.delete(finish); };
+      this.checkWaiters.add(finish);
+    });
   }
 
   private report(operation: UpdateDiagnosticOperation, errorTag: UpdateDiagnosticErrorTag, event?: UpdateDiagnosticEvent): void {

@@ -4,6 +4,8 @@ import { createServer } from "node:net";
 import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir, platform } from "node:os";
 import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
+import { withDeadline } from "./cancellation.js";
 import type {
   DesktopPreparedConnection,
   DesktopSshHost,
@@ -12,6 +14,10 @@ import type {
 
 const REMOTE_RESULT_PREFIX = "GITGUI_SSH_REMOTE=";
 const READY_TIMEOUT_MS = 60_000;
+// T3 tunnel.ts readiness probes and DesktopSshPasswordPrompts.ts prompt budget.
+const READY_PROBE_TIMEOUT_MS = 1_000;
+const PROMPT_TIMEOUT_MS = 3 * 60_000;
+const CLOSED_MESSAGE = "SSH connections are closed while GitGui is shutting down or preparing an app update.";
 
 interface ManagedSshEnvironment {
   tunnel: ChildProcessWithoutNullStreams;
@@ -102,16 +108,18 @@ rm -f "$PID_FILE" "$PORT_FILE" "$KIND_FILE" "$TOKEN_FILE"
 
 export interface SshEnvironmentManagerOptions {
   stateDirectory: string;
-  requestPassword?: (target: DesktopSshTarget, prompt: string) => Promise<string | null>;
-  requestHostTrust?: (target: DesktopSshTarget) => Promise<boolean>;
+  requestPassword?: (target: DesktopSshTarget, prompt: string, signal: AbortSignal) => Promise<string | null>;
+  requestHostTrust?: (target: DesktopSshTarget, signal: AbortSignal) => Promise<boolean>;
 }
 
 export class SshEnvironmentManager {
   private readonly environments = new Map<string, ManagedSshEnvironment>();
   // T3 packages/ssh/src/tunnel.ts (70cd258d8aac43ea57494527b00bf36de3efa6c0)
   // owns pending entries and entry finalizers in scopes. GitGui's existing
-  // Promise manager gates admission and drains that ownership before quit.
-  private readonly pending = new Map<string, Promise<DesktopPreparedConnection>>();
+  // Promise manager cancels pending acquisitions and drains finalizers on quit.
+  private readonly pending = new Map<string, {
+    controller: AbortController; promise: Promise<DesktopPreparedConnection>;
+  }>();
   private readonly disposals = new Set<Promise<void>>();
   private closed = false;
   private closing?: Promise<void>;
@@ -127,20 +135,21 @@ export class SshEnvironmentManager {
     validateTarget(target);
     const key = targetKey(target);
     const pending = this.pending.get(key);
-    if (pending) return pending;
-    const operation = this.ensureOpenEnvironment(target).finally(() => {
-      if (this.pending.get(key) === operation) this.pending.delete(key);
+    if (pending) return pending.promise;
+    const controller = new AbortController();
+    const operation = this.ensureOpenEnvironment(target, controller.signal).finally(() => {
+      if (this.pending.get(key)?.promise === operation) this.pending.delete(key);
     });
-    this.pending.set(key, operation);
+    this.pending.set(key, { controller, promise: operation });
     return operation;
   }
 
-  private async ensureOpenEnvironment(target: DesktopSshTarget): Promise<DesktopPreparedConnection> {
+  private async ensureOpenEnvironment(target: DesktopSshTarget, signal: AbortSignal): Promise<DesktopPreparedConnection> {
     const key = targetKey(target);
     const existing = this.environments.get(key);
     if (existing && existing.tunnel.exitCode === null) {
       try {
-        await fetchDescriptor(existing.connection.httpUrl);
+        await fetchDescriptor(existing.connection.httpUrl, signal);
       } catch {
         await this.disconnectEnvironment(target);
       }
@@ -151,16 +160,17 @@ export class SshEnvironmentManager {
     this.assertOpen();
     let managed: ManagedSshEnvironment;
     try {
-      managed = await this.createEnvironment(target);
+      managed = await this.createEnvironment(target, signal);
     } catch (error) {
       this.assertOpen();
       let retryError = error;
       if (isUnknownHostKeyFailure(retryError) && this.options.requestHostTrust) {
-        const trusted = await this.options.requestHostTrust(target);
+        const trusted = await withDeadline(signal, PROMPT_TIMEOUT_MS,
+          (promptSignal) => this.options.requestHostTrust!(target, promptSignal));
         this.assertOpen();
         if (!trusted) throw new Error("SSH host-key confirmation was cancelled");
         try {
-          managed = await this.createEnvironment(target, "yes");
+          managed = await this.createEnvironment(target, signal, "yes");
           return await this.registerEnvironment(key, managed);
         } catch (hostRetryError) {
           retryError = hostRetryError;
@@ -168,10 +178,11 @@ export class SshEnvironmentManager {
       }
       this.assertOpen();
       if (!isAuthenticationFailure(retryError) || !this.options.requestPassword) throw retryError;
-      const password = await this.options.requestPassword(target, `Password or key passphrase for ${formatTarget(target)}`);
+      const password = await withDeadline(signal, PROMPT_TIMEOUT_MS,
+        (promptSignal) => this.options.requestPassword!(target, `Password or key passphrase for ${formatTarget(target)}`, promptSignal));
       this.assertOpen();
       if (!password) throw new Error("SSH authentication was cancelled");
-      managed = await this.createEnvironment(target, password);
+      managed = await this.createEnvironment(target, signal, password);
     }
     return this.registerEnvironment(key, managed);
   }
@@ -198,9 +209,11 @@ export class SshEnvironmentManager {
     if (this.closing) return this.closing;
     const entries = [...this.environments.values()];
     this.environments.clear();
+    const pending = [...this.pending.values()];
+    for (const acquisition of pending) acquisition.controller.abort(new Error(CLOSED_MESSAGE));
     this.closing = Promise.allSettled([
       ...entries.map((entry) => this.disposeEnvironment(entry)),
-      ...this.pending.values(),
+      ...pending.map((acquisition) => acquisition.promise),
       ...this.disposals,
     ]).then(() => undefined);
     return this.closing;
@@ -213,7 +226,7 @@ export class SshEnvironmentManager {
   }
 
   private assertOpen(): void {
-    if (this.closed) throw new Error("SSH connections are closed while GitGui is shutting down or preparing an app update.");
+    if (this.closed) throw new Error(CLOSED_MESSAGE);
   }
 
   private disposeEnvironment(entry: ManagedSshEnvironment): Promise<void> {
@@ -225,11 +238,12 @@ export class SshEnvironmentManager {
     return operation;
   }
 
-  private async createEnvironment(target: DesktopSshTarget, password?: string): Promise<ManagedSshEnvironment> {
+  private async createEnvironment(target: DesktopSshTarget, signal: AbortSignal, password?: string): Promise<ManagedSshEnvironment> {
     const bootstrap = randomToken();
     const remoteStateKey = Buffer.from(targetKey(target)).toString("base64url").slice(0, 48);
     const remoteCommand = buildRemoteCommand(REMOTE_LAUNCH_SCRIPT, remoteStateKey);
     const environment = password ? await this.askpassEnvironment(password) : process.env;
+    signal.throwIfAborted();
     const launch = spawn("ssh", [...sshArguments(target), formatTarget(target), remoteCommand], {
       env: environment,
       windowsHide: true,
@@ -241,7 +255,7 @@ export class SshEnvironmentManager {
 
     let remote: RemoteLaunchResult;
     try {
-      remote = await readRemoteLaunchResult(launch);
+      remote = await readRemoteLaunchResult(launch, signal);
     } catch (error) {
       terminate(launch);
       throw error;
@@ -250,6 +264,7 @@ export class SshEnvironmentManager {
     let tunnel: ChildProcessWithoutNullStreams | undefined;
     try {
       const localPort = await reserveLocalPort();
+      signal.throwIfAborted();
       tunnel = spawn("ssh", [
         ...sshArguments(target),
         "-N",
@@ -263,7 +278,7 @@ export class SshEnvironmentManager {
       });
 
       const httpUrl = `http://127.0.0.1:${localPort}`;
-      const descriptor = await waitForDescriptor(httpUrl, tunnel);
+      const descriptor = await waitForDescriptor(httpUrl, tunnel, signal);
       return {
         tunnel,
         connectionTarget: target,
@@ -391,7 +406,8 @@ export function parseRemoteLaunchResult(stdout: string): RemoteLaunchResult | nu
   return null;
 }
 
-function readRemoteLaunchResult(child: ChildProcessWithoutNullStreams): Promise<RemoteLaunchResult> {
+function readRemoteLaunchResult(child: ChildProcessWithoutNullStreams, signal: AbortSignal): Promise<RemoteLaunchResult> {
+  signal.throwIfAborted();
   return new Promise((resolve, reject) => {
     let stdout = "";
     let stderr = "";
@@ -404,6 +420,8 @@ function readRemoteLaunchResult(child: ChildProcessWithoutNullStreams): Promise<
       child.stdout.off("data", onStdout);
       child.stderr.off("data", onStderr);
       child.off("exit", onExit);
+      // Keep the one-shot error observer for a spawn error arriving after abort.
+      signal.removeEventListener("abort", onAbort);
       error ? reject(error) : resolve(result!);
     };
     const onStdout = (chunk: Buffer) => {
@@ -417,10 +435,13 @@ function readRemoteLaunchResult(child: ChildProcessWithoutNullStreams): Promise<
       if (stderr.length > 64_000) stderr = stderr.slice(-32_000);
     };
     const onExit = (code: number | null) => finish(new Error(`Remote GitGui launch exited (${code ?? "unknown"}): ${redact(stderr)}`));
+    const onError = (error: Error) => finish(error);
+    const onAbort = () => finish(signal.reason);
     child.stdout.on("data", onStdout);
     child.stderr.on("data", onStderr);
     child.once("exit", onExit);
-    child.once("error", (error) => finish(error));
+    child.once("error", onError);
+    signal.addEventListener("abort", onAbort, { once: true });
   });
 }
 
@@ -470,23 +491,30 @@ async function reserveLocalPort(): Promise<number> {
   });
 }
 
-async function waitForDescriptor(httpUrl: string, tunnel: ChildProcessWithoutNullStreams) {
-  const deadline = Date.now() + READY_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    if (tunnel.exitCode !== null) throw new Error(`SSH tunnel exited with code ${tunnel.exitCode}`);
-    try {
-      return await fetchDescriptor(httpUrl);
-    } catch {
-      await new Promise((resolve) => setTimeout(resolve, 250));
+async function waitForDescriptor(httpUrl: string, tunnel: ChildProcessWithoutNullStreams, signal: AbortSignal) {
+  return withDeadline(signal, READY_TIMEOUT_MS, async (readySignal) => {
+    while (true) {
+      readySignal.throwIfAborted();
+      if (tunnel.exitCode !== null) throw new Error(`SSH tunnel exited with code ${tunnel.exitCode}`);
+      try {
+        return await fetchDescriptor(httpUrl, readySignal);
+      } catch {
+        readySignal.throwIfAborted();
+        await delay(250, undefined, { signal: readySignal });
+      }
     }
-  }
-  throw new Error("Forwarded GitGui server did not become ready");
+  });
 }
 
-async function fetchDescriptor(httpUrl: string) {
-  const response = await fetch(`${httpUrl}/.well-known/gitgui/environment`);
-  if (!response.ok) throw new Error(`GitGui descriptor returned HTTP ${response.status}`);
-  return await response.json() as DesktopPreparedConnection["descriptor"];
+async function fetchDescriptor(httpUrl: string, signal: AbortSignal) {
+  // Bound headers AND body consumption; the outer readiness loop alone cannot
+  // interrupt a peer that accepts HTTP but never finishes its descriptor body.
+  return withDeadline(signal, READY_PROBE_TIMEOUT_MS, async (probeSignal) => {
+    const response = await fetch(`${httpUrl}/.well-known/gitgui/environment`, { signal: probeSignal });
+    probeSignal.throwIfAborted();
+    if (!response.ok) throw new Error(`GitGui descriptor returned HTTP ${response.status}`);
+    return await response.json() as DesktopPreparedConnection["descriptor"];
+  });
 }
 
 function terminate(child: ChildProcessWithoutNullStreams): void {

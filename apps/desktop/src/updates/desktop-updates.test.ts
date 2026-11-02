@@ -138,6 +138,76 @@ describe("desktop update lifecycle (adapted from T3 DesktopUpdates tests)", () =
     h.updates.dispose();
   });
 
+  it.each(["matching", "replacement", "failed"])("revalidates a confirmed install after a %s background check", async (outcome) => {
+    const h = harness();
+    await h.updates.check(); await h.updates.download();
+    const checked = deferred();
+    h.engine.check = async () => {
+      await checked.promise;
+      if (outcome === "failed") throw new Error("feed unavailable");
+      h.events.available({ version: outcome === "matching" ? "1.2.0" : "1.3.0" });
+    };
+    const checking = h.updates.check();
+    let finished = false;
+    const installing = h.updates.install("1.2.0").then((result) => { finished = true; return result; });
+    await Promise.resolve();
+    expect(finished).toBe(false);
+    expect(h.lifecycle.stopForInstall).not.toHaveBeenCalled();
+    checked.resolve(); await checking;
+    expect((await installing).accepted).toBe(outcome !== "replacement");
+    expect(h.engine.install).toHaveBeenCalledTimes(outcome === "replacement" ? 0 : 1);
+    if (outcome === "replacement") expect(h.updates.status.availableVersion).toBe("1.3.0");
+    h.updates.dispose();
+  });
+
+  it("bounds the wait for a check at 90 seconds and permits a later retry", async () => {
+    vi.useFakeTimers();
+    const h = harness();
+    await h.updates.check(); await h.updates.download();
+    const checked = deferred();
+    h.engine.check = async () => { await checked.promise; h.events.available({ version: "1.2.0" }); };
+    const checking = h.updates.check();
+    let finished = false;
+    const installing = h.updates.install("1.2.0").then((result) => { finished = true; return result; });
+    await vi.advanceTimersByTimeAsync(89_999);
+    expect(finished).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect((await installing).accepted).toBe(false);
+    expect(h.engine.install).not.toHaveBeenCalled();
+    checked.resolve(); await checking;
+    expect((await h.updates.install("1.2.0")).accepted).toBe(true);
+    h.updates.dispose();
+  });
+
+  it("releases waiting confirmations on disposal without installing", async () => {
+    const h = harness();
+    await h.updates.check(); await h.updates.download();
+    const checked = deferred();
+    h.engine.check = () => checked.promise;
+    const checking = h.updates.check();
+    const installing = h.updates.install("1.2.0");
+    h.updates.dispose();
+    expect((await installing).accepted).toBe(false);
+    expect(h.engine.install).not.toHaveBeenCalled();
+    checked.resolve(); await checking;
+  });
+
+  it("admits only one of two confirmations waiting for the same check", async () => {
+    const h = harness();
+    await h.updates.check(); await h.updates.download();
+    const checked = deferred();
+    h.engine.check = async () => { await checked.promise; h.events.available({ version: "1.2.0" }); };
+    const checking = h.updates.check();
+    expect((await h.updates.install()).accepted).toBe(false);
+    const first = h.updates.install("1.2.0");
+    const second = h.updates.install("1.2.0");
+    checked.resolve(); await checking;
+    expect((await first).accepted).toBe(true);
+    expect((await second).accepted).toBe(false);
+    expect(h.engine.install).toHaveBeenCalledOnce();
+    h.updates.dispose();
+  });
+
   it("does not install when local Git work cannot drain, and recovers before releasing the action", async () => {
     const recovery = deferred();
     const h = harness({}, { stopForInstall: async () => { throw new Error("busy"); }, recoverFromInstall: () => recovery.promise });

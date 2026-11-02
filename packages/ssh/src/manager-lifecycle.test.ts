@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { deferred, sshProcessFixture } from "../testing/ssh-fixture.js";
+import { createServer } from "node:http";
+
+const nativeFetch = globalThis.fetch;
 
 const { spawn } = vi.hoisted(() => ({ spawn: vi.fn() }));
 vi.mock("node:child_process", () => ({ spawn }));
@@ -13,6 +16,7 @@ beforeEach(() => {
 });
 afterEach(async () => {
   await manager.close();
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.clearAllMocks();
 });
@@ -22,10 +26,12 @@ describe("SSH manager install resource ownership (T3 tunnel scopes)", () => {
     { serverKind: "managed" as const, reused: false },
     { serverKind: "managed" as const, reused: true },
     { serverKind: "external" as const, reused: true },
-  ])("drains pending setup and disposes a late $serverKind result (reused=$reused)", async (ownership) => {
-    const process = sshProcessFixture({ ...ownership, manualLaunch: true, manualStop: true });
+  ])("cancels pending setup and disposes a $serverKind result (reused=$reused)", async (ownership) => {
+    const process = sshProcessFixture({ ...ownership, manualStop: true });
     spawn.mockImplementation(process.spawn);
+    vi.mocked(fetch).mockReturnValue(new Promise(() => {}));
     const setup = expect(manager.ensureEnvironment(target)).rejects.toThrow("SSH connections are closed");
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledOnce());
     let closed = false;
     const closing = manager.close().then(() => { closed = true; });
     expect(manager.close()).toBe(manager.close());
@@ -33,8 +39,6 @@ describe("SSH manager install resource ownership (T3 tunnel scopes)", () => {
     expect(process.launches).toHaveLength(1);
     expect(closed).toBe(false);
 
-    process.launchResult();
-    await vi.waitFor(() => expect(process.tunnels).toHaveLength(1));
     await vi.waitFor(() => expect(process.tunnels[0].kill).toHaveBeenCalledOnce());
     if (ownership.serverKind === "managed") {
       expect(closed).toBe(false);
@@ -96,9 +100,108 @@ describe("SSH manager install resource ownership (T3 tunnel scopes)", () => {
     process.launches[0].emit("exit", 255);
     await asked.promise;
     const closing = manager.close();
-    answer.resolve(undefined as never);
     await setup;
     await closing;
+    await manager.reopen();
+    answer.resolve(undefined as never);
+    await Promise.resolve();
+    expect(process.launches).toHaveLength(1);
+  });
+
+  it("cancels an SSH launch without waiting for its readiness result", async () => {
+    const process = sshProcessFixture({ manualLaunch: true });
+    spawn.mockImplementation(process.spawn);
+    const setup = expect(manager.ensureEnvironment(target)).rejects.toThrow("SSH connections are closed");
+    await manager.close();
+    await setup;
+    expect(process.launches[0].kill).toHaveBeenCalledOnce();
+    expect(process.tunnels).toHaveLength(0);
+    expect(process.launches[0].stdout.listenerCount("data")).toBe(0);
+    // Late launch output/error cannot recreate resources or crash the shell.
+    process.launchResult();
+    expect(() => process.launches[0].emit("error", new Error("late spawn failure"))).not.toThrow();
+    expect(process.tunnels).toHaveLength(0);
+  });
+
+  it("aborts a stuck descriptor body and its tunnel before close completes", async () => {
+    const process = sshProcessFixture();
+    spawn.mockImplementation(process.spawn);
+    let signal!: AbortSignal;
+    const readingBody = deferred();
+    vi.mocked(fetch).mockImplementation(async (_url, options) => {
+      signal = options!.signal!;
+      return { ok: true, json: () => { readingBody.resolve(); return new Promise(() => {}); } } as Response;
+    });
+    const setup = expect(manager.ensureEnvironment(target)).rejects.toThrow("SSH connections are closed");
+    await readingBody.promise;
+    await manager.close();
+    await setup;
+    expect(signal.aborted).toBe(true);
+    expect(process.tunnels[0].kill).toHaveBeenCalledOnce();
+    expect(process.stops).toHaveLength(1);
+  });
+
+  it("cancels a real HTTP descriptor stream that never finishes", async () => {
+    const bodyStarted = deferred();
+    const responseClosed = deferred();
+    const server = createServer((_request, response) => {
+      response.once("close", () => responseClosed.resolve());
+      response.writeHead(200, { "content-type": "application/json" });
+      response.write('{"environmentId":');
+      bodyStarted.resolve();
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    try {
+      const address = server.address() as { port: number };
+      vi.mocked(fetch).mockImplementation((_url, options) => nativeFetch(`http://127.0.0.1:${address.port}/`, options));
+      const process = sshProcessFixture();
+      spawn.mockImplementation(process.spawn);
+      const setup = expect(manager.ensureEnvironment(target)).rejects.toThrow("SSH connections are closed");
+      await bodyStarted.promise;
+      await manager.close();
+      await setup;
+      await responseClosed.promise;
+      expect(process.tunnels[0].killed).toBe(true);
+      expect(process.stops).toHaveLength(1);
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it.each(["headers", "body"])("bounds readiness across stalled descriptor %s", async (stage) => {
+    vi.useFakeTimers();
+    const process = sshProcessFixture();
+    spawn.mockImplementation(process.spawn);
+    if (stage === "headers") vi.mocked(fetch).mockReturnValue(new Promise(() => {}));
+    else vi.mocked(fetch).mockResolvedValue({ ok: true, json: () => new Promise(() => {}) } as Response);
+    const bounded = expect(manager.ensureEnvironment(target)).rejects.toThrow("SSH operation timed out");
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalled());
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(vi.mocked(fetch).mock.calls[0][1]!.signal!.aborted).toBe(true);
+    expect(process.tunnels[0].killed).toBe(false);
+    await vi.advanceTimersByTimeAsync(60_000);
+    await bounded;
+    expect(process.tunnels.at(-1)!.kill).toHaveBeenCalledOnce();
+    expect(process.stops).toHaveLength(1);
+  });
+
+  it("expires an unanswered password prompt and aborts its presentation", async () => {
+    vi.useFakeTimers();
+    let signal!: AbortSignal;
+    const asked = deferred();
+    manager = new SshEnvironmentManager({ stateDirectory: "/unused", requestPassword: (_target, _prompt, input) => {
+      signal = input; asked.resolve(); return new Promise(() => {});
+    } });
+    const process = sshProcessFixture({ manualLaunch: true });
+    spawn.mockImplementation(process.spawn);
+    const setup = expect(manager.ensureEnvironment(target)).rejects.toThrow("SSH operation timed out");
+    process.launches[0].stderr.emit("data", Buffer.from("Permission denied (publickey)"));
+    process.launches[0].emit("exit", 255);
+    await asked.promise;
+    await vi.advanceTimersByTimeAsync(180_000);
+    await setup;
+    expect(signal.aborted).toBe(true);
     expect(process.launches).toHaveLength(1);
   });
 

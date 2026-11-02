@@ -9,6 +9,7 @@ const fixture = vi.hoisted(() => ({
   shutdown: vi.fn(async () => {}), closeSsh: vi.fn(async () => {}), dispose: vi.fn(), quit: vi.fn(),
   reopenSsh: vi.fn(async () => {}), spawn: vi.fn(),
   handlers: new Map<string, (...args: any[]) => any>(),
+  windows: [] as any[], showMessageBox: vi.fn(),
 }));
 
 vi.mock("node:child_process", () => ({ spawn: fixture.spawn }));
@@ -16,18 +17,23 @@ vi.mock("node:child_process", () => ({ spawn: fixture.spawn }));
 vi.mock("electron", async () => {
   const { EventEmitter } = await import("node:events");
   class Window extends EventEmitter {
+    constructor(..._args: unknown[]) { super(); fixture.windows.push(this); }
+    destroyed = false;
     static getAllWindows() { return []; }
     webContents = Object.assign(new EventEmitter(), { send: vi.fn(), setWindowOpenHandler: vi.fn() });
     loadURL = async () => {};
     show() {}
-    isDestroyed() { return false; }
+    isDestroyed() { return this.destroyed; }
+    close() { this.destroyed = true; this.emit("closed"); }
   }
   return {
     app: Object.assign(new EventEmitter(), { requestSingleInstanceLock: () => true, quit: fixture.quit,
       whenReady: async () => {}, getPath: () => "/fixture", getVersion: () => "1.1.0", isPackaged: false }),
-    autoUpdater: new EventEmitter(), BrowserWindow: Window, dialog: {}, net: {},
+    autoUpdater: new EventEmitter(), BrowserWindow: Window, dialog: { showMessageBox: fixture.showMessageBox }, net: {},
     protocol: { registerSchemesAsPrivileged: vi.fn(), handle: vi.fn() },
-    ipcMain: { handle: (channel: string, handler: (...args: any[]) => any) => fixture.handlers.set(channel, handler) },
+    ipcMain: Object.assign(new EventEmitter(), {
+      handle: (channel: string, handler: (...args: any[]) => any) => fixture.handlers.set(channel, handler),
+    }),
   };
 });
 // Use the real SSH manager through IPC, with controlled process/HTTP boundaries.
@@ -63,6 +69,7 @@ beforeEach(() => {
   vi.resetModules(); vi.clearAllMocks();
   fixture.installActive = false;
   fixture.handlers.clear();
+  fixture.windows.length = 0;
   fixture.shutdownForUpdate.mockReset().mockResolvedValue(undefined);
   fixture.recoverAfterUpdate.mockReset().mockResolvedValue(undefined);
   fixture.spawn.mockImplementation(sshProcessFixture().spawn);
@@ -120,18 +127,19 @@ describe("Electron quit and updater handoff", () => {
   });
 
   it("closes SSH admission before backend preparation and drains late setup before updater quit", async () => {
-    const process = sshProcessFixture({ manualLaunch: true, manualStop: true });
+    const process = sshProcessFixture({ manualStop: true });
     fixture.spawn.mockImplementation(process.spawn);
     const backendStopped = deferred();
     fixture.shutdownForUpdate.mockReturnValueOnce(backendStopped.promise);
     const electron = await loadMain();
     fixture.installActive = true;
     const setup = expect(ensureSsh()).rejects.toThrow("SSH connections are closed");
+    vi.mocked(fetch).mockReturnValue(new Promise(() => {}));
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledOnce());
     let prepared = false;
     const stopping = fixture.hooks.stopForInstall().then(() => { prepared = true; });
     await expect(ensureSsh("reconnecting-host")).rejects.toThrow("SSH connections are closed");
     backendStopped.resolve();
-    process.launchResult();
     await vi.waitFor(() => expect(process.stops).toHaveLength(1));
     expect(prepared).toBe(false);
     const prematureQuit = { preventDefault: vi.fn() };
@@ -175,18 +183,20 @@ describe("Electron quit and updater handoff", () => {
   });
 
   it("drains SSH even when backend preparation fails and reopens after recovery", async () => {
-    const process = sshProcessFixture({ manualLaunch: true });
+    const process = sshProcessFixture();
     fixture.spawn.mockImplementation(process.spawn);
     fixture.shutdownForUpdate.mockRejectedValueOnce(new Error("busy backend"));
     await loadMain();
+    vi.mocked(fetch).mockReturnValue(new Promise(() => {}));
     const setup = expect(ensureSsh()).rejects.toThrow("SSH connections are closed");
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledOnce());
     const stopping = expect(fixture.hooks.stopForInstall()).rejects.toThrow("busy backend");
-    process.launchResult();
     await setup;
     await stopping;
     expect(process.tunnels[0].killed).toBe(true);
     expect(process.stops).toHaveLength(1);
     await fixture.hooks.recoverFromInstall();
+    vi.mocked(fetch).mockResolvedValue(Response.json({ environmentId: "same-environment" }));
     fixture.spawn.mockImplementation(sshProcessFixture().spawn);
     await ensureSsh();
     await fixture.handlers.get("desktop:ssh:disconnect")!({ senderFrame: { url: "gitgui://app/" } }, { host: "fixture-host" });
@@ -211,19 +221,42 @@ describe("Electron quit and updater handoff", () => {
   });
 
   it("drains pending setup and blocks reconnect during ordinary app shutdown", async () => {
-    const process = sshProcessFixture({ manualLaunch: true, manualStop: true });
+    const process = sshProcessFixture({ manualStop: true });
     fixture.spawn.mockImplementation(process.spawn);
     const electron = await loadMain();
+    vi.mocked(fetch).mockReturnValue(new Promise(() => {}));
     const setup = expect(ensureSsh()).rejects.toThrow("SSH connections are closed");
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledOnce());
     electron.app.emit("before-quit", { preventDefault: vi.fn() });
     await expect(ensureSsh()).rejects.toThrow("SSH connections are closed");
-    process.launchResult();
     await vi.waitFor(() => expect(process.stops).toHaveLength(1));
     expect(fixture.quit).not.toHaveBeenCalled();
     process.finishStop();
     await setup;
     await vi.waitFor(() => expect(fixture.quit).toHaveBeenCalledOnce());
     expect(process.tunnels[0].kill).toHaveBeenCalledOnce();
+    expect(process.launches).toHaveLength(1);
+  });
+
+  it.each(["password", "trust"])("cancels an unanswered %s prompt on normal quit", async (kind) => {
+    const process = sshProcessFixture({ manualLaunch: true });
+    fixture.spawn.mockImplementation(process.spawn);
+    fixture.showMessageBox.mockImplementation((_window, options) => new Promise((resolve) => {
+      options.signal.addEventListener("abort", () => resolve({ response: 0 }), { once: true });
+    }));
+    const electron = await loadMain();
+    const setup = expect(ensureSsh()).rejects.toThrow("SSH connections are closed");
+    process.launches[0].stderr.emit("data", Buffer.from(kind === "password" ? "Permission denied (publickey)" : "Host key verification failed"));
+    process.launches[0].emit("exit", 255);
+    if (kind === "password") await vi.waitFor(() => expect(fixture.windows).toHaveLength(2));
+    else await vi.waitFor(() => expect(fixture.showMessageBox).toHaveBeenCalledOnce());
+    electron.app.emit("before-quit", { preventDefault: vi.fn() });
+    await setup;
+    await vi.waitFor(() => expect(fixture.quit).toHaveBeenCalledOnce());
+    if (kind === "password") {
+      expect(fixture.windows[1].destroyed).toBe(true);
+      expect(electron.ipcMain.listenerCount("desktop:secret-prompt:response")).toBe(0);
+    } else expect(fixture.showMessageBox.mock.calls[0][1].signal.aborted).toBe(true);
     expect(process.launches).toHaveLength(1);
   });
 });
