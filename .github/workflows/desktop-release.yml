@@ -1,0 +1,152 @@
+name: Desktop release
+
+# Build only new stable version tags. Publication is separately disabled by default.
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-release
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: ${{ github.event_name == 'push' && github.ref_type == 'tag' && github.event.created == true && github.event.deleted == false && github.event.forced == false }}
+    runs-on: ubuntu-22.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Validate the new tag and align release version locally
+        id: version
+        env:
+          RELEASE_REF: ${{ github.ref }}
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import { appendFileSync, readFileSync } from 'node:fs';
+          import { alignReleaseVersions, releaseTagVersion } from './scripts/release-versions.mjs';
+          const event = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8'));
+          if (event.ref !== process.env.RELEASE_REF) throw new Error('Release ref disagrees with the tag push');
+          const input = releaseTagVersion({ ...event, eventName: process.env.GITHUB_EVENT_NAME });
+          const { version } = await alignReleaseVersions(input);
+          appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\n`);
+          NODE
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install locked dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Check prerequisites
+        run: git --version
+      - name: Validate frontend and desktop types
+        run: npm run check
+      - name: Test scripts, client, desktop, and Rust
+        run: npm test
+      - name: Verify version and lock consistency
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: npm run release:version -- --check "$RELEASE_VERSION"
+
+  build:
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2022
+            platform: win
+          - os: ubuntu-22.04
+            platform: linux
+    runs-on: ${{ matrix.os }}
+    env:
+      RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+      RELEASE_PLATFORM: ${{ matrix.platform }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Align versions before installing or compiling
+        run: npm run release:version -- "$RELEASE_VERSION"
+      - name: Install locked dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Check Git prerequisite
+        run: git --version
+      - name: Build and smoke-test unsigned production package
+        run: npm run electron:package -- --platform "$RELEASE_PLATFORM" --version "$RELEASE_VERSION" --output-dir release/desktop
+      - name: Upload validated release assets
+        uses: actions/upload-artifact@v7
+        with:
+          name: desktop-${{ matrix.platform }}-x64
+          path: release/desktop/artifacts/*
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    if: ${{ (vars.GITGUI_PUBLISH_RELEASES == 'true' || vars.GITGUI_PUBLISH_RELEASES == github.ref_name) && github.repository == 'math254e/GitGui' }}
+    needs: [validate, build]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    env:
+      RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+      RELEASE_COMMIT: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: desktop-*-x64
+          path: release-assets
+          merge-multiple: true
+      - name: Revalidate the complete release before publication
+        run: npm run release:validate -- release-assets "$RELEASE_VERSION" all
+      - name: Create and publish one release with workflow credentials
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: math254e/GitGui
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Existing releases are never overwritten. Upload all files to a draft
+          # first, then expose updater metadata and installers together.
+          if gh release view "v$RELEASE_VERSION" >/dev/null 2>&1; then
+            echo "Release v$RELEASE_VERSION already exists; refusing to overwrite it." >&2
+            exit 1
+          fi
+          # Dereference lightweight and annotated tags through the commits API.
+          tag_commit=$(gh api "repos/$GH_REPO/commits/refs%2Ftags%2Fv$RELEASE_VERSION" --jq .sha)
+          if [[ "$tag_commit" != "$RELEASE_COMMIT" ]]; then
+            echo "Release tag no longer points at the built commit; refusing to publish." >&2
+            exit 1
+          fi
+          gh release create "v$RELEASE_VERSION" release-assets/* \
+            --verify-tag --title "GitGui $RELEASE_VERSION" \
+            --generate-notes --draft
+          gh release edit "v$RELEASE_VERSION" --draft=false --latest

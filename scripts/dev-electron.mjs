@@ -1,6 +1,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { assertDevBackendStopped } from "./dev-preflight.mjs";
 
 const root = resolve(import.meta.dirname, "..");
 const npm = process.platform === "win32" ? "npm.cmd" : "npm";
@@ -11,6 +12,12 @@ delete electronEnvironment.ELECTRON_RUN_AS_NODE;
 const children = new Set();
 let closing = false;
 
+try {
+  assertDevBackendStopped(root);
+} catch (error) {
+  console.error(`[gitgui] ${error.message}`);
+  process.exit(1);
+}
 runChecked("cargo", ["build", "-p", "gitgui-server"]);
 runChecked(npm, ["run", "desktop:build"]);
 runChecked(npm, ["exec", "--workspace", "@gitgui/web", "--", "svelte-kit", "sync"]);

@@ -299,6 +299,7 @@ pub(super) async fn run(state_ref: Weak<ServerState>) {
             if state.lifecycle().await != ServerLifecycle::Ready {
                 return;
             }
+            let Some(_work) = state.work.enter() else { continue; };
             let job = preparation
                 .queue
                 .lock()

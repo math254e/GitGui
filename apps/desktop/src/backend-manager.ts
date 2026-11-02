@@ -4,6 +4,7 @@ import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { app } from "electron";
 import type { DesktopPreparedConnection } from "@gitgui/contracts/desktop";
+import { BackendControl, waitForBackendExit } from "./backend-control.js";
 
 const READY_PREFIX = "GITGUI_SERVER_READY=";
 const READY_TIMEOUT_MS = 30_000;
@@ -11,19 +12,24 @@ const READY_TIMEOUT_MS = 30_000;
 interface RunningBackend {
   child: ChildProcessWithoutNullStreams;
   connection: DesktopPreparedConnection;
+  control: BackendControl;
 }
 
 export class BackendManager {
   private running?: RunningBackend;
   private starting?: Promise<RunningBackend>;
   private stopping = false;
+  private updateReserved = false;
+  private updateShutdownRequested = false;
 
   async getConnection(): Promise<DesktopPreparedConnection> {
+    if (this.updateReserved) throw new Error("The local server is preparing for an app update.");
     if (this.running && this.running.child.exitCode === null) return this.running.connection;
     return (await this.ensureStarted()).connection;
   }
 
   async restart(): Promise<DesktopPreparedConnection> {
+    if (this.updateReserved) throw new Error("The local server is preparing for an app update.");
     await this.shutdownCurrent();
     return (await this.ensureStarted()).connection;
   }
@@ -31,6 +37,32 @@ export class BackendManager {
   async shutdown(): Promise<void> {
     this.stopping = true;
     await this.shutdownCurrent();
+  }
+
+  async shutdownForUpdate(): Promise<void> {
+    this.updateReserved = true;
+    if (this.starting) await this.starting;
+    const running = this.running;
+    if (!running || running.child.exitCode !== null) return;
+    await running.control.request("prepare-update");
+    this.stopping = true;
+    this.updateShutdownRequested = true;
+    await running.control.request("shutdown", 10_000);
+    // The update path never force-kills Git workers. A timeout cancels install.
+    await waitForBackendExit(running.child, 10_000);
+    if (this.running === running) this.running = undefined;
+  }
+
+  async recoverAfterUpdate(): Promise<void> {
+    const running = this.running;
+    if (running && running.child.exitCode === null) {
+      if (this.updateShutdownRequested) await waitForBackendExit(running.child, 10_000);
+      else await running.control.request("resume", 5_000);
+    }
+    this.updateShutdownRequested = false;
+    this.updateReserved = false;
+    this.stopping = false;
+    await this.getConnection();
   }
 
   private async ensureStarted(): Promise<RunningBackend> {
@@ -52,13 +84,14 @@ export class BackendManager {
       env: {
         ...process.env,
         GITGUI_SERVER_BOOTSTRAP_STDIN: "1",
+        GITGUI_SERVER_DESKTOP_CONTROL: "1",
         GITGUI_SERVER_ALLOWED_ORIGINS: "gitgui://app,http://127.0.0.1:1420,http://localhost:1420",
       },
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
     });
     child.stdin.write(`${bootstrap}\n`);
-    child.stdin.end();
+    const control = new BackendControl(child);
 
     child.stderr.on("data", (chunk: Buffer) => {
       const diagnostic = redact(chunk.toString("utf8")).trim();
@@ -66,16 +99,19 @@ export class BackendManager {
     });
 
     let address: string;
+    let descriptor: DesktopPreparedConnection["descriptor"];
     try {
       address = await readReadyAddress(child);
+      descriptor = await fetchDescriptor(`http://${address}`);
     } catch (error) {
+      control.dispose();
       terminate(child);
       throw error;
     }
     const httpUrl = `http://${address}`;
-    const descriptor = await fetchDescriptor(httpUrl);
     const running: RunningBackend = {
       child,
+      control,
       connection: {
         httpUrl,
         descriptor,
@@ -94,6 +130,7 @@ export class BackendManager {
     const running = this.running;
     this.running = undefined;
     if (!running || running.child.exitCode !== null) return;
+    running.control.dispose();
     terminate(running.child);
     await Promise.race([
       new Promise<void>((resolve) => running.child.once("exit", () => resolve())),
@@ -119,11 +156,15 @@ function locateServerExecutable(): string {
 function readReadyAddress(child: ChildProcessWithoutNullStreams): Promise<string> {
   return new Promise((resolve, reject) => {
     let output = "";
+    let settled = false;
     const timer = setTimeout(() => finish(new Error("GitGui server readiness timed out")), READY_TIMEOUT_MS);
     const finish = (error?: Error, address?: string) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
       child.stdout.off("data", onData);
       child.off("exit", onExit);
+      child.off("error", onError);
       error ? reject(error) : resolve(address!);
     };
     const onData = (chunk: Buffer) => {
@@ -138,14 +179,15 @@ function readReadyAddress(child: ChildProcessWithoutNullStreams): Promise<string
       if (output.length > 256_000) output = output.slice(-128_000);
     };
     const onExit = (code: number | null) => finish(new Error(`GitGui server exited before readiness (${code ?? "unknown"})`));
+    const onError = () => finish(new Error("GitGui server could not be started."));
     child.stdout.on("data", onData);
     child.once("exit", onExit);
-    child.once("error", (error) => finish(error));
+    child.once("error", onError);
   });
 }
 
 async function fetchDescriptor(httpUrl: string) {
-  const response = await fetch(`${httpUrl}/.well-known/gitgui/environment`);
+  const response = await fetch(`${httpUrl}/.well-known/gitgui/environment`, { signal: AbortSignal.timeout(10_000) });
   if (!response.ok) throw new Error(`GitGui server descriptor returned HTTP ${response.status}`);
   return await response.json() as DesktopPreparedConnection["descriptor"];
 }

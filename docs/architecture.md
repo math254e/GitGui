@@ -24,6 +24,37 @@ Electron main process
 
 The Rust server is the application backend. Electron is a thin desktop host, not a second backend and not a proxy for ordinary repository traffic. The Svelte client never runs Git commands or accesses repositories directly.
 
+### Desktop updates
+
+Windows NSIS and Linux AppImage builds use the Electron-owned update service.
+It follows T3 Code's explicit check/download/install state machine, with a
+typed preload bridge and one Svelte adapter at the application root. The button
+beside Settings always updates this desktop installation. The packaged Rust
+server and web client are replaced with the desktop package as one release.
+Remote updating remains deferred; the update service accepts an expected
+version so future authorized callers can reuse the installer boundary.
+
+Before installing, Electron asks its primary server to pause repository work
+and drain started Git operations over inherited stdin/stdout control messages.
+Bootstrap and control share a buffered pipe; credentials are never printed.
+Only a prepared server accepts shutdown, upgraded sockets close cooperatively,
+and update shutdown never force-kills active Git work. Busy refusal resumes
+admission. If installer invocation fails while the shell is alive, Electron
+restores the local server, keeps the windows, and permits retry. Standalone
+servers gain no network update or shutdown API.
+
+The electron-updater adapter also clears its stale install latch before an
+admitted retry: version 6.8.9 can leave that internal latch set after an
+asynchronous installer-spawn failure. The service's own reservation remains
+held until recovery completes, so this compatibility adaptation never permits
+concurrent installer invocations.
+
+The updater modules record their T3 source and adaptations; they use the
+desktop shell's Promise lifecycle. The shared Effect connection runtime and its
+vendored snapshot are unchanged. See [desktop releases](desktop-releases.md) for
+packaging/workflow configuration and [the update plan](auto-update-plan.md) for
+the desktop scope and deferred remote research.
+
 The desktop shell opens the application at the root of its `gitgui://` scheme.
 The path belongs to the client router.
 

@@ -14,5 +14,6 @@ describe("desktop lifecycle inputs", () => {
     expect(normalizeUpdateFeedUrl("https://updates.example.test/gitgui/")).toBe("https://updates.example.test/gitgui");
     expect(normalizeUpdateFeedUrl("http://updates.example.test")).toBeNull();
     expect(normalizeUpdateFeedUrl("https://user:secret@updates.example.test")).toBeNull();
+    expect(normalizeUpdateFeedUrl("https://updates.example.test?token=private")).toBeNull();
   });
 });
