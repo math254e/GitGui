@@ -13,6 +13,8 @@ import { validateDesktopArtifacts } from "./validate-desktop-artifacts.mjs";
 
 const require = createRequire(import.meta.url);
 const { buildBlockMap } = require("app-builder-lib/out/targets/blockmap/blockmap.js");
+const { expandMacro } = require("app-builder-lib/out/util/macroExpander.js");
+const { Arch, getArtifactArchName } = require("builder-util");
 const version = "2.3.4";
 const win = `GitGui-${version}-win-x64.exe`;
 const linux = `GitGui-${version}-linux-x64.AppImage`;
@@ -51,6 +53,12 @@ test("release configuration keeps publication explicit and restricts the support
     const checkout = job.steps.find((step) => step.uses?.startsWith("actions/checkout@"));
     assert.equal(checkout.with.ref, "${{ github.sha }}");
     assert.equal(checkout.with["persist-credentials"], false);
+    for (const step of job.steps) {
+      if (step.uses?.startsWith("actions/")) {
+        const [action, ref] = step.uses.split("@");
+        assert.equal(ref, action === "actions/download-artifact" ? "v8" : "v7");
+      }
+    }
   }
   const config = yaml.load(await readFile(new URL("../apps/desktop/electron-builder.yml", import.meta.url), "utf8"));
   assert.equal(config.appId, "dev.gitgui.desktop");
@@ -60,6 +68,16 @@ test("release configuration keeps publication explicit and restricts the support
   assert.equal(config.win.verifyUpdateCodeSignature, false);
   assert.deepEqual(config.win.target, [{ target: "nsis", arch: ["x64"] }]);
   assert.deepEqual(config.linux.target, [{ target: "AppImage", arch: ["x64"] }]);
+});
+
+test("electron-builder filename expansion matches the x64 release contract on both platforms", async () => {
+  const config = yaml.load(await readFile(new URL("../apps/desktop/electron-builder.yml", import.meta.url), "utf8"));
+  for (const [os, ext] of [["win", "exe"], ["linux", "AppImage"], ["linux", "deb"]]) {
+    // Use the real builder macro/architecture mapping: AppImage maps x64 to
+    // x86_64 and DEB maps it to amd64 even on a Windows validation host.
+    const arch = getArtifactArchName(Arch.x64, ext);
+    assert.equal(expandMacro(config.artifactName, arch, { version }, { os, ext }), `GitGui-${version}-${os}-x64.${ext}`);
+  }
 });
 
 test("publication uses the existing tag and stops before publishing incomplete or mismatched releases", async () => {

@@ -105,6 +105,12 @@ Desktop tests compile their SSH workspace dependency through the desktop
 package's `pretest` hook, including when invoked by the root `npm test`. This
 keeps clean runners independent of any previous desktop build output.
 
+The workflow uses Node.js 24 action runtimes: checkout/setup-node/upload-artifact
+v7 and download-artifact v8. The configured build Node version remains 24.
+Artifact filenames use the literal supported `x64` suffix because electron-builder
+otherwise expands the AppImage architecture macro to `x86_64` (and DEB to `amd64`).
+A regression test exercises those mappings with electron-builder's own helpers.
+
 Publication is disabled by default. Separately setting the repository Actions
 variable `GITGUI_PUBLISH_RELEASES` to the exact string `true` enables the final job,
 only in `math254e/GitGui` and after every build and check succeeds. Leave it unset

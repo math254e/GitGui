@@ -1,6 +1,7 @@
 appId: dev.gitgui.desktop
 productName: GitGui
-artifactName: GitGui-${version}-${os}-${arch}.${ext}
+# Only x64 is supported. AppImage expands ${arch} to x86_64, unlike NSIS.
+artifactName: GitGui-${version}-${os}-x64.${ext}
 # package-desktop.mjs overrides these with absolute, isolated staging paths.
 directories:
   output: release
