@@ -116,11 +116,11 @@ Artifact filenames use the literal supported `x64` suffix because electron-build
 otherwise expands the AppImage architecture macro to `x86_64` (and DEB to `amd64`).
 A regression test exercises those mappings with electron-builder's own helpers.
 
-Publication is disabled by default. Separately setting the repository Actions
-variable `GITGUI_PUBLISH_RELEASES` to the exact string `true` enables the final job,
-only in `math254e/GitGui` and after every build and check succeeds. Leave it unset
-for builds that only retain Actions artifacts. No repository variable is changed
-by this implementation.
+Publication is disabled by default. Setting the repository Actions variable
+`GITGUI_PUBLISH_RELEASES` to an exact stable tag such as `v0.1.5` authorizes only
+that release. The value `true` enables publication for every subsequent stable
+tag. The final job runs only in `math254e/GitGui` and after every build and check
+succeeds. Leave the variable unset for builds that only retain Actions artifacts.
 
 The publication job revalidates both platforms and verifies that the existing
 release tag still resolves to the built commit, including annotated tags. It

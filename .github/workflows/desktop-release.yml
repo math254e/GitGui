@@ -102,7 +102,7 @@ jobs:
           retention-days: 14
 
   publish:
-    if: ${{ vars.GITGUI_PUBLISH_RELEASES == 'true' && github.repository == 'math254e/GitGui' }}
+    if: ${{ (vars.GITGUI_PUBLISH_RELEASES == 'true' || vars.GITGUI_PUBLISH_RELEASES == github.ref_name) && github.repository == 'math254e/GitGui' }}
     needs: [validate, build]
     runs-on: ubuntu-22.04
     permissions:
@@ -141,7 +141,7 @@ jobs:
             exit 1
           fi
           # Dereference lightweight and annotated tags through the commits API.
-          tag_commit=$(gh api "repos/$GH_REPO/commits/tags%2Fv$RELEASE_VERSION" --jq .sha)
+          tag_commit=$(gh api "repos/$GH_REPO/commits/refs%2Ftags%2Fv$RELEASE_VERSION" --jq .sha)
           if [[ "$tag_commit" != "$RELEASE_COMMIT" ]]; then
             echo "Release tag no longer points at the built commit; refusing to publish." >&2
             exit 1

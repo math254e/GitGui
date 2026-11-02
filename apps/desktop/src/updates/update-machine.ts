@@ -44,7 +44,7 @@ export function updateFailure(state: DesktopUpdateStatus, action: UpdateAction):
     errorContext: action,
     downloadPercent: state.downloadedVersion ? 100 : undefined,
     // Raw updater errors can contain URLs, headers, tokens, paths, or crash data.
-    message: action === "check" ? "Could not check for updates. Check your connection and try again."
+    message: action === "check" ? "Could not get the latest release information. Please try again later."
       : action === "download" ? "Could not download the update. Check your connection and disk space, then retry."
       : "Could not install the update. GitGui is restoring its local server; you can retry when it is ready.",
   };

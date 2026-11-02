@@ -90,7 +90,7 @@ test("publication uses the existing tag and stops before publishing incomplete o
     gh() {
       case "$1 $2" in
         'release view') [[ "$SCENARIO" == existing ]] ;;
-        'api repos/math254e/GitGui/commits/tags%2Fv2.3.4')
+        'api repos/math254e/GitGui/commits/refs%2Ftags%2Fv2.3.4')
           [[ "$SCENARIO" != missing ]] || return 1
           if [[ "$SCENARIO" == moved ]]; then echo another-commit; else echo built-commit; fi ;;
         'release create') echo "CREATE: $*" >&2; [[ "$SCENARIO" != upload-failure ]] ;;
