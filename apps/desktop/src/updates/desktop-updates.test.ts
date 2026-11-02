@@ -52,7 +52,15 @@ describe("desktop update lifecycle (adapted from T3 DesktopUpdates tests)", () =
     h.updates.dispose();
   });
 
-  it("broadcasts progress and preserves a verified installer across failed and newer checks", async () => {
+  it("publishes decoded release notes as plain text through the update service", async () => {
+    const h = harness();
+    h.engine.check = async () => { h.events.available({ version: "1.2.0", releaseNotes: "<p>Fix &amp; polish &#128512; &lt;b&gt;literal&lt;/b&gt;</p>" }); };
+    await h.updates.check();
+    expect(h.updates.status.releaseNotes).toBe("Fix & polish \u{1f600} <b>literal</b>");
+    h.updates.dispose();
+  });
+
+  it("retains a matching installer, then replaces it when a newer release is offered", async () => {
     const h = harness();
     const phases: string[] = [];
     const off = h.updates.subscribe((state) => phases.push(`${state.phase}:${state.downloadPercent}`));
@@ -62,15 +70,53 @@ describe("desktop update lifecycle (adapted from T3 DesktopUpdates tests)", () =
     await h.updates.download();
     expect(phases).toContain("downloading:42");
     expect(h.updates.status).toMatchObject({ phase: "downloaded", downloadedVersion: "1.2.0", downloadPercent: 100 });
+    h.engine.check = async () => { h.events.available({ version: "1.2.0" }); };
+    await h.updates.check();
+    expect(h.updates.status).toMatchObject({ phase: "downloaded", downloadedVersion: "1.2.0", availableVersion: "1.2.0" });
+    expect(h.updates.status.releaseNotes).toBe("A useful fix");
+    h.engine.check = async () => { h.events.available({ version: "1.2.0", releaseNotes: "Updated A notes" }); };
+    await h.updates.check();
+    expect(h.updates.status).toMatchObject({ phase: "downloaded", downloadedVersion: "1.2.0", releaseNotes: "Updated A notes" });
     h.engine.check = async () => { throw new Error("https://user:private@feed.test?token=private"); };
     await h.updates.check();
     expect(h.updates.status).toMatchObject({ phase: "downloaded", downloadedVersion: "1.2.0" });
     expect(JSON.stringify(h.updates.status)).not.toContain("private");
+    h.engine.check = async () => { h.events.available({ version: "1.3.0", releaseNotes: "B release" }); };
+    await h.updates.check();
+    expect(h.updates.status).toMatchObject({ phase: "available", availableVersion: "1.3.0", releaseNotes: "B release" });
+    expect(h.updates.status.downloadedVersion).toBeUndefined();
+    expect(h.updates.status.downloadPercent).toBeUndefined();
+    expect((await h.updates.install("1.2.0")).accepted).toBe(false);
+
+    h.engine.download = async () => { h.events.downloaded({ version: "1.3.0" }); };
+    expect((await h.updates.download()).status).toMatchObject({ phase: "downloaded", downloadedVersion: "1.3.0" });
+    expect((await h.updates.install("1.2.0")).accepted).toBe(false);
+    expect((await h.updates.install("1.3.0")).accepted).toBe(true);
+    expect(h.engine.install).toHaveBeenCalledOnce();
+    off(); h.updates.dispose();
+  });
+
+  it("clears an obsolete offer when the feed reports no update and keeps check errors safe", async () => {
+    const h = harness();
+    await h.updates.check();
+    await h.updates.download();
+    h.engine.check = async () => { h.events.current(); };
+    await h.updates.check();
+    expect(h.updates.status).toMatchObject({ phase: "downloaded", downloadedVersion: "1.2.0" });
+
     h.engine.check = async () => { h.events.available({ version: "1.3.0" }); };
     await h.updates.check();
-    expect(h.updates.status.downloadedVersion).toBe("1.2.0");
-    expect(h.updates.status.availableVersion).toBe("1.2.0");
-    off(); h.updates.dispose();
+    h.engine.check = async () => { throw new Error("private feed details"); };
+    await h.updates.check();
+    expect(h.updates.status).toMatchObject({ phase: "error", errorContext: "check", availableVersion: "1.3.0" });
+    expect(h.updates.status.downloadedVersion).toBeUndefined();
+    expect(JSON.stringify(h.updates.status)).not.toContain("private");
+    h.engine.check = async () => { h.events.current(); };
+    await h.updates.check();
+    expect(h.updates.status).toMatchObject({ phase: "current" });
+    expect(h.updates.status.availableVersion).toBeUndefined();
+    expect(h.updates.status.releaseNotes).toBeUndefined();
+    h.updates.dispose();
   });
 
   it("serializes downloads and checks, rejects stale installs, and holds the install reservation", async () => {

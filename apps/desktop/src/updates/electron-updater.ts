@@ -4,6 +4,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { normalizeUpdateFeedUrl } from "../lifecycle.js";
 import type { UpdateEngine, UpdateEngineEvents } from "./desktop-updates.js";
+import { defaultUpdateDiagnosticSink, reportUpdateFailure, type UpdateDiagnosticSink } from "./update-diagnostics.js";
 
 const { autoUpdater, CancellationToken } = electronUpdater;
 
@@ -16,13 +17,19 @@ export function updateDisabledReason(packaged: boolean, platform: string, appIma
   if (!hasFeed) return "No packaged update feed is configured.";
 }
 
-export function packagedUpdateEngine(resourcesPath: string): { engine: UpdateEngine; hasFeed: boolean } {
+export function packagedUpdateEngine(resourcesPath: string, diagnostics: UpdateDiagnosticSink = defaultUpdateDiagnosticSink): { engine: UpdateEngine; hasFeed: boolean } {
   const customFeed = normalizeUpdateFeedUrl(process.env.GITGUI_UPDATE_FEED_URL);
   const hasFeed = Boolean(customFeed) || existsSync(join(resourcesPath, "app-update.yml"));
   let cancellation: InstanceType<typeof CancellationToken> | undefined;
+  const reportLateError = () => reportUpdateFailure(diagnostics, "background", "DesktopUpdaterReportedError");
   return { hasFeed, engine: {
     configure() {
-      if (process.env.GITGUI_UPDATE_FEED_URL && !customFeed) throw new Error("Invalid update feed");
+      if (process.env.GITGUI_UPDATE_FEED_URL && !customFeed) {
+        reportUpdateFailure(diagnostics, "feed", "ElectronUpdaterFeedConfigurationError");
+        throw new Error("Invalid update feed");
+      }
+      // electron-updater's free-form logger includes URLs, paths and headers.
+      // T3-style bounded diagnostics are emitted by the service instead.
       autoUpdater.logger = null;
       autoUpdater.autoDownload = false;
       autoUpdater.autoInstallOnAppQuit = false;
@@ -30,9 +37,16 @@ export function packagedUpdateEngine(resourcesPath: string): { engine: UpdateEng
       autoUpdater.channel = "latest";
       autoUpdater.allowDowngrade = false;
       autoUpdater.disableWebInstaller = true;
-      if (customFeed) autoUpdater.setFeedURL({ provider: "generic", url: customFeed });
+      if (customFeed) {
+        try { autoUpdater.setFeedURL({ provider: "generic", url: customFeed }); }
+        catch {
+          reportUpdateFailure(diagnostics, "feed", "ElectronUpdaterFeedConfigurationError");
+          throw new Error("Could not configure update feed");
+        }
+      }
     },
     subscribe(events: UpdateEngineEvents) {
+      autoUpdater.removeListener("error", reportLateError);
       const progress = (info: { percent: number }) => events.progress(info.percent);
       autoUpdater.on("update-available", events.available);
       autoUpdater.on("update-not-available", events.current);
@@ -46,7 +60,7 @@ export function packagedUpdateEngine(resourcesPath: string): { engine: UpdateEng
         autoUpdater.removeListener("update-downloaded", events.downloaded);
         autoUpdater.removeListener("error", events.error);
         // A cancelled library operation can report after disposal during quit.
-        autoUpdater.on("error", ignoreLateError);
+        autoUpdater.on("error", reportLateError);
       };
     },
     async check() { await autoUpdater.checkForUpdates(); },
@@ -66,5 +80,3 @@ export function packagedUpdateEngine(resourcesPath: string): { engine: UpdateEng
     cancelDownload() { cancellation?.cancel(); },
   } };
 }
-
-function ignoreLateError(): void {}

@@ -1,15 +1,16 @@
 # Desktop auto-update implementation plan
 
-Status: desktop implementation and local workflow configuration added; no release published.
+Status: desktop updating and the stable-tag workflow are implemented; v0.1.5 is published.
 Research date: 2026-10-29.
 
 Validation update, 2026-11-02: the stable-tag workflow is implemented and locally
-linted/tested. Linux Rust workspace checks, 284 tests, and a release server build
+linted/tested and Windows/Linux packaging passed in GitHub Actions. Linux Rust
+workspace checks, 284 tests, and a release server build
 passed on Agentbox against the transferred current source. See
 [desktop-releases.md](desktop-releases.md#agentbox-linux-server-validation).
-AppImage packaging/desktop runtime and installed upgrades on both platforms are
-still unverified; their manual qualification is deferred at the maintainer's
-request until test environments are available.
+The installed Windows app was observed upgrading from 0.1.3 to 0.1.5 and
+relaunching its backend. Linux desktop runtime/installed upgrades and broader
+installed failure-path qualification remain deferred at the maintainer's request.
 
 ## Scope decision
 
@@ -24,12 +25,12 @@ GitHub builds must run only when a new stable version tag such as `v0.1.1` is
 pushed. Branch pushes, pull requests, schedules, and manual dispatches must not
 start release builds. Derive and validate the release version from that tag.
 Publication remains disabled until separately enabled; a build trigger does not
-authorize publication. No GitHub settings or releases were changed.
+authorize publication. Publication was enabled for v0.1.5 and disabled afterward.
 
 The version-tag-only trigger is implemented in the local workflow. It admits new
 tag pushes only and validates the stable version before compilation. Publication
 uses the existing tag and stays disabled unless the repository Actions variable
-`GITGUI_PUBLISH_RELEASES` is explicitly set to `true`; no variable was changed.
+`GITGUI_PUBLISH_RELEASES` is explicitly set to `true` or the exact authorized tag.
 
 Remote updates are deferred until GitGui's remote architecture is closer to
 T3 Code. This includes remote service launchers, trial/rollback, standalone
@@ -83,6 +84,59 @@ Before installing, Electron stops its owned local backends. If the updater
 reports installation failure while Electron remains alive, it clears quitting
 state, keeps its windows, restarts the stopped backends, and permits retry.
 This recovery does not provide service-style rollback of a completed OS installer.
+
+### Audit corrections and copy boundaries (2026-11-02)
+
+The updater is an adapted implementation, not part of the file-by-file
+client-runtime vendoring manifest. Its original introduction (`7e49ce0`) already
+contained the unconditional downloaded-installer retention, omitted bounded
+diagnostics, and tag-only release-note stripping. These were incomplete copies
+of the inspected T3 snapshot, not required Rust or Svelte differences.
+
+- `update-machine.ts:updateAvailable` follows T3's
+  `updateMachine.ts:reduceDesktopUpdateStateOnUpdateAvailable`: preserve the
+  installer only for a matching offer; replace it for a different offer. A
+  matching offer can refresh its notes, retaining existing notes only when the
+  feed omits them. Expected-version installation rejects stale confirmations.
+- `release-notes.ts` copies T3's entity decoder and strip-before-decode order
+  from `releaseNotes.ts`. GitGui keeps bounded plain text instead of grouped
+  summaries: six notes, 32,000 input characters, 8,000 output characters.
+  Additional input handling preserves unknown named entities and invalid Unicode
+  scalars literally and strips control characters after decoding. The UI renders
+  the result as text, including decoded angle brackets.
+- `update-diagnostics.ts`, `desktop-updates.ts`, and `electron-updater.ts`
+  translate T3's bounded `DesktopUpdates.ts` failure annotations into the
+  existing Promise lifecycle. The default stderr sink records fixed operation,
+  error-tag, channel, and optional event fields. It never inspects raw errors or
+  nested causes. Free-form library logging stays disabled; a failing diagnostic
+  sink cannot interrupt installation recovery. Event and promise failure paths
+  can each produce an annotation, as separate boundary observations.
+- `main.ts` and `packages/ssh/src/index.ts` translate T3's early install
+  reservation and `tunnel.ts` manager/entry scopes into GitGui's existing Promise
+  manager: close SSH admission synchronously before backend preparation, track
+  pending setup and disposal, and drain both before installation can quit.
+  Results arriving after closure are disposed instead of registered. Recovery
+  reopens admission only after the backend is restored, before emitting wakeup;
+  failed recovery leaves admission closed. Normal shutdown uses the same drain.
+  Existing managed/external remote-process ownership remains unchanged. T3's
+  Effect scope cancellation is not copied literally into the Promise manager;
+  this adaptation waits for pending setup, including any outstanding prompt,
+  rather than adding a second cancellation/retry owner.
+
+The SSH race combined snapshot-only cleanup introduced in `369e98c` with updater
+cleanup added in `7e49ce0`. The regression tests exercise the real manager through
+desktop IPC with controlled SSH/HTTP boundaries, including late setup, auth
+prompts, pending disposal, failed installation/recovery, and ordinary quit.
+
+Source for these corrections remains T3 commit
+`70cd258d8aac43ea57494527b00bf36de3efa6c0`; regressions are adapted from its
+`DesktopUpdates.test.ts` and `releaseNotes.test.ts`. Future syncs must compare
+the applicable upstream implementation and failure tests together, then record
+each concrete adaptation rather than claiming file-for-file updater vendoring.
+
+Combined correction validation: 58 desktop tests and 13 SSH tests passed;
+both package TypeScript checks and the SSH/desktop production TypeScript build
+passed. Installed upgrades were not repeated as part of these corrections.
 
 ## GitGui starting point before implementation
 
@@ -251,10 +305,10 @@ shutdown fix needed must stay within the existing process-ownership boundary.
    install confirmation, General settings check/status, and release notes.
    Verify real installed-package upgrades and document supported install forms.
 
-The version-tag-only workflow is supplied as local configuration files. Pushing
-the configuration and tags, enabling publication, and publishing the first
-release are later maintainer actions. Remote architecture
-work and remote updating remain separate follow-ups with their own plans.
+The version-tag-only workflow has built and published v0.1.5. Further pushes,
+tags and publication require maintainer authorization; the audit corrections do
+not create a release. Remote architecture work and remote updating remain
+separate follow-ups with their own plans.
 
 ## Verification and completion
 

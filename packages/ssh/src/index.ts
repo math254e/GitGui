@@ -108,6 +108,13 @@ export interface SshEnvironmentManagerOptions {
 
 export class SshEnvironmentManager {
   private readonly environments = new Map<string, ManagedSshEnvironment>();
+  // T3 packages/ssh/src/tunnel.ts (70cd258d8aac43ea57494527b00bf36de3efa6c0)
+  // owns pending entries and entry finalizers in scopes. GitGui's existing
+  // Promise manager gates admission and drains that ownership before quit.
+  private readonly pending = new Map<string, Promise<DesktopPreparedConnection>>();
+  private readonly disposals = new Set<Promise<void>>();
+  private closed = false;
+  private closing?: Promise<void>;
 
   constructor(private readonly options: SshEnvironmentManagerOptions) {}
 
@@ -116,38 +123,63 @@ export class SshEnvironmentManager {
   }
 
   async ensureEnvironment(target: DesktopSshTarget): Promise<DesktopPreparedConnection> {
+    this.assertOpen();
     validateTarget(target);
+    const key = targetKey(target);
+    const pending = this.pending.get(key);
+    if (pending) return pending;
+    const operation = this.ensureOpenEnvironment(target).finally(() => {
+      if (this.pending.get(key) === operation) this.pending.delete(key);
+    });
+    this.pending.set(key, operation);
+    return operation;
+  }
+
+  private async ensureOpenEnvironment(target: DesktopSshTarget): Promise<DesktopPreparedConnection> {
     const key = targetKey(target);
     const existing = this.environments.get(key);
     if (existing && existing.tunnel.exitCode === null) {
       try {
         await fetchDescriptor(existing.connection.httpUrl);
-        return existing.connection;
       } catch {
         await this.disconnectEnvironment(target);
       }
+      this.assertOpen();
+      if (this.environments.get(key) === existing) return existing.connection;
     }
 
+    this.assertOpen();
     let managed: ManagedSshEnvironment;
     try {
       managed = await this.createEnvironment(target);
     } catch (error) {
+      this.assertOpen();
       let retryError = error;
       if (isUnknownHostKeyFailure(retryError) && this.options.requestHostTrust) {
         const trusted = await this.options.requestHostTrust(target);
+        this.assertOpen();
         if (!trusted) throw new Error("SSH host-key confirmation was cancelled");
         try {
           managed = await this.createEnvironment(target, "yes");
-          this.environments.set(key, managed);
-          return managed.connection;
+          return await this.registerEnvironment(key, managed);
         } catch (hostRetryError) {
           retryError = hostRetryError;
         }
       }
+      this.assertOpen();
       if (!isAuthenticationFailure(retryError) || !this.options.requestPassword) throw retryError;
       const password = await this.options.requestPassword(target, `Password or key passphrase for ${formatTarget(target)}`);
+      this.assertOpen();
       if (!password) throw new Error("SSH authentication was cancelled");
       managed = await this.createEnvironment(target, password);
+    }
+    return this.registerEnvironment(key, managed);
+  }
+
+  private async registerEnvironment(key: string, managed: ManagedSshEnvironment): Promise<DesktopPreparedConnection> {
+    if (this.closed) {
+      await this.disposeEnvironment(managed);
+      this.assertOpen();
     }
     this.environments.set(key, managed);
     return managed.connection;
@@ -157,21 +189,40 @@ export class SshEnvironmentManager {
     const entry = this.environments.get(targetKey(target));
     if (!entry) return;
     this.environments.delete(targetKey(target));
-    terminate(entry.tunnel);
-    if (entry.remoteServerKind === "managed") {
-      await stopRemoteServer(target, entry.sshEnvironment);
-    }
+    await this.disposeEnvironment(entry);
   }
 
-  async close(): Promise<void> {
+  close(): Promise<void> {
+    // Close admission synchronously, before awaiting backend shutdown or setup.
+    this.closed = true;
+    if (this.closing) return this.closing;
     const entries = [...this.environments.values()];
     this.environments.clear();
-    for (const entry of entries) {
-      terminate(entry.tunnel);
-    }
-    await Promise.allSettled(entries
-      .filter((entry) => entry.remoteServerKind === "managed")
-      .map((entry) => stopRemoteServer(entry.connectionTarget, entry.sshEnvironment)));
+    this.closing = Promise.allSettled([
+      ...entries.map((entry) => this.disposeEnvironment(entry)),
+      ...this.pending.values(),
+      ...this.disposals,
+    ]).then(() => undefined);
+    return this.closing;
+  }
+
+  async reopen(): Promise<void> {
+    await this.closing;
+    this.closing = undefined;
+    this.closed = false;
+  }
+
+  private assertOpen(): void {
+    if (this.closed) throw new Error("SSH connections are closed while GitGui is shutting down or preparing an app update.");
+  }
+
+  private disposeEnvironment(entry: ManagedSshEnvironment): Promise<void> {
+    terminate(entry.tunnel);
+    const operation = (entry.remoteServerKind === "managed"
+      ? stopRemoteServer(entry.connectionTarget, entry.sshEnvironment)
+      : Promise.resolve()).finally(() => this.disposals.delete(operation));
+    this.disposals.add(operation);
+    return operation;
   }
 
   private async createEnvironment(target: DesktopSshTarget, password?: string): Promise<ManagedSshEnvironment> {
@@ -196,21 +247,22 @@ export class SshEnvironmentManager {
       throw error;
     }
 
-    const localPort = await reserveLocalPort();
-    const tunnel = spawn("ssh", [
-      ...sshArguments(target),
-      "-N",
-      "-o", "ExitOnForwardFailure=yes",
-      "-L", `127.0.0.1:${localPort}:127.0.0.1:${remote.remotePort}`,
-      formatTarget(target),
-    ], {
-      env: environment,
-      windowsHide: true,
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-
-    const httpUrl = `http://127.0.0.1:${localPort}`;
+    let tunnel: ChildProcessWithoutNullStreams | undefined;
     try {
+      const localPort = await reserveLocalPort();
+      tunnel = spawn("ssh", [
+        ...sshArguments(target),
+        "-N",
+        "-o", "ExitOnForwardFailure=yes",
+        "-L", `127.0.0.1:${localPort}:127.0.0.1:${remote.remotePort}`,
+        formatTarget(target),
+      ], {
+        env: environment,
+        windowsHide: true,
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+
+      const httpUrl = `http://127.0.0.1:${localPort}`;
       const descriptor = await waitForDescriptor(httpUrl, tunnel);
       return {
         tunnel,
@@ -224,7 +276,7 @@ export class SshEnvironmentManager {
         },
       };
     } catch (error) {
-      terminate(tunnel);
+      if (tunnel) terminate(tunnel);
       if (remote.serverKind === "managed") await stopRemoteServer(target, environment).catch(() => undefined);
       throw error;
     }

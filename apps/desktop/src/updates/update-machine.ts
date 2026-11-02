@@ -5,6 +5,7 @@
  * stable Windows/Linux only, plain-text release notes, explicit installing state.
  */
 import type { DesktopUpdateStatus } from "@gitgui/contracts/desktop";
+export { releaseNotesText } from "./release-notes.js";
 
 export type UpdateAction = "check" | "download" | "install";
 
@@ -25,10 +26,12 @@ export function noUpdate(state: DesktopUpdateStatus): DesktopUpdateStatus {
 }
 
 export function updateAvailable(state: DesktopUpdateStatus, version: string, notes: string, releaseUrl: string): DesktopUpdateStatus {
-  // A newer feed entry must not invalidate an installer the user already chose.
-  if (state.downloadedVersion) return noUpdate(state);
-  return { ...state, phase: "available", availableVersion: version, version, releaseNotes: notes,
-    releaseUrl, downloadPercent: undefined, message: undefined, errorContext: undefined };
+  const isDownloadedVersion = state.downloadedVersion === version;
+  const preserveReleaseNotes = isDownloadedVersion && notes.length === 0;
+  return { ...state, phase: isDownloadedVersion ? "downloaded" : "available", availableVersion: version,
+    downloadedVersion: isDownloadedVersion ? version : undefined, version,
+    releaseNotes: preserveReleaseNotes ? state.releaseNotes : notes,
+    releaseUrl, downloadPercent: isDownloadedVersion ? 100 : undefined, message: undefined, errorContext: undefined };
 }
 
 export function downloadComplete(state: DesktopUpdateStatus, version: string): DesktopUpdateStatus {
@@ -52,14 +55,4 @@ export function updateFailure(state: DesktopUpdateStatus, action: UpdateAction):
 
 export function isStableVersion(value: unknown): value is string {
   return typeof value === "string" && value.length <= 64 && /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(value);
-}
-
-export function releaseNotesText(value: unknown): string {
-  const notes = typeof value === "string" ? value : Array.isArray(value)
-    ? value.slice(0, 6).map((entry: unknown) => typeof entry === "object" && entry !== null
-      && "note" in entry && typeof entry.note === "string" ? entry.note : "").join("\n\n") : "";
-  return notes.slice(0, 32_000)
-    .replace(/<br\s*\/?>/gi, "\n").replace(/<\/(?:p|div|li|h[1-6])>/gi, "\n")
-    .replace(/<[^>]*>/g, "").replace(/\r/g, "").replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, "")
-    .trim().slice(0, 8_000);
 }

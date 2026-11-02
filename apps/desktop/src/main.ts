@@ -200,8 +200,14 @@ function initializeUpdates(): void {
   const { engine, hasFeed } = packagedUpdateEngine(process.resourcesPath);
   updates = new DesktopUpdates(engine, {
     async stopForInstall() {
-      await backend.shutdownForUpdate();
-      await ssh.close();
+      // T3 sets quitting before install cleanup. Close SSH admission first and
+      // drain setup even if the local backend refuses update preparation.
+      const closingSsh = ssh.close();
+      try {
+        await backend.shutdownForUpdate();
+      } finally {
+        await closingSsh;
+      }
       quitting = true;
       updateQuitReady = true;
     },
@@ -209,6 +215,7 @@ function initializeUpdates(): void {
       updateQuitReady = false;
       quitting = false;
       await backend.recoverAfterUpdate();
+      await ssh.reopen();
       mainWindow?.webContents.send("desktop:application-wakeup");
     },
   }, {
