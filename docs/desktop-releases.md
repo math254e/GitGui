@@ -13,6 +13,11 @@ signature verification is disabled for these deliberately unsigned builds; HTTPS
 GitHub release permissions, and metadata SHA-512 checks provide the current trust
 boundary. Signing can be added separately when certificates are available.
 
+The desktop package uses stock Electron icons from the bundled runtime's source
+version, documented in [the icon sources](../apps/desktop/build/README.md).
+The Windows executable, NSIS installer/uninstaller, and installer header share
+the ICO; Linux uses the matching PNG.
+
 ## Local packaging
 
 For desktop development, close the existing GitGui desktop before rerunning
@@ -162,7 +167,7 @@ installation or the running updater UI.
 On the Windows development host, frontend/desktop type checks, production web
 build, Rust workspace check, release helper tests, desktop updater/lifecycle
 tests, and the packaged Windows payload/metadata/blockmap checks passed. The
-current local installer is under `release/desktop-updates-refresh-fix/artifacts/`.
+current local installer is under `release/electron-icon-verification/artifacts/`.
 No workflow, tag creation, GitHub settings change, or publication was performed
 during that local verification.
 
@@ -180,6 +185,12 @@ reproduced a Windows hang before Git's default stdin was isolated from the
 control pipe, then passed after the fix. A separate Git input test confirms
 commands that explicitly supply stdin still work. The installer above was
 rebuilt with this correction and its payload/metadata checks passed.
+
+The Windows installer was subsequently rebuilt with the stock Electron icon
+assets. Native executable resource inspection confirmed all four icon sizes in
+both `GitGui.exe` and the NSIS installer match the source Electron ICO after
+resource-format normalization. Packaging, bundled payload, updater metadata,
+and blockmap validation also passed for that build.
 
 Linux AppImage packaging/desktop runtime and installed N-to-N+1 updates on both
 platforms remain release-qualification work. No live release feed was published for those

@@ -29,6 +29,9 @@ win:
   verifyUpdateCodeSignature: false
 nsis:
   differentialPackage: true
+  installerIcon: icon.ico
+  uninstallerIcon: icon.ico
+  installerHeaderIcon: icon.ico
 linux:
   target:
     - target: AppImage
