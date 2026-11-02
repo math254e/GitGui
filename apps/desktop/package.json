@@ -9,6 +9,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "check": "tsc --noEmit -p tsconfig.json",
+    "pretest": "npm run build --workspace @gitgui/ssh",
     "test": "vitest run"
   },
   "dependencies": {

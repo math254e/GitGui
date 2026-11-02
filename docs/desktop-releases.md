@@ -101,6 +101,10 @@ validates update metadata and blockmaps, and retains the final files as Actions
 artifacts for 14 days.
 No source version commits or npm publications occur.
 
+Desktop tests compile their SSH workspace dependency through the desktop
+package's `pretest` hook, including when invoked by the root `npm test`. This
+keeps clean runners independent of any previous desktop build output.
+
 Publication is disabled by default. Separately setting the repository Actions
 variable `GITGUI_PUBLISH_RELEASES` to the exact string `true` enables the final job,
 only in `math254e/GitGui` and after every build and check succeeds. Leave it unset
