@@ -9,17 +9,27 @@
     ".": {
       "types": "./src/index.ts",
       "default": "./dist/index.js"
-    }
+    },
+    "./config": "./src/config.ts",
+    "./command": "./src/command.ts",
+    "./auth": "./src/auth.ts",
+    "./errors": "./src/errors.ts",
+    "./platform": "./src/platform.ts"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "check": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run"
   },
-  "dependencies": { "@gitgui/contracts": "0.1.0" },
+  "dependencies": {
+    "@gitgui/contracts": "0.1.0",
+    "@effect/platform-node": "4.0.5",
+    "effect": "4.0.5"
+  },
   "devDependencies": {
     "@types/node": "^25.9.1",
     "typescript": "~5.6.2",
-    "vitest": "^3.2.4"
+    "vitest": "5.0.5",
+    "@effect/vitest": "4.0.5"
   }
 }

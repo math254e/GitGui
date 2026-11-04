@@ -181,9 +181,15 @@ async fn inherited_control_allows_git_startup_and_repository_refresh_without_pip
 
 #[test]
 fn inherited_pipe_pipelining_replies_and_exact_process_exit() {
+    let data = tempfile::tempdir().unwrap();
+    let identity = br#"{"schema_version":1,"server_id":"gitgui-123456-1788413802919117400"}"#;
+    let catalog = br#"{"schema_version":1,"repositories":[]}"#;
+    std::fs::write(data.path().join("server.json"), identity).unwrap();
+    std::fs::write(data.path().join("repositories.json"), catalog).unwrap();
     let mut child = Fixture(
         Command::new(env!("CARGO_BIN_EXE_gitgui-server"))
-            .args(["--ephemeral", "--bind", "127.0.0.1", "--port", "0"])
+            .args(["--bind", "127.0.0.1", "--port", "0", "--data-dir"])
+            .arg(data.path())
             .env("GITGUI_SERVER_BOOTSTRAP_STDIN", "1")
             .env("GITGUI_SERVER_DESKTOP_CONTROL", "1")
             .env("RUST_LOG", "error")
@@ -249,4 +255,6 @@ fn inherited_pipe_pipelining_replies_and_exact_process_exit() {
     }
     drop(stdin);
     reader.join().unwrap();
+    assert_eq!(std::fs::read(data.path().join("server.json")).unwrap(), identity);
+    assert_eq!(std::fs::read(data.path().join("repositories.json")).unwrap(), catalog);
 }

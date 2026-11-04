@@ -10,6 +10,7 @@ export interface DesktopPreparedConnection {
   httpUrl: string;
   descriptor: EnvironmentDescriptor;
   credential?: DesktopCredential;
+  ssh?: { operationId: string; remoteDataDirectory: string };
 }
 
 export interface DesktopConnectionRegistration {
@@ -33,6 +34,26 @@ export interface DesktopSshTarget {
   user?: string;
   port?: number;
   identityFile?: string;
+  /** Persisted environment locator; independent of the SSH route/key. */
+  remoteDataDirectory?: string;
+}
+
+export interface DesktopSshRequest {
+  operationId: string;
+  expectedEnvironmentId?: string;
+}
+
+export type DesktopSshFailureCategory = "transport" | "authentication" | "permission" | "configuration" | "unsupported" | "identity" | "cancelled";
+export interface DesktopSshFailure {
+  category: DesktopSshFailureCategory;
+  message: string;
+}
+
+export type DesktopSshResult<T> = { ok: true; value: T } | { ok: false; error: DesktopSshFailure };
+export type DesktopSshCleanup = "stopped" | "released" | "retained" | "cleanup-pending";
+export interface DesktopSshCleanupReport {
+  operationId: string;
+  outcome: DesktopSshCleanup;
 }
 
 export interface DesktopSshHost {
@@ -67,15 +88,18 @@ export interface DesktopBridge {
   getPrimaryEnvironment(): Promise<DesktopPreparedConnection>;
   restartPrimaryEnvironment(): Promise<DesktopPreparedConnection>;
   listConnectionRegistrations(): Promise<DesktopConnectionRegistration[]>;
-  saveConnectionRegistration(registration: DesktopConnectionRegistration): Promise<void>;
+  saveConnectionRegistration(registration: DesktopConnectionRegistration, credential?: DesktopCredential): Promise<void>;
   removeConnectionRegistration(environmentId: string): Promise<void>;
   getCredential(environmentId: string): Promise<DesktopCredential | undefined>;
   setCredential(environmentId: string, credential: DesktopCredential): Promise<void>;
   removeCredential(environmentId: string): Promise<void>;
   pickFolder(): Promise<string | null>;
   discoverSshHosts(): Promise<DesktopSshHost[]>;
-  ensureSshConnection(target: DesktopSshTarget): Promise<DesktopPreparedConnection>;
-  disconnectSshConnection(target: DesktopSshTarget): Promise<void>;
+  ensureSshConnection(target: DesktopSshTarget, request?: DesktopSshRequest): Promise<DesktopPreparedConnection>;
+  issueSshPairingCredential(operationId: string, expectedEnvironmentId: string): Promise<DesktopCredential>;
+  claimSshConnection(operationId: string, expectedEnvironmentId: string): Promise<void>;
+  cancelSshConnection(operationId: string): Promise<DesktopSshCleanup>;
+  disconnectSshConnection(target: DesktopSshTarget): Promise<DesktopSshCleanupReport[]>;
   getUpdateStatus(): Promise<DesktopUpdateStatus>;
   checkForUpdates(): Promise<DesktopUpdateStatus>;
   downloadUpdate(): Promise<DesktopUpdateActionResult>;

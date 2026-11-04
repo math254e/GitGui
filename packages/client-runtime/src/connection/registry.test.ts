@@ -8,10 +8,12 @@
  * - GitGui has no relay, so the relay removal and GitHub routing trust cases
  *   are gone.
  * - GitGui keys a credential by its environment, not by its connection.
+ * - GitGui tests disabled SSH staging before host claim and activation.
  */
 import { EnvironmentId } from "@gitgui/contracts/environment";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
@@ -37,6 +39,7 @@ import {
 } from "./catalog.ts";
 import {
   BearerConnectionTarget,
+  ConnectionBlockedError,
   ConnectionTransientError,
   PrimaryConnectionTarget,
   type ConnectionAttemptError,
@@ -79,6 +82,7 @@ const PRIMARY_TARGET = new PrimaryConnectionTarget({
 const makeDependencies = Effect.fn("TestConnectionRegistry.makeDependencies")(function* (options?: {
   readonly targets?: ReadonlyArray<ConnectionTarget>;
   readonly disabled?: ReadonlyArray<EnvironmentId>;
+  readonly interruptOnEnable?: boolean;
 }) {
   const targets = [...(options?.targets ?? [])];
   const disabled = new Set<EnvironmentId>(options?.disabled ?? []);
@@ -92,10 +96,11 @@ const makeDependencies = Effect.fn("TestConnectionRegistry.makeDependencies")(fu
     listDisabled: Effect.succeed([...disabled]),
   });
   const registrationStore = Persistence.ConnectionRegistrationStore.of({
-    register: (registration, persistedRoutes) =>
+    register: (registration, persistedRoutes, options) =>
       Effect.sync(() => {
         registrations.set(registration.target.environmentId, registration);
         routes.set(registration.target.environmentId, persistedRoutes);
+        if (options?.enabled === false) disabled.add(registration.target.environmentId);
       }),
     setRoutes: (environmentId, persistedRoutes) =>
       Effect.sync(() => void routes.set(environmentId, persistedRoutes)),
@@ -105,13 +110,14 @@ const makeDependencies = Effect.fn("TestConnectionRegistry.makeDependencies")(fu
         routes.delete(environmentId);
       }),
     setEnabled: (environmentId, enabled) =>
-      Effect.sync(() => {
+      Effect.withFiber((fiber) => Effect.sync(() => {
         if (enabled) {
           disabled.delete(environmentId);
+          if (options?.interruptOnEnable) fiber.interruptUnsafe();
         } else {
           disabled.add(environmentId);
         }
-      }),
+      })),
   });
   const credentialStore = ConnectionCredentialStore.ConnectionCredentialStore.of({
     get: (environmentId) => Effect.succeed(Option.fromNullishOr(credentials.get(environmentId))),
@@ -177,10 +183,43 @@ const makeDependencies = Effect.fn("TestConnectionRegistry.makeDependencies")(fu
     profiles,
     networkStatus,
     wakeups,
+    disabled,
   };
 });
 
 describe("EnvironmentRegistry", () => {
+  it.effect("completes activation and handoff when interruption arrives during durable enable", () => Effect.gen(function* () {
+    const harness = yield* makeDependencies({ interruptOnEnable: true });
+    const registry = yield* EnvironmentRegistry.make.pipe(Effect.provide(harness.dependencies));
+    let handedOff = false;
+    const registering = yield* Effect.forkChild(registry.register(BEARER_REGISTRATION, { beforeActivate: Effect.void,
+      onCommitted: Effect.sync(() => { handedOff = true; }),
+    }));
+    yield* Fiber.await(registering);
+    expect(handedOff).toBe(true);
+    expect(harness.disabled.has(ENVIRONMENT_ID)).toBe(false);
+    expect((yield* SubscriptionRef.get(registry.entries)).get(ENVIRONMENT_ID)?.enabled).toBe(true);
+  }));
+
+  it.effect("stages a new environment disabled before claim, retaining recoverable state on failure", () => Effect.gen(function* () {
+    const harness = yield* makeDependencies();
+    const registry = yield* EnvironmentRegistry.make.pipe(Effect.provide(harness.dependencies));
+    let claims = 0;
+    const claim = Effect.sync(() => {
+      claims++;
+      expect(harness.registrations.has(ENVIRONMENT_ID)).toBe(true);
+      expect(harness.disabled.has(ENVIRONMENT_ID)).toBe(true);
+    }).pipe(Effect.andThen(Effect.fail(new ConnectionBlockedError({ reason: "configuration", detail: "claim rejected" }))));
+    const failure = yield* registry.register(BEARER_REGISTRATION, { beforeActivate: claim }).pipe(Effect.flip);
+    expect(failure).toMatchObject({ detail: "claim rejected" });
+    expect(claims).toBe(1);
+    expect(harness.disabled.has(ENVIRONMENT_ID)).toBe(true);
+    expect((yield* SubscriptionRef.get(registry.entries)).get(ENVIRONMENT_ID)?.enabled).toBe(false);
+    yield* registry.register(BEARER_REGISTRATION, { beforeActivate: Effect.void });
+    expect(harness.disabled.has(ENVIRONMENT_ID)).toBe(false);
+    expect((yield* SubscriptionRef.get(registry.entries)).get(ENVIRONMENT_ID)?.enabled).toBe(true);
+  }));
+
   it.effect("registers a saved environment and keeps its routes", () =>
     Effect.gen(function* () {
       const harness = yield* makeDependencies();

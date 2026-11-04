@@ -1,18 +1,19 @@
+import { isValidEnvironmentId } from "@gitgui/contracts/environment";
 import { getContext, setContext } from "svelte";
 import {
   BearerConnectionProfile,
   BearerConnectionRegistration,
   BearerConnectionTarget,
   GitGuiClient,
-  SshConnectionProfile,
-  SshConnectionRegistration,
-  SshConnectionTarget,
   type ConnectionCatalogEntry,
   type ConnectionRegistration,
   type SupervisorConnectionState,
 } from "@gitgui/client-runtime";
 import * as EnvironmentRegistry from "@gitgui/client-runtime/connection/registry";
 import * as EnvironmentSupervisor from "@gitgui/client-runtime/connection/supervisor";
+import { ConnectionOnboarding } from "@gitgui/client-runtime/connection/onboarding";
+import { fetchRemoteEnvironmentDescriptor } from "@gitgui/client-runtime/environment/descriptor";
+import { mapRemoteEnvironmentError } from "@gitgui/client-runtime/connection/errors";
 import type { RpcSession } from "@gitgui/client-runtime/rpc/session";
 import { ConnectionBlockedError } from "@gitgui/client-runtime/connection/model";
 import { EnvironmentId, type EnvironmentDescriptor } from "@gitgui/contracts/environment";
@@ -63,6 +64,7 @@ export interface WebApplicationRuntimeState {
   workspaceState: ClientWorkspaceState | null;
   loading: boolean;
   error: string;
+  sshCleanupNotice?: string;
 }
 
 const emptyConnection: SupervisorConnectionState = {
@@ -97,6 +99,7 @@ export class WebApplicationRuntime {
     workspaceState: null,
     loading: true,
     error: "",
+    sshCleanupNotice: "",
   };
   private readonly listeners = new Set<(state: WebApplicationRuntimeState) => void>();
   private workspaceListener?: () => void;
@@ -113,11 +116,18 @@ export class WebApplicationRuntime {
 
   constructor(options?: WebConnectionOptions) {
     const desktop = readDesktopBridge();
-    this.options = options ?? {
+    const supplied = options ?? {
       desktop,
       storage: localStorage,
       fetchFn: globalThis.fetch.bind(globalThis),
     };
+    this.options = { ...supplied, onSshCleanup: (status) => {
+      supplied.onSshCleanup?.(status);
+      this.stateValue.sshCleanupNotice = status.outcome === "cleanup-pending"
+        ? "Last SSH cleanup could not be confirmed. Ownership information was retained for reconciliation on the next connection."
+        : "Last SSH cleanup retained a shared remote server because it was still in use.";
+      this.notify();
+    } };
     this.isDesktop = this.options.desktop !== null;
     this.runtime = ManagedRuntime.make(webConnectionLayer(this.options));
   }
@@ -189,7 +199,10 @@ export class WebApplicationRuntime {
       .runPromise(
         Effect.gen(function* () {
           const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
-          yield* registry.retryNow(EnvironmentId.make(environmentId));
+          const id = EnvironmentId.make(environmentId);
+          const entry = (yield* SubscriptionRef.get(registry.entries)).get(id);
+          if (entry?.enabled === false) yield* registry.setEnabled(id, true);
+          else yield* registry.retryNow(id);
         }),
       )
       .catch(() => undefined);
@@ -287,8 +300,11 @@ export class WebApplicationRuntime {
       readonly user?: string;
       readonly port?: number;
       readonly identityFile?: string;
+      readonly remoteDataDirectory?: string;
+      readonly expectedEnvironmentId?: string;
     },
     credential?: { readonly kind: string; readonly token: string },
+    signal?: AbortSignal,
   ): Promise<string> {
     const desktop = this.options.desktop;
     if (!desktop) {
@@ -297,40 +313,20 @@ export class WebApplicationRuntime {
         detail: "SSH environments require the GitGui desktop app.",
       });
     }
-    const prepared = await desktop.ensureSshConnection({
-      kind: "ssh",
-      host: target.host,
-      ...(target.user === undefined ? {} : { user: target.user }),
-      ...(target.port === undefined ? {} : { port: target.port }),
-      ...(target.identityFile === undefined ? {} : { identityFile: target.identityFile }),
-    });
-    const descriptor = await this.fetchDescriptor(prepared.httpUrl);
-    const bearerCredential = await this.runtime.runPromise(authorizeConnectionCredential(
-      prepared.httpUrl, descriptor.environmentId, credential ?? prepared.credential,
-    ));
-    const connectionId = `ssh:${crypto.randomUUID()}`;
-    const registration = new SshConnectionRegistration({
-      target: new SshConnectionTarget({
-        environmentId: descriptor.environmentId,
-        label: descriptor.label,
-        connectionId,
-      }),
-      profile: new SshConnectionProfile({
-        connectionId,
-        environmentId: descriptor.environmentId,
-        label: descriptor.label,
-        target: {
-          alias: target.host,
-          hostname: target.host,
-          ...(target.user === undefined ? {} : { username: target.user }),
-          ...(target.port === undefined ? {} : { port: target.port }),
-          ...(target.identityFile === undefined ? {} : { identityFile: target.identityFile }),
-        },
-      }),
-      credential: bearerCredential,
-    });
-    await this.register(registration);
-    return descriptor.environmentId;
+    if ((target.remoteDataDirectory !== undefined && !target.expectedEnvironmentId) ||
+        (target.expectedEnvironmentId !== undefined && !isValidEnvironmentId(target.expectedEnvironmentId))) {
+      throw new ConnectionBlockedError({ reason: "configuration", detail: "Recovering an existing SSH environment requires its saved environment ID." });
+    }
+    return await this.runtime.runPromise(Effect.flatMap(ConnectionOnboarding, (onboarding) =>
+      onboarding.registerSsh({ target: {
+        alias: target.host, hostname: target.host,
+        ...(target.user === undefined ? {} : { username: target.user }),
+        ...(target.port === undefined ? {} : { port: target.port }),
+        ...(target.identityFile === undefined ? {} : { identityFile: target.identityFile }),
+        ...(target.remoteDataDirectory === undefined ? {} : { remoteDataDirectory: target.remoteDataDirectory }),
+      }, ...(credential === undefined ? {} : { credential }),
+      ...(target.expectedEnvironmentId === undefined ? {} : { expectedEnvironmentId: EnvironmentId.make(target.expectedEnvironmentId) }) }),
+    ), signal === undefined ? undefined : { signal });
   }
 
   private async register(registration: ConnectionRegistration): Promise<void> {
@@ -343,16 +339,8 @@ export class WebApplicationRuntime {
   }
 
   private async fetchDescriptor(httpUrl: string): Promise<EnvironmentDescriptor> {
-    const response = await this.options.fetchFn(
-      new URL("/.well-known/gitgui/environment", httpUrl).toString(),
-    );
-    if (!response.ok) {
-      throw new ConnectionBlockedError({
-        reason: "configuration",
-        detail: `The GitGui environment did not answer (HTTP ${response.status}).`,
-      });
-    }
-    return (await response.json()) as EnvironmentDescriptor;
+    return await this.runtime.runPromise(fetchRemoteEnvironmentDescriptor({ httpBaseUrl: httpUrl })
+      .pipe(Effect.mapError(mapRemoteEnvironmentError)));
   }
 
   private applyEntries(entries: ReadonlyMap<EnvironmentId, ConnectionCatalogEntry>): void {

@@ -109,7 +109,9 @@ it.skipIf(process.env["GITGUI_IT"] !== "1")("reconnects after a crash, an explic
     await vi.waitFor(() => {
       expect(current!.prepared.httpUrl).not.toBe(firstUrl);
       expect(runtime!.state.client?.serverWelcome.environment_id).toBe(environmentId);
-      expect(credentials.get(environmentId)?.token === firstToken).toBe(false);
+      // Durable bearer sessions survive the host process; a reconnect validates
+      // and reuses the saved session instead of minting another one.
+      expect(credentials.get(environmentId)?.token).toBe(firstToken);
     }, { timeout: 12_000 });
     expect((await runtime.state.client!.getServerStatus()).ready).toBe(true);
 
@@ -125,7 +127,7 @@ it.skipIf(process.env["GITGUI_IT"] !== "1")("reconnects after a crash, an explic
     runtime = new WebApplicationRuntime(options);
     await runtime.start();
     await vi.waitFor(() => expect(runtime!.state.client?.serverWelcome.environment_id).toBe(environmentId), { timeout: 10_000 });
-    expect(credentials.get(environmentId)?.token === cachedToken).toBe(false);
+    expect(credentials.get(environmentId)?.token).toBe(cachedToken);
     expect((await runtime.state.client!.getServerStatus()).ready).toBe(true);
   } finally {
     await runtime?.stop();

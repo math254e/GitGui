@@ -384,11 +384,12 @@ export class WorkspaceStore {
 
   homeRepositories = $derived<RepositoryListItem[]>(
     this.repositoryCatalog
-      .filter((repository) => repository.isWorktree !== true)
+      .filter((repository) => repository.isWorktree !== true || repository.missing)
       .map((repository) => ({
         repositoryId: repository.id,
         root: repository.root,
         title: this.repositoryTitle(repository),
+        missing: repository.missing,
       })),
   );
 
@@ -668,7 +669,7 @@ export class WorkspaceStore {
           if (
             !this.isDesktop &&
             !state.workspace!.state.openRepositoryIds.length &&
-            this.repositoryCatalog.length === 1
+            this.repositoryCatalog.length === 1 && !this.repositoryCatalog[0].missing
           ) {
             await state.workspace!.openKnownRepository(this.repositoryCatalog[0].id);
           }
@@ -690,7 +691,7 @@ export class WorkspaceStore {
   private async resumeActiveRepository(): Promise<void> {
     if (this.hasResumed) return;
     const repositoryId = this.activeRepositoryId;
-    if (!repositoryId) return;
+    if (!repositoryId || this.workspaceState?.repositories[repositoryId]?.repository.missing) return;
     if (this.currentRouteId !== HOME_ROUTE_ID) return;
     this.hasResumed = true;
     await this.navigate(repositoryPath(repositoryId), { replaceState: true });
@@ -778,13 +779,14 @@ export class WorkspaceStore {
   ): RepositorySummary[] {
     const merged = new Map(
       repositories
-        .filter((repository) => repository.isWorktree !== true)
+        .filter((repository) => repository.isWorktree !== true || repository.missing)
         .map((repository) => [repository.id, repository]),
     );
 
     for (const repositoryState of state ? Object.values(state.repositories) : []) {
-      if (repositoryState.repository.isWorktree !== true) {
-        merged.set(repositoryState.repository.id, repositoryState.repository);
+      if (repositoryState.repository.isWorktree !== true || repositoryState.repository.missing) {
+        const catalogEntry = merged.get(repositoryState.repository.id);
+        merged.set(repositoryState.repository.id, catalogEntry ?? repositoryState.repository);
       }
     }
 
@@ -910,7 +912,12 @@ export class WorkspaceStore {
   }
 
   async openRepository(repositoryId: string): Promise<boolean> {
-    return this.runWorkspaceCommand(() => this.requireWorkspace().openKnownRepository(repositoryId));
+    const opened = await this.runWorkspaceCommand(() => this.requireWorkspace().openKnownRepository(repositoryId));
+    if (opened) {
+      const repository = this.workspace?.state.repositories[repositoryId]?.repository;
+      if (repository) this.repositoryCatalog = this.repositoryCatalog.map((entry) => entry.id === repositoryId ? repository : entry);
+    }
+    return opened;
   }
 
   async removeRepository(repositoryId: string): Promise<void> {

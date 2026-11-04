@@ -19,11 +19,14 @@
   let sshUser = $state("");
   let sshPort = $state("");
   let sshIdentityFile = $state("");
+  let sshRemoteDirectory = $state("");
+  let sshExpectedEnvironmentId = $state("");
   let sshToken = $state("");
   let discoveredSshHosts = $state<DesktopSshHost[]>([]);
   let gitExecutable = $state("git");
   let autoFetch = $state(true);
   let unsubscribeRuntime: (() => void) | undefined;
+  let sshAcquisition = $state<AbortController | null>(null);
 
   onMount(() => {
     unsubscribeRuntime = applicationRuntime.subscribe((state) => (runtimeState = state));
@@ -31,6 +34,7 @@
   });
 
   onDestroy(() => {
+    sshAcquisition?.abort();
     unsubscribeRuntime?.();
   });
 
@@ -66,6 +70,8 @@
     const parsedPort = sshPort.trim() ? Number(sshPort) : undefined;
     connectionBusy = true;
     connectionNotice = "Preparing the SSH environment…";
+    const acquisition = new AbortController();
+    sshAcquisition = acquisition;
     try {
       await applicationRuntime.addSsh(
         {
@@ -74,15 +80,19 @@
           ...(sshUser.trim() ? { user: sshUser.trim() } : {}),
           ...(parsedPort !== undefined ? { port: parsedPort } : {}),
           ...(sshIdentityFile.trim() ? { identityFile: sshIdentityFile.trim() } : {}),
+          ...(sshRemoteDirectory.trim() ? { remoteDataDirectory: sshRemoteDirectory.trim() } : {}),
+          ...(sshExpectedEnvironmentId.trim() ? { expectedEnvironmentId: sshExpectedEnvironmentId.trim() } : {}),
         },
         sshToken.trim() ? { kind: "pairing", token: sshToken.trim() } : undefined,
+        acquisition.signal,
       );
       sshToken = "";
       connectionNotice = "SSH environment connected and saved.";
     } catch (error) {
-      connectionNotice = error instanceof Error ? error.message : "The SSH environment could not be connected.";
+      connectionNotice = acquisition.signal.aborted ? "SSH connection cancelled." : error instanceof Error ? error.message : "The SSH environment could not be connected.";
     } finally {
       connectionBusy = false;
+      if (sshAcquisition === acquisition) sshAcquisition = null;
     }
   }
 
@@ -133,6 +143,9 @@
               </section>
 
               <section class="py-7" aria-labelledby="connections-environments">
+                {#if runtimeState.sshCleanupNotice}
+                  <p role="status" class="mb-4 text-sm text-[var(--app-theme-text-subtle)]">{runtimeState.sshCleanupNotice}</p>
+                {/if}
                 <div class="mb-5">
                   <h3 id="connections-environments" class="text-sm font-semibold text-[var(--app-theme-text)]">Environments</h3>
                   <p class="mt-1 text-sm text-[var(--app-theme-text-subtle)]">Each environment is one independent GitGui backend and repository catalog.</p>
@@ -158,7 +171,7 @@
                         {:else}
                           <span class="px-2 text-xs font-semibold text-[var(--app-theme-accent)]">Active</span>
                         {/if}
-                        {#if entry.connection.phase === "blocked" || entry.connection.phase === "offline"}
+                        {#if entry.connection.phase === "blocked" || entry.connection.phase === "offline" || entry.connection.phase === "available"}
                           <button type="button" disabled={connectionBusy} onclick={() => applicationRuntime.registry.retry(entry.registration.environmentId)} class="inline-flex h-8 items-center rounded-md border border-[var(--app-theme-border)] bg-[var(--app-theme-surface-raised)] px-3 text-xs font-semibold text-[var(--app-theme-text-muted)] disabled:opacity-50">Retry</button>
                         {/if}
                         {#if entry.registration.target.kind !== "primary"}
@@ -218,7 +231,18 @@
                     <label class="block"><span class="mb-1 block text-xs font-semibold text-[var(--app-theme-text-subtle)]">SSH port</span><input bind:value={sshPort} inputmode="numeric" placeholder="22" class="h-9 w-full rounded-md border border-[var(--app-theme-border)] bg-[var(--app-theme-input)] px-3 text-sm outline-none" /></label>
                     <label class="block"><span class="mb-1 block text-xs font-semibold text-[var(--app-theme-text-subtle)]">Identity file</span><input bind:value={sshIdentityFile} placeholder="Optional" class="h-9 w-full rounded-md border border-[var(--app-theme-border)] bg-[var(--app-theme-input)] px-3 text-sm outline-none" /></label>
                     <label class="block md:col-span-2"><span class="mb-1 block text-xs font-semibold text-[var(--app-theme-text-subtle)]">Existing pairing token</span><input bind:value={sshToken} type="password" autocomplete="off" placeholder="Optional when GitGui starts the backend" class="h-9 w-full rounded-md border border-[var(--app-theme-border)] bg-[var(--app-theme-input)] px-3 text-sm outline-none" /></label>
+                    <details class="md:col-span-2 text-sm">
+                      <summary class="cursor-pointer text-[var(--app-theme-text-subtle)]">Recover an existing environment</summary>
+                      <p class="my-3 text-xs text-[var(--app-theme-text-subtle)]">Use the existing server state directory and the environment ID shown above to preserve its repositories and identity.</p>
+                      <div class="grid gap-3 md:grid-cols-2">
+                        <label class="block"><span class="mb-1 block text-xs font-semibold text-[var(--app-theme-text-subtle)]">Remote state directory</span><input bind:value={sshRemoteDirectory} placeholder="Absolute path on the Linux host" class="h-9 w-full rounded-md border border-[var(--app-theme-border)] bg-[var(--app-theme-input)] px-3 text-sm outline-none" /></label>
+                        <label class="block"><span class="mb-1 block text-xs font-semibold text-[var(--app-theme-text-subtle)]">Expected environment ID</span><input bind:value={sshExpectedEnvironmentId} placeholder="Saved environment ID" class="h-9 w-full rounded-md border border-[var(--app-theme-border)] bg-[var(--app-theme-input)] px-3 text-sm outline-none" /></label>
+                      </div>
+                    </details>
                     <button type="button" disabled={connectionBusy} onclick={addSshEnvironment} class="h-9 w-fit rounded-md bg-[var(--app-theme-accent)] px-4 text-sm font-semibold text-[var(--app-theme-accent-foreground)] disabled:opacity-50">Connect over SSH</button>
+                    {#if sshAcquisition}
+                      <button type="button" onclick={() => sshAcquisition?.abort()} class="h-9 w-fit rounded-md border border-[var(--app-theme-border)] px-4 text-sm">Cancel SSH connection</button>
+                    {/if}
                   </div>
                 </section>
               {/if}

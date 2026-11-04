@@ -7,6 +7,8 @@
  * Divergences from upstream:
  * - GitGui checks its fixed protocol and descriptor routes instead of T3 orchestration.
  * - Route checks are forked in one Effect.gen block for TypeScript inference.
+ * - Provisional SSH acquisition finalizers span the RPC handshake; onReady
+ *   claims ownership only after the session is responsive.
  */
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -171,11 +173,18 @@ export const make = Effect.gen(function* () {
       Effect.fnUntraced(function* (
         route,
       ): Effect.fn.Return<EnvironmentConnectionLease, ConnectionAttemptError, Scope.Scope> {
-        const prepared = yield* resolver.prepare(routeEntry(entry, route));
+        let ready = false;
+        const prepared = yield* Effect.uninterruptibleMask((restore) =>
+          restore(resolver.prepare(routeEntry(entry, route))).pipe(Effect.tap((acquired) =>
+            Effect.addFinalizer(() => ready ? Effect.void : (acquired.onFailure ?? Effect.void)),
+          )),
+        );
         yield* reportProgress({ stage: "opening", prepared });
         const session = yield* sessions.connect(prepared);
         yield* reportProgress({ stage: "synchronizing", prepared });
         yield* session.ready;
+        if (prepared.onReady !== undefined) yield* prepared.onReady;
+        ready = true;
         return { prepared, session } satisfies EnvironmentConnectionLease;
       }),
     );
@@ -188,7 +197,7 @@ export const make = Effect.gen(function* () {
     ).pipe(
       Effect.flatMap((check) =>
         check === "answered"
-          ? resolver.prepare(routeEntry(entry, route)).pipe(
+          ? Effect.scoped(resolver.prepare(routeEntry(entry, route))).pipe(
               Effect.as(true),
               Effect.orElseSucceed(() => false),
             )

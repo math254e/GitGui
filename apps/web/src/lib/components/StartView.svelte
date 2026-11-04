@@ -5,6 +5,7 @@
     repositoryId: string;
     root: string;
     title: string;
+    missing?: boolean;
   };
 
   type Props = {
@@ -125,9 +126,15 @@
                 <button
                   class="grid min-w-0 grid-cols-[minmax(0,auto)_1fr] items-baseline gap-4 py-0.5 text-left leading-6"
                   type="button"
+                  title={repo.missing ? "Directory missing. Restore it and select this repository to retry, or remove it from GitGui." : undefined}
                   onclick={() => onOpenRepository(repo.repositoryId)}
                 >
-                  <span class="truncate text-[18px] font-semibold text-[var(--app-theme-accent)]">{repo.title}</span>
+                  <span class="flex min-w-0 items-center gap-2">
+                    <span class="truncate text-[18px] font-semibold text-[var(--app-theme-accent)]">{repo.title}</span>
+                    {#if repo.missing}
+                      <span class="shrink-0 rounded-[2px] border border-[var(--app-theme-border)] px-1.5 text-xs font-medium leading-5 text-[var(--app-theme-text)]">Missing</span>
+                    {/if}
+                  </span>
                   <span class="truncate text-[18px] font-medium text-[var(--app-theme-text-muted)]">{repo.root}</span>
                 </button>
                 <button

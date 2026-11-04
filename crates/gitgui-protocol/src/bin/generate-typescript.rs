@@ -5,20 +5,25 @@
 //! does not need to duplicate wire definitions by hand.
 
 use gitgui_protocol::{
-    AdvertisedEndpoint, AuthSession, CancelRequest, ChangedFile, CommitFile, CommitFileDiff, CommitFileDiffParams,
-    CommitFilesParams, CommitFilesResult, CommitGraph, CommitInfo, CommitRef, CommitRefType,
-    CommitWorkingTreeFileDiffParams, CommitWorkingTreeFilesParams, EnvironmentAuthPolicy,
-    EnvironmentDescriptor, FileDiffResult, GitAmendInfo, GitAmendParams, GitApplyHunksParams,
-    GitBranch, GitBranchCreateParams, GitBranchCreateResult, GitBranchDeleteParams, GitBranchRenameParams, GitBranchListParams,
-    GitWorktreeRemoveParams, GitWorktreeRemoveResult, GitTagCreateParams, GitTagCreateResult,
-    GitTagDeleteParams, GitTagDeleteResult,
-    GitTagTargetParams, GitTagMutationResult, GitTagFetchConflict, GitTagApplyFetchParams, GitTagDetails,
-    GitBranchListResult, GitBranchSwitchParams, GitBranchSwitchResult, GitCommitParams,
-    GitCommitResult, GitDiscardFile, GitDiscardParams, GitDiscardResult, GitFetchResult, GitHunk,
-    GitHunkPreview, GitHunkPreviewParams, GitPathsParams, GitPullResult, GitPushResult,
-    GitRepositoryParams, GitStageResult, GitStashPopParams, GitStashPopResult, GitStashPushParams,
-    GitStashPushResult, GitStatusParams, GitStatusResult, GitUnstageResult, GraphCommit, GraphEdge,
-    GraphEdgeType, OrderedEventEnvelope, PairingCredentialResponse, PrefetchCommitDiffTarget,
+    AdvertisedEndpoint, AuthSession, CancelRequest, ChangedFile, CommitFile, CommitFileDiff,
+    CommitFileDiffParams, CommitFilesParams, CommitFilesResult, CommitGraph, CommitInfo, CommitRef,
+    CommitRefType, CommitWorkingTreeFileDiffParams, CommitWorkingTreeFilesParams,
+    EnvironmentAuthPolicy, EnvironmentDescriptor, FileDiffResult, GitAmendInfo, GitAmendParams,
+    GitApplyHunksParams, GitBranch, GitBranchCreateParams, GitBranchCreateResult,
+    GitBranchDeleteParams, GitBranchListParams, GitBranchListResult, GitBranchRenameParams,
+    GitBranchSwitchParams, GitBranchSwitchResult, GitCommitParams, GitCommitResult, GitDiscardFile,
+    GitDiscardParams, GitDiscardResult, GitFetchResult, GitHunk, GitHunkPreview,
+    GitHunkPreviewParams, GitPathsParams, GitPullResult, GitPushResult, GitRepositoryParams,
+    GitStageResult, GitStashBranchParams, GitStashCreatedBranch, GitStashFileDiffParams,
+    GitStashFileDiffResult, GitStashFilesResult, GitStashMutationOutcome, GitStashMutationResult,
+    GitStashPopParams, GitStashPopResult, GitStashPushParams, GitStashPushResult,
+    GitStashPushSelectedOutcome, GitStashPushSelectedParams, GitStashPushSelectedResult,
+    GitStashRestoreOutcome, GitStashSelectionSource, GitStashState, GitStashTarget,
+    GitStashTargetParams, GitStatusParams, GitStatusResult, GitTagApplyFetchParams,
+    GitTagCreateParams, GitTagCreateResult, GitTagDeleteParams, GitTagDeleteResult, GitTagDetails,
+    GitTagFetchConflict, GitTagMutationResult, GitTagTargetParams, GitUnstageResult,
+    GitWorktreeRemoveParams, GitWorktreeRemoveResult, GraphCommit, GraphEdge, GraphEdgeType,
+    OmittedDiffContent, OrderedEventEnvelope, PairingCredentialResponse, PrefetchCommitDiffTarget,
     PrefetchCommitDiffsParams, PrefetchCommitDiffsResult, PrefetchCommitFilesParams,
     PrefetchCommitFilesResult, ProtocolError, ProtocolErrorMessage, RepositoriesCreateParams,
     RepositoriesCreateResult, RepositoriesListResult, RepositoriesOpenParams,
@@ -29,12 +34,10 @@ use gitgui_protocol::{
     RepositorySummary, RequestEnvelope, ResponseEnvelope, ResponseErrorEnvelope,
     ResponseSuccessEnvelope, ServerInfo, ServerLifecycle, ServerReadiness, ServerStatus, StashInfo,
     TokenExchangeResponse, WebSocketTicketResponse, WelcomeMessage, WelcomePayload,
-    WorkingTreeFileDiffParams, WorktreeInfo, OmittedDiffContent,
-    GitStashTarget, GitStashSelectionSource, GitStashPushSelectedParams,
-    GitStashPushSelectedOutcome, GitStashPushSelectedResult, GitStashTargetParams,
-    GitStashBranchParams, GitStashMutationOutcome, GitStashState, GitStashRestoreOutcome,
-    GitStashCreatedBranch, GitStashMutationResult, GitStashFilesResult,
-    GitStashFileDiffParams, GitStashFileDiffResult,
+    WorkingTreeFileDiffParams, WorktreeInfo,
+};
+use gitgui_protocol::{
+    SshEnvironmentLocator, SshHostOutcome, SshHostOwnership, SshHostRequest, SshHostResponse,
 };
 use std::{
     fs, io,
@@ -57,6 +60,11 @@ fn main() -> io::Result<()> {
     // intentionally represented as browser numbers in this first protocol.
     let config = Config::default().with_large_int("number");
     let declarations = [
+        <SshEnvironmentLocator as TS>::decl(&config),
+        <SshHostRequest as TS>::decl(&config),
+        <SshHostOutcome as TS>::decl(&config),
+        <SshHostOwnership as TS>::decl(&config),
+        <SshHostResponse as TS>::decl(&config),
         <RequestEnvelope as TS>::decl(&config),
         <CancelRequest as TS>::decl(&config),
         <ProtocolError as TS>::decl(&config),
@@ -185,6 +193,11 @@ fn main() -> io::Result<()> {
     ];
 
     let mut output = String::from(HEADER);
+    output.push_str(&format!(
+        "export const SSH_HOST_VERSION = {};\nexport const SSH_HOST_MAX_FRAME_BYTES = {};\n\n",
+        gitgui_protocol::SSH_HOST_VERSION,
+        gitgui_protocol::SSH_HOST_MAX_FRAME_BYTES,
+    ));
     output.push_str(&format!(
         "export const CAPABILITY_RPC_CANCEL = {:?};\n\n",
         gitgui_protocol::CAPABILITY_RPC_CANCEL

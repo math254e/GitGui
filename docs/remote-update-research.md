@@ -8,6 +8,11 @@ closer to T3 Code. Reassess the design against that implementation before
 planning remote update work. The GitGui translations below are preliminary,
 not an approved future architecture or a requirement for desktop updates.
 
+The prerequisite connection work is now distilled into
+[remote connection reliability](remote-connection-reliability-plan.md), including
+SSH acquisition ownership, separate pairing, migration, and reconnect validation.
+That plan does not enable remote updating.
+
 The current implementation plan is [auto-update-plan.md](auto-update-plan.md).
 It covers desktop releases, download/install, and the top-bar update control.
 Standalone bundles, service launchers, remote authentication changes, SSH

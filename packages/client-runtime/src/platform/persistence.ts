@@ -9,6 +9,8 @@
  *   The client owns its tabs and recents in the browser, and that state is
  *   cleared by the client, not by the connection runtime.
  * - Registration storage separates secrets; removal clears its credential.
+ * - Registration can stage a disabled record before SSH claim and activation;
+ *   Electron commits the record and protected credential atomically.
  * - The persistence error operations list only the ones GitGui performs.
  */
 import type { EnvironmentId } from "@gitgui/contracts/environment";
@@ -53,6 +55,7 @@ export class ConnectionRegistrationStore extends Context.Service<
     readonly register: (
       registration: ConnectionRegistration,
       routes: ReadonlyArray<PersistedConnectionTarget>,
+      options?: { readonly enabled: boolean },
     ) => Effect.Effect<void, ConnectionPersistenceError>;
     /**
      * `routes` must not be empty.

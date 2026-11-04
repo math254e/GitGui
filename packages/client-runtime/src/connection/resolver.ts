@@ -11,6 +11,8 @@
  *   against a bearer session, so an unauthenticated primary cannot connect.
  * - The GitHub routing permission reset is gone: GitGui does not route
  *   requests through a source-control host.
+ * - SSH credential/profile persistence and claim follow live RPC readiness;
+ *   failures cancel the provisional acquisition, preserving selected locators.
  */
 import type {
   ClientConnectionMethod,
@@ -18,9 +20,11 @@ import type {
 } from "@gitgui/contracts/environment";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import type * as Scope from "effect/Scope";
 import * as HttpClient from "effect/http/HttpClient";
 
 import * as RemoteEnvironmentAuthorization from "../authorization/service.ts";
@@ -55,7 +59,7 @@ export class ConnectionResolver extends Context.Service<
   {
     readonly prepare: (
       entry: ConnectionCatalogEntry,
-    ) => Effect.Effect<PreparedConnection, ConnectionAttemptError>;
+    ) => Effect.Effect<PreparedConnection, ConnectionAttemptError, Scope.Scope>;
   }
 >()("@gitgui/client-runtime/connection/resolver/ConnectionResolver") {}
 
@@ -150,7 +154,7 @@ const makeSshBroker = Effect.fn("clientRuntime.connection.broker.makeSsh")(funct
 
   return Effect.fn("clientRuntime.connection.broker.ssh")(function* (
     entry: ConnectionCatalogEntry & { readonly target: SshConnectionTarget },
-  ): Effect.fn.Return<PreparedConnection, ConnectionAttemptError> {
+  ): Effect.fn.Return<PreparedConnection, ConnectionAttemptError, Scope.Scope> {
     const target = entry.target;
     const profile = yield* Effect.fromOption(entry.profile, () =>
       profileMissingError(target.connectionId),
@@ -176,26 +180,19 @@ const makeSshBroker = Effect.fn("clientRuntime.connection.broker.makeSsh")(funct
       target: profile.target,
       ...(savedToken === undefined ? {} : { bearerToken: savedToken }),
     });
-    if (prepared.bearerToken !== savedToken) {
-      yield* credentials.put(
-        target.environmentId,
-        new BearerConnectionCredential({ token: prepared.bearerToken }),
-      );
-    }
     const preparedProfile = new SshConnectionProfile({
       connectionId: profile.connectionId,
       environmentId: profile.environmentId,
       label: profile.label,
-      target: profile.target,
+      target: prepared.target ?? profile.target,
     });
-    yield* profiles.put(preparedProfile);
     const authorized = yield* remote.authorizeBearer({
       expectedEnvironmentId: target.environmentId,
       httpBaseUrl: prepared.bootstrap.httpBaseUrl,
       wsBaseUrl: prepared.bootstrap.wsBaseUrl,
       bearerToken: prepared.bearerToken,
       connectionMethod: "ssh",
-    });
+    }).pipe(Effect.onExit((exit) => Exit.isSuccess(exit) ? Effect.void : (prepared.cancel ?? Effect.void)));
     return {
       environmentId: authorized.environmentId,
       label: authorized.label,
@@ -203,6 +200,16 @@ const makeSshBroker = Effect.fn("clientRuntime.connection.broker.makeSsh")(funct
       socketUrl: authorized.socketUrl,
       httpAuthorization: authorized.httpAuthorization,
       target,
+      onFailure: prepared.cancel ?? Effect.void,
+      onReady: Effect.uninterruptibleMask((restore) => Effect.gen(function* () {
+        if (prepared.bearerToken !== savedToken) {
+          yield* credentials.put(target.environmentId,
+            new BearerConnectionCredential({ token: prepared.bearerToken }));
+        }
+        yield* profiles.put(preparedProfile);
+        if (prepared.commit !== undefined) yield* restore(prepared.commit);
+        if (prepared.handoff !== undefined) yield* prepared.handoff(profile.connectionId);
+      })),
     } satisfies PreparedConnection;
   });
 });
@@ -218,7 +225,7 @@ export const make = Effect.gen(function* () {
     entry: ConnectionCatalogEntry,
   ): Effect.fn.Return<
     { prepared: PreparedConnection; descriptor: EnvironmentDescriptor },
-    ConnectionAttemptError
+    ConnectionAttemptError, Scope.Scope
   > {
     const target: ConnectionTarget = entry.target;
     yield* Effect.annotateCurrentSpan({
@@ -240,8 +247,10 @@ export const make = Effect.gen(function* () {
     }).pipe(
       Effect.mapError(mapRemoteEnvironmentError),
       Effect.provideService(HttpClient.HttpClient, httpClient),
+      Effect.onExit((exit) => Exit.isSuccess(exit) ? Effect.void : (prepared.onFailure ?? Effect.void)),
     );
     if (descriptor.environmentId !== target.environmentId) {
+      if (prepared.onFailure !== undefined) yield* prepared.onFailure;
       return yield* environmentMismatchError({
         expected: target.environmentId,
         actual: descriptor.environmentId,
@@ -252,10 +261,11 @@ export const make = Effect.gen(function* () {
 
   const prepare = Effect.fn("clientRuntime.connection.broker.prepare")(function* (
     entry: ConnectionCatalogEntry,
-  ): Effect.fn.Return<PreparedConnection, ConnectionAttemptError> {
+  ): Effect.fn.Return<PreparedConnection, ConnectionAttemptError, Scope.Scope> {
     const { prepared, descriptor } = yield* authorize(entry);
     const compatibilityError = protocolCompatibilityError(descriptor);
     if (compatibilityError !== null) {
+      if (prepared.onFailure !== undefined) yield* prepared.onFailure;
       return yield* compatibilityError;
     }
     return { ...prepared, descriptor } satisfies PreparedConnection;

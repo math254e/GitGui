@@ -32,6 +32,29 @@ function spawnFixture(prepare = true) {
 afterEach(() => { vi.unstubAllGlobals(); vi.clearAllMocks(); });
 
 describe("managed local update stop", () => {
+  it("waits for pending startup during quit and blocks late connection/restart attempts", async () => {
+    let fixture!: ReturnType<typeof spawnFixture>;
+    let resolveDescriptor!: (value: Response) => void;
+    const descriptor = new Promise<Response>(resolve => { resolveDescriptor = resolve; });
+    spawnMock.mockImplementation(() => {
+      fixture = spawnFixture();
+      fixture.child.kill.mockImplementation(() => {
+        queueMicrotask(() => { fixture.child.exitCode = 0; fixture.child.emit("exit", 0); });
+        return true;
+      });
+      return fixture.child;
+    });
+    const fetch = vi.fn(() => descriptor); vi.stubGlobal("fetch", fetch);
+    const backend = new BackendManager(); const connecting = backend.getConnection();
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledOnce());
+    let stopped = false; const closing = backend.shutdown().then(() => { stopped = true; });
+    await expect(backend.getConnection()).rejects.toThrow("stopping");
+    await expect(backend.restart()).rejects.toThrow("stopping");
+    expect(stopped).toBe(false); expect(fixture.child.kill).not.toHaveBeenCalled();
+    resolveDescriptor(Response.json({ environmentId: "same-environment" }));
+    await connecting; await closing;
+    expect(fixture.child.exitCode).toBe(0); expect(spawnMock).toHaveBeenCalledOnce();
+  });
   it("uses the inherited control channel and restarts the same local environment after install failure", async () => {
     const children: ReturnType<typeof spawnFixture>[] = [];
     spawnMock.mockImplementation(() => { const value = spawnFixture(); children.push(value); return value.child; });

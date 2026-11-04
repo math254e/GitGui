@@ -16,6 +16,32 @@ const registration = (id: string) => ({ environmentId: id, displayName: id, reco
 const credential = { kind: "bearer" as const, token: "test-fixture-session" };
 
 describe("desktop state persistence failures", () => {
+  it("commits a registration with its credential, preserving both on failed replacement", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "gitgui-onboarding-state-"));
+    const path = join(directory, "state.json");
+    const temporary = `${path}.tmp-${process.pid}`;
+    try {
+      const store = new DesktopStateStore(path);
+      await store.saveRegistration(registration("remote"), credential);
+      await store.saveRegistration(registration("independent"), { ...credential, token: "independent-session" });
+      await mkdir(temporary);
+      await expect(store.saveRegistration({ ...registration("remote"), displayName: "replacement" },
+        { ...credential, token: "replacement-session" })).rejects.toThrow();
+      expect((await store.listRegistrations()).find((entry) => entry.environmentId === "remote")?.displayName).toBe("remote");
+      expect(await store.getCredential("remote")).toEqual(credential);
+      const reloaded = new DesktopStateStore(path);
+      expect(await reloaded.getCredential("remote")).toEqual(credential);
+      expect((await reloaded.listRegistrations()).map((entry) => entry.environmentId)).toEqual(["remote", "independent"]);
+      await rmdir(temporary);
+      await store.saveRegistration({ ...registration("remote"), displayName: "replacement" },
+        { ...credential, token: "replacement-session" });
+      expect(await new DesktopStateStore(path).getCredential("remote")).toEqual({ ...credential, token: "replacement-session" });
+      expect(await store.getCredential("independent")).toEqual({ ...credential, token: "independent-session" });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it.each(["write", "rename"])("retains cached registrations and credentials after a failed %s, including the next commit", async (failure) => {
     const directory = await mkdtemp(join(tmpdir(), "gitgui-state-test-"));
     const path = join(directory, "state.json");

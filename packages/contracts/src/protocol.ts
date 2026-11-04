@@ -5,6 +5,9 @@
 /** Any JSON value accepted by the GitGui wire protocol. */
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 
+export const SSH_HOST_VERSION = 1;
+export const SSH_HOST_MAX_FRAME_BYTES = 16384;
+
 export const CAPABILITY_RPC_CANCEL = "rpc.cancel";
 
 /// Every method the WebSocket RPC surface accepts.
@@ -71,6 +74,40 @@ export const STASH_FEATURE_METHOD_NAMES = [
   "git.stash.files",
   "git.stash.file_diff",
 ] as const;
+
+export type SshEnvironmentLocator = { "kind": "default" } | { "kind": "directory", path: string, environmentId: string, } | { "kind": "legacy", stateKey: string, environmentId: string, };
+
+export type SshHostRequest = { version: number,
+/**
+ * Reserved by the desktop before starting SSH; a UUID, never reused.
+ */
+acquisitionId: string, locator: SshEnvironmentLocator, expectedEnvironmentId: string | null,
+/**
+ * Required by claim/release. Cancellation can run before any result is received.
+ */
+instanceId: string | null, };
+
+export type SshHostOutcome = "ready" | "claimed" | "cancelled" | "released" | "stopped" | "retained" | "cleanup-pending" | "not-running" | "unsupported" | "invalid-request" | "incompatible" | "identity-mismatch" | "ambiguous" | "failed";
+
+export type SshHostOwnership = "managed" | "external";
+
+export type SshHostResponse = { version: number, acquisitionId: string, outcome: SshHostOutcome, instanceId: string | null, environmentId: string | null,
+/**
+ * Canonical host directory. Persist only after identity/auth/RPC validation.
+ */
+remoteDataDirectory: string | null,
+/**
+ * The only endpoint result: an actual loopback listener port. Never a URL/command/PID.
+ */
+port: number | null, ownership: SshHostOwnership | null, expiresAtUnixMs: number | null,
+/**
+ * Static diagnostic, never raw command output or credentials.
+ */
+message: string | null,
+/**
+ * Only the separate pairing operation returns this secret; never lifecycle metadata.
+ */
+pairing: PairingCredentialResponse | null, };
 
 export type RequestEnvelope = {
 /**
@@ -393,7 +430,11 @@ root: string,
 /**
  * Whether this entry is a linked Git worktree rather than the main worktree.
  */
-isWorktree: boolean, };
+isWorktree: boolean,
+/**
+ * The configured directory was not present when the catalog was checked.
+ */
+missing?: boolean, };
 
 export type RepositoriesListResult = {
 /**

@@ -68,7 +68,7 @@
       "target": "packages/client-runtime/src/connection/model.ts",
       "mode": "adapted",
       "upstreamSha256": "ad14fb39a1487dc31fdcfe2ced2fbadce51e69785199d0a4fd55ee2eb20ad510",
-      "targetSha256": "8a9336ff7db500f3356b8d2b70c7e3f9010800020aa9afe72dbed18277e34a5b"
+      "targetSha256": "9a18f34b1980d20c071b8671ae7cfa18764cb295da0f7d7b89b3a9587933f631"
     },
     {
       "upstream": "packages/client-runtime/src/connection/catalog.ts",
@@ -103,14 +103,14 @@
       "target": "packages/client-runtime/src/connection/resolver.ts",
       "mode": "adapted",
       "upstreamSha256": "97ed45571050907fe188d946da8e0610b6f314081d232c5649b02d49dffb7e6b",
-      "targetSha256": "01f4be0cde94639c62165a88493301e26d69c248ce496fdd415dda8d5fcbd96e"
+      "targetSha256": "dd257bc428494539bf8f05e60e4d0f34edbf8d510f0b2f1cd8e9d439d758abda"
     },
     {
       "upstream": "packages/client-runtime/src/connection/driver.ts",
       "target": "packages/client-runtime/src/connection/driver.ts",
       "mode": "adapted",
       "upstreamSha256": "c20b1311a55e7ee1a8cf3f0e268b0a6b6c2ceb06966c42c949e5586b16c80591",
-      "targetSha256": "e2db410642c20869e147dbeadb1f895a18010f75a80f091b70cee31776a50079"
+      "targetSha256": "39ba58046e775b2a89de7c1444873ef64e97f9bf58e72531024829d96e4c4460"
     },
     {
       "upstream": "packages/client-runtime/src/connection/supervisor.ts",
@@ -124,14 +124,14 @@
       "target": "packages/client-runtime/src/connection/registry.ts",
       "mode": "adapted",
       "upstreamSha256": "3f04106c0b98736bcf448c8c2310bc8ea3938617d89da0f41fbafb82caae1a48",
-      "targetSha256": "75e97da6468c39939eee738c7948fa65abbe7a2c820191dcd539e0bed4796c37"
+      "targetSha256": "6bf79c41cd34a490a6d60ad7d5ddac5c6cba4dfc42478b107684c719654678bf"
     },
     {
       "upstream": "packages/client-runtime/src/connection/layer.ts",
       "target": "packages/client-runtime/src/connection/layer.ts",
       "mode": "adapted",
       "upstreamSha256": "07a4ed7be3bfc6d771e168dab1a835f7cf04e3896772c0dfe98fab72fa0236ac",
-      "targetSha256": "a36541216fed86cbb075cfeb7a3049d0db26eb5e7a1778258e7db29ce2aa3980"
+      "targetSha256": "b291f854324c894f3a967019d60eb16d479925c97a397936639e2a7168ccb707"
     },
     {
       "upstream": "packages/client-runtime/src/rpc/protocol.ts",
@@ -159,7 +159,7 @@
       "target": "packages/client-runtime/src/rpc/http.ts",
       "mode": "adapted",
       "upstreamSha256": "baf59a014b26f3ccc1b9e81622029a70acc1c660f819165241832a52d4594d0b",
-      "targetSha256": "eb8a9bb85b5d1572f6dbf43021eaa8daceac19df22f82e8cd343584c9c660963"
+      "targetSha256": "d26d306b06b960b01be3429a1fc0818a8158dc7ba282cbc360445c78f72763ad"
     },
     {
       "upstream": "packages/client-runtime/src/environment/descriptor.ts",
@@ -208,14 +208,14 @@
       "target": "packages/client-runtime/src/platform/capabilities.ts",
       "mode": "adapted",
       "upstreamSha256": "8640318eccf203dda63717e4eec87c8556a92360a47499b4a82987a8ce01dd43",
-      "targetSha256": "d8bac57a715bdc47a9f494d1e60f415d409f9362ceb70b7d2817a1f30caf94da"
+      "targetSha256": "e87de375bf6d8281548e3c77419cdc906b9305d5248a0d5b2eedb8ca561d0303"
     },
     {
       "upstream": "packages/client-runtime/src/platform/persistence.ts",
       "target": "packages/client-runtime/src/platform/persistence.ts",
       "mode": "adapted",
       "upstreamSha256": "430344ddf397990710cf672455766e82e55b5e49fe6932bfc547a7fca9e72db1",
-      "targetSha256": "ea21a0d94b4b191447357fda98295810c49f906ce72c9f073fee83995b4e7f9b"
+      "targetSha256": "70f797ed4315bb83ea9b64c989300d43a34253d684d9712094647ef0f84b6149"
     },
     {
       "upstream": "packages/shared/src/hostClassification.ts",
@@ -232,5 +232,19 @@
       "from": "@t3tools/client-runtime",
       "to": "@gitgui/client-runtime"
     }
-  ]
+  ],
+  "reliabilityAdaptationReview": {
+    "date": "2026-11-04",
+    "targets": [
+      "packages/client-runtime/src/connection/driver.ts",
+      "packages/client-runtime/src/connection/layer.ts",
+      "packages/client-runtime/src/connection/model.ts",
+      "packages/client-runtime/src/connection/registry.ts",
+      "packages/client-runtime/src/connection/resolver.ts",
+      "packages/client-runtime/src/platform/capabilities.ts",
+      "packages/client-runtime/src/platform/persistence.ts",
+      "packages/client-runtime/src/rpc/http.ts"
+    ],
+    "note": "Reviewed GitGui target hashes only. Original runtime commit and upstream hashes retained. That commit is absent from the local reference object database; a minimal fetch timed out. Full original-snapshot validation remains unavailable; SSH/onboarding use the separate validated 70cd258d source inventory."
+  }
 }

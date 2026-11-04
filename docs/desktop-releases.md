@@ -21,9 +21,25 @@ the ICO; Linux uses the matching PNG.
 ## Local packaging
 
 For desktop development, close the existing GitGui desktop before rerunning
-`npm run dev:desktop`. On Windows the dev launcher checks the exact Cargo debug
+`npm run dev:desktop`, including an installed copy: installed and development
+builds currently share the Electron profile. A secondary launch hands off to the
+existing app and skips services/window initialization. The launcher invokes Node
+and Electron directly without a command shell. On Windows it checks the exact Cargo debug
 executable before building, so a running session produces an actionable message
 instead of Cargo's access-denied error. It does not terminate any process.
+
+The direct Electron launch sets `windowsHide: false`; hiding that process on
+Windows also hides its first application window. Vite runs directly in the web
+workspace, so closing Electron stops the owned Vite process without leaving an
+npm/cmd descendant holding port 1420. Readiness failures also clean up that child.
+
+Ctrl+C, SIGTERM and SIGHUP now request a normal Electron quit through an
+inherited development-only parent channel. The launcher waits for Electron to
+finish its backend/SSH cleanup before stopping Vite and returning. Unexpected
+Vite exit uses that same path and returns a failure exit code. A slow desktop
+cleanup produces a diagnostic after 30 seconds; the launcher stays attached
+instead of force-terminating Electron. Parent-channel loss also requests normal
+desktop quit. These controls are disabled in packaged or unmanaged launches.
 
 Use Node 24, npm 11, Git, and a stable Rust toolchain. Windows additionally needs
 the Visual Studio C++ build tools and Windows SDK for Rust's MSVC target. Build on

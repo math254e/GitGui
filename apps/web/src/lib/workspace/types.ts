@@ -38,6 +38,7 @@ export type RepositoryListItem = {
   repositoryId: string;
   root: string;
   title: string;
+  missing?: boolean;
 };
 
 /** A graph the server produced for a reduced set of refs. */

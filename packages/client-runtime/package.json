@@ -23,6 +23,7 @@
     "./connection/profileStore": "./src/connection/profileStore.ts",
     "./connection/errors": "./src/connection/errors.ts",
     "./connection/registry": "./src/connection/registry.ts",
+    "./connection/onboarding": "./src/connection/onboarding.ts",
     "./connection/supervisor": "./src/connection/supervisor.ts",
     "./rpc/session": "./src/rpc/session.ts",
     "./environment/descriptor": "./src/environment/descriptor.ts"
@@ -37,6 +38,8 @@
     "test": "vitest run"
   },
   "devDependencies": {
+    "@effect/platform-node": "4.0.5",
+    "@effect/platform-node-shared": "4.0.5",
     "@effect/vitest": "4.0.5",
     "typescript": "~5.6.2",
     "vitest": "5.0.5"

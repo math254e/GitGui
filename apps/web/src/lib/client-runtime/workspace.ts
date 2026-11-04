@@ -144,7 +144,9 @@ export class ClientWorkspace {
 
   revalidate(): void {
     if (!this.updateSubscriptions.length) return;
-    for (const id of this._state.openRepositoryIds) this.invalidate(id, "snapshot");
+    for (const id of this._state.openRepositoryIds) {
+      if (!this._state.repositories[id]?.repository.missing) this.invalidate(id, "snapshot");
+    }
   }
 
   dispose(): void {
@@ -168,7 +170,7 @@ export class ClientWorkspace {
   }
 
   private invalidate(repositoryId: string, kind: RepositoryChangeKind, paths: string[] = []): void {
-    if (this.disposed || !this.updateSubscriptions.length || !this._state.openRepositoryIds.includes(repositoryId)) return;
+    if (this.disposed || !this.updateSubscriptions.length || !this._state.openRepositoryIds.includes(repositoryId) || this._state.repositories[repositoryId]?.repository.missing) return;
     // An observation arriving during a read makes that read stale, even when
     // the file retains the same M/M status. Keep the follow-up invalidation.
     this.beginRequest(repositoryId);
@@ -323,10 +325,12 @@ export class ClientWorkspace {
 
       const repositoryStates: Record<string, WorkspaceRepositoryState> = {};
       for (const id of openIds) {
+        const repository = catalog.get(id)!;
         repositoryStates[id] = {
-          repository: catalog.get(id)!,
-          loading: true,
-          refreshing: true,
+          repository,
+          error: repository.missing ? { message: "Repository directory is missing. Restore it and open the repository to retry." } : undefined,
+          loading: !repository.missing,
+          refreshing: !repository.missing,
         };
       }
       this.replace({
@@ -340,7 +344,8 @@ export class ClientWorkspace {
         error: undefined,
       });
 
-      if (openIds.length) await this.refreshRepositories(openIds, { lifecycle, persist: false });
+      const availableIds = openIds.filter((id) => !catalog.get(id)?.missing);
+      if (availableIds.length) await this.refreshRepositories(availableIds, { lifecycle, persist: false });
       if (lifecycle !== this.lifecycleGeneration) return this.state;
       this.update({ restoring: false });
       await this.persist();

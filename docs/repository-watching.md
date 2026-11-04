@@ -9,6 +9,14 @@ linked worktrees whose metadata lives outside their working directory. Removing
 a repository releases its watch on the next catalog pass (within one second).
 Shutdown and the last read session disconnecting release the watches.
 
+Catalog entries whose directories are missing remain registered and appear as
+missing in the repository list. The server does not repeatedly start Git or a
+watch for those entries, and the workspace does not periodically refresh their
+open tabs. A catalog list request checks the paths again; selecting a restored
+repository explicitly also retries it and reinstates its watch. Other I/O and
+permission errors are not classified as missing. The optional `missing` field
+is additive, so older clients and servers remain compatible.
+
 The additive `repositories.watch` capability advertises `repository.changed`
 events on the existing ordered WebSocket stream. The generated payload contains
 only `repositoryId` and `kind`:

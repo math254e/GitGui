@@ -471,6 +471,7 @@ mod tests {
                 path: "repo".into(),
                 root: "repo".into(),
                 is_worktree: false,
+                missing: None,
             },
         };
         let target = StashTarget {

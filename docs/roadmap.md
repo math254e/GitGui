@@ -61,6 +61,12 @@ development command is now `npm run dev`.
 
 ## Next product work
 
+The next infrastructure milestone is
+[remote connection reliability](remote-connection-reliability-plan.md): align
+SSH ownership, cancellation, pairing, and reconnects with T3 Code before adding
+remote updating. The plan includes the interrupted-launch cleanup issue deferred
+for desktop release 0.1.6, existing-state migration, and real SSH qualification.
+
 Continue GitGui-owned Git product development independently of the T3-shaped
 transport architecture:
 

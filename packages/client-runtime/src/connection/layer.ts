@@ -6,8 +6,8 @@
  *
  * Divergences from upstream:
  * - The relay discovery watcher is gone: GitGui has no relay.
- * - The onboarding layer is gone: GitGui's desktop shell installs the primary
- *   environment, so there is no in-app onboarding flow.
+ * - SSH onboarding verifies a temporary live RPC session, stages persistence
+ *   and claims the host acquisition before activating the normal supervisor.
  */
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -19,13 +19,15 @@ import * as EnvironmentRegistry from "./registry.ts";
 import * as PlatformConnectionSource from "../platform/source.ts";
 import * as RemoteEnvironmentAuthorization from "../authorization/service.ts";
 import * as RpcSession from "../rpc/session.ts";
+import * as ConnectionOnboarding from "./onboarding.ts";
 
 export function layerWithOptions(options: RpcSession.RpcSessionOptions) {
   const layerDriver = ConnectionDriver.layer.pipe(
     Layer.provide(Layer.mergeAll(ConnectionResolver.layer, RpcSession.layer(options))),
   );
   const layerRegistry = EnvironmentRegistry.layer.pipe(Layer.provide(layerDriver));
-  const layerConnectionServices = Layer.mergeAll(layerRegistry, ConnectionResolver.layer);
+  const layerOnboarding = ConnectionOnboarding.layer.pipe(Layer.provide(Layer.mergeAll(layerRegistry, RpcSession.layer(options))));
+  const layerConnectionServices = Layer.mergeAll(layerRegistry, ConnectionResolver.layer, layerOnboarding);
   const layerConnectionStartup = Layer.effectDiscard(
     Effect.gen(function* () {
       const registry = yield* EnvironmentRegistry.EnvironmentRegistry;

@@ -11,6 +11,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use ts_rs::TS;
 
+mod ssh_host;
+pub use ssh_host::*;
+
 /// Version of the public JSON protocol.
 pub const PROTOCOL_VERSION: u32 = 2;
 
@@ -734,6 +737,10 @@ pub struct RepositorySummary {
     pub root: String,
     /// Whether this entry is a linked Git worktree rather than the main worktree.
     pub is_worktree: bool,
+    /// The configured directory was not present when the catalog was checked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub missing: Option<bool>,
 }
 
 /// Result of listing the repositories explicitly configured on a host.

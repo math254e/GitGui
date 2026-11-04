@@ -1,0 +1,175 @@
+{
+  "repository": "t3code",
+  "commit": "70cd258d8aac43ea57494527b00bf36de3efa6c0",
+  "files": [
+    {
+      "path": "packages/ssh/src/config.ts",
+      "sha256": "76c8e3f1ea0652418183b8768786e4bec422fef43e7ab134edea060ab64c915b",
+      "adaptations": [
+        {
+          "target": "packages/ssh/src/config.ts",
+          "mode": "adapted",
+          "sha256": "0aec404d0dce5b662b45c33b707f9321d1b33eed798e7b12e139de3fb7838cb5",
+          "tests": [
+            "packages/ssh/src/primitives.test.ts"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/ssh/src/config.test.ts",
+      "sha256": "3ba5adcb3271e0a543a7e0024c6ab85a8a9b720b24c999faa61ce312e025b09d"
+    },
+    {
+      "path": "packages/ssh/src/command.ts",
+      "sha256": "4b53563755be645694abb870750a7ebcea9bf99ec28c713c8034616e84048960",
+      "adaptations": [
+        {
+          "target": "packages/ssh/src/command.ts",
+          "mode": "adapted",
+          "sha256": "6d46f6aacb4ade19e2263aed4a58abea98ef42aeb2c71dd363c280473eb276f3",
+          "tests": [
+            "packages/ssh/src/primitives.test.ts",
+            "packages/ssh/src/index.test.ts"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/ssh/src/command.test.ts",
+      "sha256": "78706a41b3a3f7e9667a1fff2dcb42263ff431fd8f268453606d8142e1c31102"
+    },
+    {
+      "path": "packages/ssh/src/auth.ts",
+      "sha256": "c0e80b3d1321087a558c77c037accfd0476bb9c1e07acbce2466a3bf066b5fa5",
+      "adaptations": [
+        {
+          "target": "packages/ssh/src/auth.ts",
+          "mode": "adapted",
+          "sha256": "0c938027c0e4b4d03f2f3bb705cc71f174779a5502702c3e5a0853b9008b07ab",
+          "tests": [
+            "packages/ssh/src/primitives.test.ts"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/ssh/src/auth.test.ts",
+      "sha256": "f460655665b432bcc83ca0408c2f0546fb28ee9c02ef450be3db35829588c648"
+    },
+    {
+      "path": "packages/ssh/src/errors.ts",
+      "sha256": "dfab8d71c02387a9831ab606103d75e957f96c86b490c718dd04a1df66b740de",
+      "adaptations": [
+        {
+          "target": "packages/ssh/src/errors.ts",
+          "mode": "adapted",
+          "sha256": "ce40ec5614276e408ea381878e71bf50f52c0e6fca7e263a5709284c1cf07fef",
+          "tests": [
+            "packages/ssh/src/index.test.ts"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/ssh/src/tunnel.ts",
+      "sha256": "0413abf4ad21b5a6c925fe6437ebc9e176d3819dc78980f2365361756ea484e3",
+      "adaptations": [
+        {
+          "target": "packages/ssh/src/tunnel.ts",
+          "mode": "adapted",
+          "sha256": "88c813f6856ff1e9b0d0685e5422ec3faffae9f6ddfe39a656ea7a7533198f73",
+          "tests": [
+            "packages/ssh/src/manager-lifecycle.test.ts"
+          ]
+        },
+        {
+          "target": "packages/ssh/src/runner.ts",
+          "mode": "adapted",
+          "sha256": "50de2a4ff352d7f20bb9df2b3423739b869148d7f9c79e970cfabbfd16ea16d5",
+          "tests": [
+            "packages/ssh/src/index.test.ts"
+          ]
+        },
+        {
+          "target": "packages/ssh/src/transport.ts",
+          "mode": "adapted",
+          "sha256": "d6f23a5e0d00b2eaf9acfcd155797459b9f7e9332bcc84958c78ba6da599e1e0",
+          "tests": [
+            "packages/ssh/src/transport.test.ts"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/ssh/src/tunnel.test.ts",
+      "sha256": "8a2eb81fcd5dd5e8019957206413b2e88b11dce6a3e8220e4c457b57e77d6c57"
+    },
+    {
+      "path": "apps/desktop/src/ssh/DesktopSshEnvironment.ts",
+      "sha256": "a576e4e581713656a3d21b71b37e32a44bb6a045dac3ef32c25c51bb763edfd1",
+      "adaptations": [
+        {
+          "target": "apps/desktop/src/ssh/DesktopSshEnvironment.ts",
+          "mode": "adapted",
+          "sha256": "f447988c761c7c9f48880f27f0887a9b06489d89dadb6c8b8aad2a79ef9f173c",
+          "tests": [
+            "apps/desktop/src/ssh/DesktopSshEnvironment.test.ts",
+            "apps/desktop/src/main-lifecycle.test.ts"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "apps/desktop/src/ssh/DesktopSshEnvironment.test.ts",
+      "sha256": "b57a3e367687822d936f2ff4c3d8bcdc4feb576fdee4f23009cebfc756e44ac8"
+    },
+    {
+      "path": "apps/desktop/src/ssh/DesktopSshPasswordPrompts.ts",
+      "sha256": "4a32a8f35e9cd8659ea070d1f9148fe1f7990715bebae27d1a9e237066742fd3",
+      "adaptations": [
+        {
+          "target": "apps/desktop/src/ssh/DesktopSshPasswordPrompts.ts",
+          "mode": "adapted",
+          "sha256": "f6aaba91a10a78f8486a1d15f30cd1cffc7185a25f1873b050643e90ca8320f7",
+          "tests": [
+            "apps/desktop/src/ssh/DesktopSshPasswordPrompts.test.ts"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "apps/desktop/src/ssh/DesktopSshPasswordPrompts.test.ts",
+      "sha256": "d98716d282986348fc2f8a74473942cd5dd9f3ab514b22d4719768542a3caf5e"
+    },
+    {
+      "path": "packages/shared/src/hostProcess.ts",
+      "sha256": "55afc0c1f42bd1085457a8d2716fcd42257bf95e6e7d4b8f4dd9731297c84a29",
+      "adaptations": [
+        {
+          "target": "packages/ssh/src/platform.ts",
+          "mode": "adapted",
+          "sha256": "4f5cc7f6543761689fd2a751e05ea0768ed1cd52c286ed0bba15f1a2fb17289e",
+          "tests": [
+            "packages/ssh/src/primitives.test.ts"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/client-runtime/src/connection/onboarding.ts",
+      "sha256": "f3e3101df246531289204b88d0bcdd4105b7429069043bd78007cd30ed538ec3",
+      "adaptations": [
+        {
+          "target": "packages/client-runtime/src/connection/onboarding.ts",
+          "mode": "adapted",
+          "sha256": "bf6f5a091ad01a5accedb15bfedb1cfd1cf200472ea57c2cdd19f8d7ca0be3e0",
+          "tests": [
+            "packages/client-runtime/src/connection/onboarding.test.ts"
+          ]
+        }
+      ]
+    }
+  ],
+  "adaptationHashNormalization": "lf"
+}

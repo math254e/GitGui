@@ -9,6 +9,46 @@ import { mapRemoteEnvironmentError } from "../connection/errors.ts";
 import { layerRemoteHttpClient, mapGitGuiErrorStatus } from "./http.ts";
 
 describe("HTTP failures outside the GitGui error envelope", () => {
+  it.effect("bounds untrusted JSON streams and cancels an oversized response", () => {
+    let cancelled = false;
+    const response = new Response(new ReadableStream<Uint8Array>({
+      pull(controller) { controller.enqueue(new Uint8Array(64 * 1024).fill(32)); },
+      cancel() { cancelled = true; },
+    }));
+    return fetchRemoteEnvironmentDescriptor({ httpBaseUrl: "https://fixture.test" }).pipe(
+      Effect.flip,
+      Effect.tap((failure) => Effect.sync(() => {
+        expect(failure._tag).toBe("RemoteEnvironmentAuthInvalidJsonError");
+        expect(cancelled).toBe(true);
+      })),
+      Effect.provide(layerRemoteHttpClient(async () => response)),
+    );
+  });
+
+  it("rejects discovery and authenticated redirects before following their Location", async () => {
+    let followed = 0;
+    const server = createServer((request, response) => {
+      if (request.url === "/unexpected") { followed++; response.end("{}"); }
+      else { response.writeHead(302, { location: "/unexpected" }); response.end(); }
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") throw new Error("fixture did not bind");
+      const httpBaseUrl = `http://127.0.0.1:${address.port}`;
+      for (const request of [fetchRemoteEnvironmentDescriptor({ httpBaseUrl }).pipe(Effect.asVoid),
+        fetchRemoteSessionState({ httpBaseUrl, bearerToken: "fixture-only" }).pipe(Effect.asVoid)]) {
+        const failure = await Effect.runPromise(request.pipe(Effect.flip, Effect.provide(layerRemoteHttpClient(fetch))));
+        expect(failure._tag).toBe("RemoteEnvironmentAuthFetchError");
+      }
+      expect(followed).toBe(0);
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
+  });
+
   it("omits absent auth reasons for a bodyless 401", () => {
     const error = mapGitGuiErrorStatus(401, null);
     expect(error._tag).toBe("EnvironmentAuthInvalidError");

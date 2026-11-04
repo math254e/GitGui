@@ -13,7 +13,7 @@ test("checks the actual Cargo target and gives a useful error before build", () 
     calls.push({ command, args, options });
     return { status: 0, stdout: command === "cargo" ? JSON.stringify({ target_directory: "/isolated-target" }) : "12345" };
   };
-  assert.throws(() => assertDevBackendStopped("/fixture", { platform: "win32", run, env: {} }), /already running.*12345.*Close the desktop app/);
+  assert.throws(() => assertDevBackendStopped("/fixture", { platform: "win32", run, env: {} }), /development server is still running.*12345.*launcher terminal/);
   assert.equal(calls.length, 2);
   assert.deepEqual(calls[0].args, ["metadata", "--no-deps", "--format-version", "1", "--locked"]);
   assert.equal(calls[1].options.env.GITGUI_DEV_BACKEND_CHECK, join("/isolated-target", "debug", "gitgui-server.exe"));

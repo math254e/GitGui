@@ -10,6 +10,9 @@
  *   request/response helper that decodes one schema per endpoint.
  * - The request deadline includes success/error body decoding.
  * - Error bodies are schema-decoded; missing optional auth reasons are omitted.
+ * - Environment HTTP requests reject redirects so discovery and bearer tokens
+ *   cannot leave the endpoint selected and identity-checked by the client.
+ * - Discovery and auth JSON bodies are streamed with a 256 KiB limit.
  * - The `HttpObservability` layer from `@t3tools/shared` is not vendored.
  */
 import {
@@ -28,6 +31,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 import { FetchHttpClient, HttpClient, HttpClientError } from "effect/http";
 import * as HttpBody from "effect/http/HttpBody";
 import * as HttpClientRequest from "effect/http/HttpClientRequest";
@@ -89,7 +93,8 @@ export type RemoteEnvironmentRequestError =
 export const layerRemoteHttpClient = (
   fetchFn: typeof globalThis.fetch,
 ): Layer.Layer<HttpClient.HttpClient> =>
-  FetchHttpClient.layer.pipe(Layer.provide(Layer.succeed(FetchHttpClient.Fetch, fetchFn)));
+  FetchHttpClient.layer.pipe(Layer.provide(Layer.succeed(FetchHttpClient.Fetch,
+    (input, init) => fetchFn(input, { ...init, redirect: "error" }))));
 
 /** The error body the GitGui server returns for a rejected HTTP request. */
 export const GitGuiErrorResponse = Schema.Struct({
@@ -159,10 +164,25 @@ export const mapGitGuiErrorStatus = (
   }
 };
 
+const boundedJson = (response: HttpClientResponse.HttpClientResponse) => response.stream.pipe(
+  Stream.runFoldEffect(() => ({ size: 0, chunks: [] as Uint8Array[] }), (body, chunk) => {
+    if (body.size + chunk.byteLength > 256 * 1024) return Effect.fail(new Error("Environment JSON response is too large"));
+    body.size += chunk.byteLength;
+    body.chunks.push(chunk);
+    return Effect.succeed(body);
+  }),
+  Effect.flatMap((body) => Effect.try(() => {
+    const bytes = new Uint8Array(body.size);
+    let offset = 0;
+    for (const chunk of body.chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+    return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as unknown;
+  })),
+);
+
 const decodeErrorBody = (
   response: HttpClientResponse.HttpClientResponse,
 ): Effect.Effect<GitGuiErrorResponse | null> =>
-  response.json.pipe(
+  boundedJson(response).pipe(
     Effect.map((body) => Option.getOrNull(Schema.decodeUnknownOption(GitGuiErrorResponse)(body))),
     Effect.catch(() => Effect.succeed(null)),
   );
@@ -194,7 +214,7 @@ export const executeEnvironmentHttpRequest = <S extends Schema.Top>(
           const body = yield* decodeErrorBody(response);
           return yield* Effect.fail(mapGitGuiErrorStatus(response.status, body));
         }
-        const raw = yield* response.json.pipe(
+        const raw = yield* boundedJson(response).pipe(
           Effect.catch((cause) =>
             Effect.fail(
               new RemoteEnvironmentAuthInvalidJsonError({
@@ -229,7 +249,7 @@ const failRemoteRequest = (
   requestUrl: string,
   cause: unknown,
 ): Effect.Effect<never, RemoteEnvironmentRequestError> => {
-  if (cause instanceof RemoteEnvironmentAuthTimeoutError) {
+  if (cause instanceof RemoteEnvironmentAuthTimeoutError || cause instanceof RemoteEnvironmentAuthInvalidJsonError) {
     return Effect.fail(cause);
   }
   if (isEnvironmentHttpCommonError(cause)) {

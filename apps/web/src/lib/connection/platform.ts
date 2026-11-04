@@ -11,10 +11,13 @@ import type {
   DesktopCredential,
   DesktopPreparedConnection,
   DesktopSshHost,
+  DesktopSshTarget,
+  DesktopSshFailure,
 } from "@gitgui/contracts/desktop";
 import {
   type EnvironmentDescriptor as EnvironmentDescriptorType,
   EnvironmentId,
+  type SshEnvironmentTarget,
 } from "@gitgui/contracts/environment";
 import {
   BearerConnectionCredential,
@@ -48,6 +51,7 @@ import {
 } from "@gitgui/client-runtime/platform/records";
 import * as PlatformConnectionSource from "@gitgui/client-runtime/platform/source";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Equal from "effect/Equal";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -66,6 +70,7 @@ export interface WebConnectionOptions {
   readonly storage: Storage;
   readonly fetchFn: typeof globalThis.fetch;
   readonly appVersion?: string;
+  readonly onSshCleanup?: (status: { readonly operationId?: string; readonly outcome: "retained" | "cleanup-pending" }) => void;
 }
 
 export function readDesktopBridge(): DesktopBridge | null {
@@ -231,6 +236,21 @@ class DesktopCatalogBackend implements EnvironmentCatalogBackend {
     clearRemovedSelection(this.storage, existing, catalog.environments);
   }
 
+  async writeWithCredential(catalog: PersistedEnvironmentCatalog, environmentId: string, credential: ConnectionCredential) {
+    const environment = catalog.environments.find((entry) => entry.environmentId === environmentId);
+    if (environment === undefined) throw new Error("The connection registration is missing");
+    await this.desktop.saveConnectionRegistration({
+      environmentId,
+      displayName: environment.registration.target.label,
+      record: JSON.stringify(environment),
+      capabilities: [],
+      protocolVersion: 2,
+    }, {
+      kind: "bearer", token: credential.token,
+      ...(credential.expiresAt === undefined ? {} : { expiresAt: credential.expiresAt }),
+    });
+  }
+
   async readCredential(environmentId: string): Promise<ConnectionCredential | undefined> {
     const credential = await this.desktop.getCredential(environmentId);
     if (!credential) return undefined;
@@ -327,18 +347,21 @@ const desktopFailure = (cause: unknown) => new ConnectionTransientError({
   reason: "remote-unavailable", detail: cause instanceof Error ? cause.message : "The desktop environment is unavailable.",
 });
 
-// Electron preserves the SSH manager's error message across the IPC rejection.
-// Cancellation and rejected credentials/trust require user action; retrying them
-// as transport failures would immediately reopen the same prompts.
+// The preload reconstructs a typed error from a bounded IPC result. Diagnostic
+// text is presentation only, never the reconnect classification contract.
 const sshFailure = (cause: unknown): ConnectionAttemptError => {
   const detail = cause instanceof Error ? cause.message : "The SSH connection is unavailable.";
-  if (/SSH authentication was cancel(?:led|ed)|permission denied|authentication failed|too many authentication failures|(?:bad|incorrect) passphrase/i.test(detail)) {
-    return new ConnectionBlockedError({ reason: "authentication", detail });
+  const category = typeof cause === "object" && cause !== null && "category" in cause
+    ? (cause as DesktopSshFailure).category : "transport";
+  switch (category) {
+    case "authentication": case "cancelled":
+      return new ConnectionBlockedError({ reason: "authentication", detail });
+    case "permission": return new ConnectionBlockedError({ reason: "permission", detail });
+    case "unsupported": return new ConnectionBlockedError({ reason: "unsupported", detail });
+    case "configuration": case "identity":
+      return new ConnectionBlockedError({ reason: "configuration", detail });
+    default: return desktopFailure(cause);
   }
-  if (/SSH host-key confirmation was cancel(?:led|ed)|host key verification failed|REMOTE HOST IDENTIFICATION HAS CHANGED/i.test(detail)) {
-    return new ConnectionBlockedError({ reason: "permission", detail });
-  }
-  return desktopFailure(cause);
 };
 
 /**
@@ -523,24 +546,43 @@ export const authorizeConnectionCredential = (
   return new BearerConnectionCredential({ token: exchanged.access_token, expiresAt: Date.now() + exchanged.expires_in * 1_000 });
 });
 
-/** The desktop shell owns SSH: it prepares the tunnel and pairs the session. */
+const desktopSshTarget = (target: SshEnvironmentTarget): DesktopSshTarget => ({
+  kind: "ssh", host: target.alias || target.hostname,
+  ...(target.username === undefined ? {} : { user: target.username }),
+  ...(target.port === undefined ? {} : { port: target.port }),
+  ...(target.identityFile === undefined ? {} : { identityFile: target.identityFile }),
+  ...(target.remoteDataDirectory === undefined ? {} : { remoteDataDirectory: target.remoteDataDirectory }),
+});
+
+/** The desktop owns SSH resources; all environment auth stays on direct HTTP. */
 const makeSshEnvironmentGateway = (options: WebConnectionOptions) =>
   Effect.gen(function* () {
     const desktop = options.desktop;
     const httpClient = yield* HttpClient.HttpClient;
-    const prepare = (input: {
-      readonly connectionId: string;
-      readonly expectedEnvironmentId: EnvironmentId;
-      readonly target: {
-        readonly alias: string;
-        readonly hostname: string;
-        readonly username?: string;
-        readonly port?: number;
-        readonly identityFile?: string;
-      };
+    const activeRoutes = new Map<string, { readonly target: string; readonly cancel: Effect.Effect<void> }>();
+    yield* Effect.addFinalizer(() => Effect.forEach(activeRoutes.values(), (entry) => entry.cancel,
+      { concurrency: "unbounded", discard: true }));
+    const acquire = (input: {
+      readonly expectedEnvironmentId?: EnvironmentId;
+      readonly target: SshEnvironmentTarget;
       readonly bearerToken?: string;
-    }) =>
-      Effect.gen(function* () {
+      readonly credential?: { readonly kind: string; readonly token: string };
+      readonly connectionId?: string;
+    }) => Effect.gen(function* () {
+      const operationId = crypto.randomUUID();
+      let handedOff = false;
+      const cancel = yield* Effect.cached(Effect.tryPromise(() => desktop!.cancelSshConnection(operationId)).pipe(
+        Effect.catch(() => Effect.succeed("cleanup-pending" as const)),
+        Effect.timeoutOrElse({ duration: "20 seconds", orElse: () => Effect.succeed("cleanup-pending" as const) }),
+        Effect.tap((outcome) => Effect.sync(() => {
+          if (outcome === "cleanup-pending" || outcome === "retained") options.onSshCleanup?.({ operationId, outcome });
+        })),
+        Effect.asVoid,
+      ));
+      // Install cleanup before the first IPC call; success cannot cross an
+      // interruption boundary without an owner. Handoff disarms this scope.
+      yield* Effect.addFinalizer(() => handedOff ? Effect.void : cancel);
+      return yield* Effect.gen(function* () {
         if (!desktop) {
           return yield* new ConnectionBlockedError({
             reason: "configuration",
@@ -548,57 +590,95 @@ const makeSshEnvironmentGateway = (options: WebConnectionOptions) =>
           });
         }
         const prepared = yield* Effect.tryPromise({
-          try: () => desktop.ensureSshConnection({
-            kind: "ssh",
-            host: input.target.hostname,
-            ...(input.target.username === undefined ? {} : { user: input.target.username }),
-            ...(input.target.port === undefined ? {} : { port: input.target.port }),
-            ...(input.target.identityFile === undefined
-              ? {}
-              : { identityFile: input.target.identityFile }),
+          try: () => desktop.ensureSshConnection(desktopSshTarget(input.target), {
+            operationId,
+            ...(input.expectedEnvironmentId === undefined ? {} : { expectedEnvironmentId: input.expectedEnvironmentId }),
           }),
           catch: sshFailure,
         });
+        if (prepared.ssh?.operationId !== operationId || !prepared.ssh.remoteDataDirectory) {
+          return yield* new ConnectionBlockedError({ reason: "unsupported", detail: "The desktop SSH service does not support recoverable acquisition. Update GitGui." });
+        }
+        const endpoint = new URL(prepared.httpUrl);
+        if (endpoint.protocol !== "http:" || endpoint.hostname !== "127.0.0.1" || endpoint.username || endpoint.password || endpoint.search || endpoint.hash) {
+          return yield* new ConnectionBlockedError({ reason: "configuration", detail: "The desktop SSH service returned an invalid loopback forward." });
+        }
         const descriptor = yield* fetchDescriptor(prepared.httpUrl, options.fetchFn);
-        if (descriptor.environmentId !== input.expectedEnvironmentId) {
+        if (descriptor.environmentId !== prepared.descriptor.environmentId) {
+          return yield* environmentMismatchError({ expected: EnvironmentId.make(prepared.descriptor.environmentId), actual: descriptor.environmentId });
+        }
+        if (input.expectedEnvironmentId !== undefined && descriptor.environmentId !== input.expectedEnvironmentId) {
           return yield* environmentMismatchError({ expected: input.expectedEnvironmentId, actual: descriptor.environmentId });
         }
+        const environmentId = descriptor.environmentId;
+        const pair = Effect.gen(function* () {
+          const grant = yield* Effect.tryPromise({
+            try: () => desktop.issueSshPairingCredential(operationId, environmentId), catch: sshFailure,
+          });
+          return yield* authorizeConnectionCredential(prepared.httpUrl, environmentId, grant);
+        });
         const saved = input.bearerToken === undefined ? undefined : { kind: "bearer", token: input.bearerToken };
-        const credential = yield* authorizeConnectionCredential(prepared.httpUrl, input.expectedEnvironmentId, saved ?? prepared.credential).pipe(
+        const supplied = saved ?? input.credential;
+        const credential = yield* (supplied === undefined ? pair : authorizeConnectionCredential(prepared.httpUrl, environmentId, supplied).pipe(
           Effect.catch((error) => {
-            // Restore an existing session whenever possible. A server restarted
-            // without its session data can instead supply a fresh bootstrap grant.
-            if (saved === undefined || prepared.credential === undefined || error.reason !== "authentication") {
-              return Effect.fail(error);
-            }
-            return authorizeConnectionCredential(prepared.httpUrl, input.expectedEnvironmentId, prepared.credential);
+            return supplied.kind === "bearer" && error.reason === "authentication" ? pair : Effect.fail(error);
           }),
-        );
+        ));
         return {
           bootstrap: {
             httpBaseUrl: prepared.httpUrl,
             wsBaseUrl: toWebSocketBaseUrl(prepared.httpUrl),
-            environmentId: descriptor.environmentId as never,
+            environmentId,
           },
           bearerToken: credential.token,
+          descriptor,
+          target: { ...input.target, remoteDataDirectory: prepared.ssh.remoteDataDirectory },
+          commit: Effect.tryPromise({ try: () => desktop.claimSshConnection(operationId, environmentId), catch: sshFailure }),
+          handoff: (connectionId: string) => Effect.gen(function* () {
+            handedOff = true;
+            const routeKey = JSON.stringify([environmentId, connectionId]);
+            const address = JSON.stringify([environmentId, input.target.alias, input.target.hostname,
+              input.target.username ?? null, input.target.port ?? null, input.target.identityFile ?? null,
+              prepared.ssh!.remoteDataDirectory]);
+            const retired: Effect.Effect<void>[] = [];
+            for (const [key, entry] of activeRoutes) {
+              if (key === routeKey || entry.target === address) {
+                activeRoutes.delete(key); retired.push(entry.cancel);
+              }
+            }
+            activeRoutes.set(routeKey, { target: address, cancel });
+            yield* Effect.forEach(retired, (release) => release, { concurrency: "unbounded", discard: true });
+          }),
+          cancel,
         };
-      }).pipe(Effect.provideService(HttpClient.HttpClient, httpClient));
+      }).pipe(
+        Effect.provideService(HttpClient.HttpClient, httpClient),
+        Effect.onExit((exit) => Exit.isSuccess(exit) ? Effect.void : cancel),
+      );
+    });
+
+    const prepare: ClientCapabilities.SshEnvironmentGateway["Service"]["prepare"] = acquire;
 
     const disconnect: ClientCapabilities.SshEnvironmentGateway["Service"]["disconnect"] = (target) =>
       Effect.gen(function* () {
         if (!desktop) return;
-        yield* Effect.tryPromise({
-          try: () => desktop.disconnectSshConnection({
-            kind: "ssh", host: target.hostname,
-            ...(target.username === undefined ? {} : { user: target.username }),
-            ...(target.port === undefined ? {} : { port: target.port }),
-            ...(target.identityFile === undefined ? {} : { identityFile: target.identityFile }),
-          }),
-          catch: sshFailure,
-        });
+        // Removal must release the environment lease even when IPC never
+        // answers. The desktop's durable journal retains ownership uncertainty.
+        const outcomes = yield* Effect.tryPromise(() => desktop.disconnectSshConnection(desktopSshTarget(target))).pipe(
+          Effect.catch(() => Effect.succeed([{ outcome: "cleanup-pending" as const }])),
+          Effect.timeoutOrElse({ duration: "20 seconds", orElse: () => Effect.succeed([{ outcome: "cleanup-pending" as const }]) }),
+        );
+        for (const status of outcomes) {
+          if (status.outcome === "retained" || status.outcome === "cleanup-pending") {
+            options.onSshCleanup?.({ ...status, outcome: status.outcome });
+          }
+        }
       });
 
-    return ClientCapabilities.SshEnvironmentGateway.of({ prepare, disconnect });
+    return ClientCapabilities.SshEnvironmentGateway.of({ prepare, provision: (target, credential, expectedEnvironmentId) => acquire({ target,
+      ...(credential === undefined ? {} : { credential }),
+      ...(expectedEnvironmentId === undefined ? {} : { expectedEnvironmentId }),
+    }), disconnect });
   });
 
 const makeConnectivity = () => {

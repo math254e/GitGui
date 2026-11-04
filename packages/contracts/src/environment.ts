@@ -21,6 +21,12 @@ export const EnvironmentId = TrimmedNonEmptyString.pipe(
 );
 export type EnvironmentId = typeof EnvironmentId.Type;
 
+/** Newly issued IDs are UUIDs; historical backend IDs remain opaque and stable. */
+export function isValidEnvironmentId(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && new TextEncoder().encode(value).byteLength <= 256 &&
+    value.trim() === value && !/\p{Cc}/u.test(value);
+}
+
 /** How a client reached an environment. */
 export const ClientConnectionMethod = Schema.Literals(["direct", "ssh", "unknown"]);
 export type ClientConnectionMethod = typeof ClientConnectionMethod.Type;
@@ -101,6 +107,7 @@ export const SshEnvironmentTarget = Schema.Struct({
   username: Schema.optionalKey(Schema.String),
   port: Schema.optionalKey(Schema.Number),
   identityFile: Schema.optionalKey(Schema.String),
+  remoteDataDirectory: Schema.optionalKey(Schema.String),
 });
 export type SshEnvironmentTarget = typeof SshEnvironmentTarget.Type;
 

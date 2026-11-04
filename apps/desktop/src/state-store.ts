@@ -22,11 +22,15 @@ export class DesktopStateStore {
     return structuredClone((await this.load()).registrations);
   }
 
-  async saveRegistration(registration: DesktopConnectionRegistration) {
+  async saveRegistration(registration: DesktopConnectionRegistration, credential?: DesktopCredential) {
     const safeRegistration = parseRegistration(registration);
+    // Onboarding publishes the registration and its protected credential in one
+    // file replacement. Neither may survive alone after a failed save.
+    const encrypted = credential === undefined ? undefined : this.encryptCredential(credential);
     await this.mutate((state) => {
       state.registrations = state.registrations.filter((entry) => entry.environmentId !== safeRegistration.environmentId);
       state.registrations.push(safeRegistration);
+      if (encrypted !== undefined) state.credentials[safeRegistration.environmentId] = encrypted;
     });
   }
 
@@ -48,10 +52,14 @@ export class DesktopStateStore {
 
   async setCredential(environmentId: string, credential: DesktopCredential) {
     const safeEnvironmentId = assertSafeString(environmentId, "environmentId");
+    const encrypted = this.encryptCredential(credential);
+    await this.mutate((state) => { state.credentials[safeEnvironmentId] = encrypted; });
+  }
+
+  private encryptCredential(credential: DesktopCredential): string {
     const safeCredential = parseCredential(credential);
     if (!safeStorage.isEncryptionAvailable()) throw new Error("Operating-system credential encryption is unavailable");
-    const encrypted = safeStorage.encryptString(JSON.stringify(safeCredential)).toString("base64");
-    await this.mutate((state) => { state.credentials[safeEnvironmentId] = encrypted; });
+    return safeStorage.encryptString(JSON.stringify(safeCredential)).toString("base64");
   }
 
   async removeCredential(environmentId: string) {

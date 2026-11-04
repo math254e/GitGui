@@ -13,13 +13,15 @@ import {
 import type {
   DesktopConnectionRegistration,
   DesktopCredential,
+  DesktopSshRequest,
   DesktopSshTarget,
   DesktopUpdateStatus,
 } from "@gitgui/contracts/desktop";
-import { SshEnvironmentManager } from "@gitgui/ssh";
+import { DesktopSshEnvironment } from "./ssh/DesktopSshEnvironment.js";
 import { BackendManager } from "./backend-manager.js";
 import { DesktopStateStore } from "./state-store.js";
 import { extractDeepLink, normalizeDeepLink } from "./lifecycle.js";
+import { registerDevelopmentLauncher } from "./dev-launcher.js";
 import { DesktopUpdates } from "./updates/desktop-updates.js";
 import { packagedUpdateEngine, updateDisabledReason } from "./updates/electron-updater.js";
 
@@ -37,75 +39,109 @@ protocol.registerSchemesAsPrivileged([{
   },
 }]);
 
-if (!app.requestSingleInstanceLock()) app.quit();
-
 let mainWindow: BrowserWindow | null = null;
 let backend: BackendManager;
 let stateStore: DesktopStateStore;
-let ssh: SshEnvironmentManager;
+let ssh: DesktopSshEnvironment;
 let quitting = false;
 let pendingDeepLink = extractDeepLink(process.argv);
 let updates: DesktopUpdates;
 let updateQuitReady = false;
 let ignoreUpdaterQuit = false;
 
-app.on("open-url", (event, url) => {
-  event.preventDefault();
-  queueDeepLink(url);
-});
+// T3 DesktopClerk interrupts bootstrap in a secondary instance: app.quit() is
+// asynchronous, so it cannot by itself prevent whenReady/window initialization.
+if (app.requestSingleInstanceLock()) {
+  registerDesktopLifecycle();
+} else {
+  console.info("[gitgui] GitGui is already running. Reusing the existing desktop instance.");
+  app.quit();
+}
 
-app.whenReady().then(async () => {
-  backend = new BackendManager();
-  stateStore = new DesktopStateStore(join(app.getPath("userData"), "desktop-state.json"));
-  ssh = new SshEnvironmentManager({
-    stateDirectory: join(app.getPath("userData"), "ssh"),
-    requestPassword: (target, prompt, signal) => promptForSecret(target, prompt, signal),
-    requestHostTrust: (target, signal) => promptForHostTrust(target, signal),
+function registerDesktopLifecycle(): void {
+  let quitRequested = false;
+  const requestQuit = () => { quitRequested = true; if (!quitting) app.quit(); };
+  const releaseLauncher = registerDevelopmentLauncher(app, requestQuit);
+  // Like T3 DesktopLifecycle, terminal signals enter ordinary desktop cleanup.
+  // Windows terminal delivery is handled by the launcher through inherited IPC.
+  const signals = process.platform === "win32" ? [] : ["SIGINT", "SIGTERM", "SIGHUP"] as const;
+  for (const signal of signals) process.on(signal, requestQuit);
+  app.once("will-quit", () => {
+    releaseLauncher();
+    for (const signal of signals) process.off(signal, requestQuit);
   });
-  initializeUpdates();
-  registerApplicationProtocol();
-  registerIpc();
-  await createMainWindow();
-  registerDesktopProtocol();
-  updates.start();
-
-  app.on("activate", async () => {
-    if (BrowserWindow.getAllWindows().length === 0) await createMainWindow();
+  app.on("open-url", (event, url) => {
+    event.preventDefault();
+    queueDeepLink(url);
   });
-});
 
-app.on("second-instance", (_event, commandLine) => {
-  queueDeepLink(extractDeepLink(commandLine));
-  if (!mainWindow) return;
-  if (mainWindow.isMinimized()) mainWindow.restore();
-  mainWindow.focus();
-});
+  void app.whenReady().then(async () => {
+    if (quitting || quitRequested) return;
+    backend = new BackendManager();
+    stateStore = new DesktopStateStore(join(app.getPath("userData"), "desktop-state.json"));
+    ssh = new DesktopSshEnvironment({
+      stateDirectory: join(app.getPath("userData"), "ssh"),
+      getParent: () => mainWindow,
+    });
+    initializeUpdates();
+    registerApplicationProtocol();
+    registerIpc();
+    await createMainWindow();
+    if (quitting || quitRequested) return;
+    registerDesktopProtocol();
+    updates.start();
 
-app.on("browser-window-focus", (_event, window) => {
-  if (window === mainWindow) window.webContents.send("desktop:application-wakeup");
-});
+    app.on("activate", () => {
+      if (BrowserWindow.getAllWindows().length === 0) void createMainWindow().catch(handleStartupFailure);
+    });
+  }).catch(handleStartupFailure);
 
-app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") app.quit();
-});
+  app.on("second-instance", (_event, commandLine) => {
+    queueDeepLink(extractDeepLink(commandLine));
+    if (!mainWindow) return;
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.focus();
+  });
 
-app.on("before-quit", (event) => {
-  if (ignoreUpdaterQuit) { ignoreUpdaterQuit = false; event.preventDefault(); return; }
-  if (updates?.isInstallActive && !updateQuitReady) { event.preventDefault(); return; }
+  app.on("browser-window-focus", (_event, window) => {
+    if (window === mainWindow) window.webContents.send("desktop:application-wakeup");
+  });
+
+  app.on("window-all-closed", () => {
+    if (process.platform !== "darwin") app.quit();
+  });
+
+  app.on("before-quit", (event) => {
+    if (ignoreUpdaterQuit) { ignoreUpdaterQuit = false; event.preventDefault(); return; }
+    if (updates?.isInstallActive && !updateQuitReady) { event.preventDefault(); return; }
+    if (quitting) return;
+    event.preventDefault();
+    quitting = true;
+    updates?.dispose();
+    void Promise.allSettled([backend?.shutdown(), ssh?.dispose()]).finally(() => app.quit());
+  });
+
+  nativeAutoUpdater.on("before-quit-for-update", () => {
+    // electron-updater can schedule app.quit before an asynchronous install error.
+    // A failed attempt must not later turn its scheduled quit into a normal quit.
+    ignoreUpdaterQuit = !updateQuitReady || !updates?.isInstallActive;
+  });
+
+  app.on("will-quit", () => updates?.dispose());
+}
+
+function handleStartupFailure(error: unknown): void {
   if (quitting) return;
-  event.preventDefault();
-  quitting = true;
-  updates?.dispose();
-  void Promise.allSettled([backend?.shutdown(), ssh?.close()]).finally(() => app.quit());
-});
-
-nativeAutoUpdater.on("before-quit-for-update", () => {
-  // electron-updater can schedule app.quit before an asynchronous install error.
-  // A failed attempt must not later turn its scheduled quit into a normal quit.
-  ignoreUpdaterQuit = !updateQuitReady || !updates?.isInstallActive;
-});
-
-app.on("will-quit", () => updates?.dispose());
+  console.error("[gitgui]", { component: "desktop-startup", errorTag: error instanceof Error ? error.name : "UnknownError" });
+  try {
+    dialog.showErrorBox("GitGui failed to start", app.isPackaged
+      ? "GitGui could not open its application window. Close GitGui and try again."
+      : `GitGui could not open its development window. Check that the frontend is running at ${DEVELOPMENT_ORIGIN}.`);
+  } catch {
+    // A failed native dialog must not prevent the normal owned-resource shutdown.
+  }
+  app.quit();
+}
 
 async function createMainWindow(): Promise<void> {
   const window = new BrowserWindow({
@@ -123,6 +159,9 @@ async function createMainWindow(): Promise<void> {
     },
   });
   mainWindow = window;
+  const senderId = window.webContents.id;
+  window.webContents.once("destroyed", () => { void ssh.releaseSender(senderId); });
+  window.webContents.on("render-process-gone", () => { void ssh.releaseSender(senderId); });
   window.once("ready-to-show", () => window.show());
   window.webContents.once("did-finish-load", () => {
     if (pendingDeepLink) {
@@ -165,7 +204,7 @@ function registerIpc(): void {
   ipcMain.handle("desktop:primary:get", trusted((_event) => backend.getConnection()));
   ipcMain.handle("desktop:primary:restart", trusted((_event) => backend.restart()));
   ipcMain.handle("desktop:registrations:list", trusted(() => stateStore.listRegistrations()));
-  ipcMain.handle("desktop:registrations:save", trusted((_event, value: DesktopConnectionRegistration) => stateStore.saveRegistration(value)));
+  ipcMain.handle("desktop:registrations:save", trusted((_event, value: DesktopConnectionRegistration, credential?: DesktopCredential) => stateStore.saveRegistration(value, credential)));
   ipcMain.handle("desktop:registrations:remove", trusted((_event, id: string) => stateStore.removeRegistration(id)));
   ipcMain.handle("desktop:credentials:get", trusted((_event, id: string) => stateStore.getCredential(id)));
   ipcMain.handle("desktop:credentials:set", trusted((_event, id: string, credential: DesktopCredential) => stateStore.setCredential(id, credential)));
@@ -178,7 +217,10 @@ function registerIpc(): void {
     return result.canceled ? null : result.filePaths[0] ?? null;
   }));
   ipcMain.handle("desktop:ssh:discover", trusted(() => ssh.discoverHosts()));
-  ipcMain.handle("desktop:ssh:ensure", trusted((_event, target: DesktopSshTarget) => ssh.ensureEnvironment(target)));
+  ipcMain.handle("desktop:ssh:ensure", trusted((event, target: DesktopSshTarget, request?: DesktopSshRequest) => ssh.ensureEnvironment(event.sender.id, target, request)));
+  ipcMain.handle("desktop:ssh:pairing", trusted((event, id: string, expectedId: string) => ssh.issuePairingCredential(event.sender.id, id, expectedId)));
+  ipcMain.handle("desktop:ssh:claim", trusted((event, id: string, expectedId: string) => ssh.claimConnection(event.sender.id, id, expectedId)));
+  ipcMain.handle("desktop:ssh:cancel", trusted((event, id: string) => ssh.cancelConnection(event.sender.id, id)));
   ipcMain.handle("desktop:ssh:disconnect", trusted((_event, target: DesktopSshTarget) => ssh.disconnectEnvironment(target)));
   ipcMain.handle("desktop:updates:status", trusted(() => updates.status));
   ipcMain.handle("desktop:updates:check", trusted(() => updates.check()));
@@ -243,77 +285,11 @@ function trusted<T extends unknown[], R>(
   handler: (event: IpcMainInvokeEvent, ...args: T) => R,
 ): (event: IpcMainInvokeEvent, ...args: T) => R {
   return (event, ...args) => {
-    if (!event.senderFrame || !isAllowedRendererUrl(event.senderFrame.url)) throw new Error("Rejected IPC from an untrusted renderer");
+    if (!mainWindow || event.sender !== mainWindow.webContents || !event.senderFrame || event.senderFrame !== event.sender.mainFrame || !isAllowedRendererUrl(event.senderFrame.url)) throw new Error("Rejected IPC from an untrusted renderer");
     return handler(event, ...args);
   };
 }
 
 function isAllowedRendererUrl(value: string): boolean {
   return value.startsWith(`${APPLICATION_ORIGIN}/`) || value === DEVELOPMENT_ORIGIN || value.startsWith(`${DEVELOPMENT_ORIGIN}/`);
-}
-
-async function promptForSecret(target: DesktopSshTarget, prompt: string, signal: AbortSignal): Promise<string | null> {
-  if (signal.aborted) return null;
-  const parent = mainWindow ?? undefined;
-  const window = new BrowserWindow({
-    parent,
-    modal: Boolean(parent),
-    width: 440,
-    height: 220,
-    resizable: false,
-    minimizable: false,
-    maximizable: false,
-    title: `SSH — ${target.host}`,
-    webPreferences: {
-      preload: join(import.meta.dirname, "prompt-preload.cjs"),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-    },
-  });
-  const escapedPrompt = escapeHtml(prompt);
-  const html = `<!doctype html><meta charset="utf-8"><style>body{font:14px system-ui;margin:24px;background:#15171c;color:#f4f4f5}label{display:block;margin-bottom:10px}input{box-sizing:border-box;width:100%;padding:9px;background:#22252c;color:white;border:1px solid #454955;border-radius:5px}.buttons{display:flex;justify-content:flex-end;gap:8px;margin-top:18px}button{padding:7px 14px}</style><form><label for="secret">${escapedPrompt}</label><input id="secret" type="password" autofocus autocomplete="current-password"><div class="buttons"><button type="button" id="cancel">Cancel</button><button type="submit">Connect</button></div></form><script>const api=window.secretPrompt;const input=document.querySelector('#secret');document.querySelector('form').addEventListener('submit',e=>{e.preventDefault();api.submit(input.value)});document.querySelector('#cancel').addEventListener('click',()=>api.cancel());</script>`;
-  return new Promise((resolve) => {
-    let settled = false;
-    const finish = (value: string | null) => {
-      if (settled) return;
-      settled = true;
-      signal.removeEventListener("abort", onAbort);
-      ipcMain.removeListener("desktop:secret-prompt:response", onResponse);
-      if (!window.isDestroyed()) window.close();
-      resolve(value);
-    };
-    const onResponse = (event: Electron.IpcMainEvent, value: string | null) => {
-      if (event.sender !== window.webContents) return;
-      finish(typeof value === "string" ? value : null);
-    };
-    const onAbort = () => finish(null);
-    signal.addEventListener("abort", onAbort, { once: true });
-    ipcMain.on("desktop:secret-prompt:response", onResponse);
-    window.once("closed", () => finish(null));
-    void window.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`).catch(() => finish(null));
-  });
-}
-
-async function promptForHostTrust(target: DesktopSshTarget, signal: AbortSignal): Promise<boolean> {
-  if (signal.aborted) return false;
-  const options = {
-    signal,
-    type: "warning" as const,
-    title: "Confirm SSH host",
-    message: `Trust ${target.host} and add its host key to your OpenSSH known_hosts file?`,
-    detail: "Confirm only after verifying the host identity. A changed known host key is never accepted automatically.",
-    buttons: ["Cancel", "Trust host"],
-    defaultId: 0,
-    cancelId: 0,
-    noLink: true,
-  };
-  const result = mainWindow
-    ? await dialog.showMessageBox(mainWindow, options)
-    : await dialog.showMessageBox(options);
-  return result.response === 1;
-}
-
-function escapeHtml(value: string): string {
-  return value.replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]!);
 }

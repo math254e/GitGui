@@ -131,6 +131,52 @@ platform differs:
 
 ## The divergences
 
+### Desktop startup
+
+`apps/desktop/src/main.ts` follows T3 `70cd258d`'s `DesktopClerk.configure`
+secondary-instance interruption and `DesktopApp.handleFatalStartupError` boundary.
+GitGui keeps its existing Promise-based Electron entry point: a lost instance
+lock skips readiness, service/IPC initialization and window creation entirely.
+Readiness and initial/activated window-load rejections show a bounded static
+diagnostic and enter ordinary owned-resource shutdown. The existing profile,
+credentials and server identity paths are preserved. This prevents a secondary
+development launch from continuing against an installed app's shared profile.
+
+### Remote reliability and separately pinned SSH sources
+
+The SSH/primitives, Electron prompt/service and shared onboarding additions are
+adapted from `70cd258d8aac43ea57494527b00bf36de3efa6c0`. Their source/test inventory
+and reviewed adaptation hashes live in `scripts/t3code-ssh-sources.json`, checked
+by `node scripts/vendor-t3code-ssh.mjs`. This is independent of the original
+client-runtime snapshot above. The current upstream uses Effect beta.103;
+GitGui retains `effect`, `@effect/vitest` and Node platform packages at 4.0.5.
+[Compatibility probes](ssh-source-compatibility.md) establish scoped process,
+HTTP and prompt behavior under those pins. There is no downgrade or bulk runtime
+resynchronization, and stable import/API translations are recorded adaptations.
+
+The original runtime commit is absent from the current reference checkout's
+object database; a fetch of that exact object timed out. Full `vendor:sync`
+against that snapshot could therefore not be repeated. Its commit and upstream
+hashes are retained. The eight runtime files changed for reliability have
+reviewed current target hashes, recorded separately in the manifest's
+`reliabilityAdaptationReview`; this does not certify unavailable upstream bytes.
+
+The existing runtime files keep their original source headers and snapshot.
+Their new divergences are: scoped SSH gateway calls and explicit ownership
+handoff (`platform/capabilities.ts`); RPC-ready claim and acquisition finalization
+(`connection/model.ts`, `resolver.ts`, `driver.ts`); disabled durable staging and
+masked activation (`registry.ts`); shared onboarding composition (`layer.ts`);
+optional staged persistence (`platform/persistence.ts`); and redirect rejection,
+bounded streamed JSON and preservation of invalid-body classification
+(`rpc/http.ts`). The GitGui-owned platform catalog adds atomic Electron saves
+and browser credential rollback. The supervisor's retry policy is unchanged.
+
+Rust host records, provisional expiry, cancellation tombstones, process locks,
+same-user exact-instance control sockets and SQLite auth are GitGui translations
+and ownership corrections, not claimed upstream guarantees. See
+[the host contract](ssh-host-runner.md), [auth translation](ssh-auth.md) and
+[the runtime transaction](connection-runtime.md#desktop-managed-ssh-acquisition).
+
 ### GitGui has no relay
 
 T3 Code reaches remote environments through T3 Connect, a managed relay. GitGui
@@ -272,7 +318,8 @@ catalog management, while its ordinary pairing grant only permits repository
 reads and Git operations; requesting the latter for bootstrap would prevent
 opening repositories in Electron.
 SSH restoration checks environment identity before using credentials, reuses a
-valid saved bearer, and exchanges a supplied bootstrap only if needed. Permission
+valid saved bearer, and independently issues/exchanges a one-time owner pairing
+grant only when the bearer is missing or rejected. Permission
 and transient failures do not trigger another exchange. Cached primary sessions
 are likewise validated before reuse, recovering rejected sessions through the
 current primary grant after a Rust server restart.
@@ -299,8 +346,9 @@ T3's upstream route key omits this field.
 
 The SSH adapter maps authentication and host-trust cancellation/rejection to
 blocked errors, following T3's distinction between prompt/auth failures and
-transport failures. GitGui currently identifies the manager's diagnostic
-messages preserved by Electron IPC; network errors remain transient.
+transport failures. The desktop maps OpenSSH diagnostics at its process boundary
+to typed bounded IPC categories; the client never classifies diagnostic messages.
+Network errors remain transient.
 
 Explicit direct and SSH additions receive independent connection IDs, so one
 environment can retain several routes of the same kind. Catalog selection is
@@ -378,3 +426,23 @@ updater; do not bulk-sync the shared client runtime to that different snapshot.
 6. Record the reviewed adapted hashes with
    `node scripts/vendor-t3code.mjs --record-adaptations`, then run
    `npm run vendor:sync` again. Commit the manifest with the reviewed changes.
+
+
+Legacy identity compatibility: GitGui's earlier released backends issued opaque
+`gitgui-<pid>-<time>` environment IDs. Persistent startup and all SSH identity
+boundaries accept these bounded, trimmed, control-free values without changing
+them. New environment IDs, acquisition IDs and process-instance IDs are still
+generated as UUIDs; only acquisition/instance inputs require UUID syntax. This
+is a GitGui migration adaptation, covered by legacy restart/catalog/bearer,
+native inherited-control, helper locator and desktop/client boundary tests.
+
+
+Development signal shutdown follows T3's `DesktopLifecycle.quitFromSignal`
+concept through GitGui's existing Promise lifecycle. On Windows the dev launcher
+uses one narrow inherited Node IPC quit message, since terminating the Electron
+process bypasses its lifecycle. POSIX signals enter the same normal quit path.
+This is parent-only development control, absent from renderer IPC and Git RPC;
+packaged/unmanaged launches do not install it. `scripts/dev-session.mjs` owns the
+two spawned development children and observes actual exit rather than using a
+250 ms process-exit timer. Vite failure requests the same desktop cleanup. A
+pending local backend start is retained through quit, preventing a late orphan.

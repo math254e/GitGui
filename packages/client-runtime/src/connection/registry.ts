@@ -13,6 +13,8 @@
  * - `removeRelayEnvironments` is gone: GitGui has no relay.
  * - The environment cache store is gone: GitGui caches no server-owned
  *   snapshots, so removing an environment only clears client-owned data.
+ * - SSH onboarding stages new registrations disabled, then claims the host
+ *   before activation. An interrupted claim leaves an explicit disabled record.
  */
 import { EnvironmentId } from "@gitgui/contracts/environment";
 import * as Context from "effect/Context";
@@ -117,7 +119,8 @@ export class EnvironmentRegistry extends Context.Service<
      */
     readonly register: (
       registration: ConnectionRegistration,
-    ) => Effect.Effect<boolean, Persistence.ConnectionPersistenceError>;
+      options?: { readonly beforeActivate: Effect.Effect<void, ConnectionAttemptError>; readonly onCommitted?: Effect.Effect<void> },
+    ) => Effect.Effect<boolean, Persistence.ConnectionPersistenceError | ConnectionAttemptError>;
     readonly registerPlatform: (registration: PrimaryConnectionRegistration) => Effect.Effect<void>;
     readonly reconcilePlatform: (
       registrations: ReadonlyArray<PlatformConnectionRegistration>,
@@ -529,6 +532,7 @@ export const make = Effect.gen(function* () {
 
   const register = Effect.fn("EnvironmentRegistry.register")(function* (
     registration: ConnectionRegistration,
+    options?: { readonly beforeActivate: Effect.Effect<void, ConnectionAttemptError>; readonly onCommitted?: Effect.Effect<void> },
   ) {
     const registered = connectionRegistrationCatalogEntry(registration);
     const environmentId = registered.target.environmentId;
@@ -551,11 +555,26 @@ export const make = Effect.gen(function* () {
           );
           entry = withRoutes(previous, upsertRoute(routes, route)).entry;
         }
-        yield* registrations.register(registration, persistedRoutes(entry));
-        yield* Ref.update(persistedEnvironmentIds, (current) =>
-          new Set(current).add(environmentId),
-        );
-        yield* installEntryLocked(entry);
+        yield* Effect.uninterruptibleMask((restore) => Effect.gen(function* () {
+          // Keep an already active environment available while adding a route.
+          // A new environment stays recoverable but disabled if claim fails.
+          yield* registrations.register(registration, persistedRoutes(entry),
+            options === undefined ? undefined : { enabled: previous?.enabled ?? false });
+          yield* Ref.update(persistedEnvironmentIds, (current) => new Set(current).add(environmentId));
+          if (options !== undefined) {
+            yield* Effect.gen(function* () {
+              yield* restore(options.beforeActivate);
+              yield* registrations.setEnabled(environmentId, true);
+            }).pipe(Effect.onExit((exit) =>
+              Exit.isSuccess(exit) || previous !== undefined ? Effect.void
+                : installEntryLocked({ ...entry, enabled: false }),
+            ));
+          }
+          if (options?.onCommitted !== undefined) yield* options.onCommitted;
+          // Transfer the acquisition before publishing a supervisor: its first
+          // successful connect may immediately replace this onboarding handle.
+          yield* installEntryLocked({ ...entry, enabled: true });
+        }));
         return true;
       }),
     );

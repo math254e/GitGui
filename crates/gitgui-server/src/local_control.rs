@@ -45,6 +45,17 @@ impl Drop for Work {
     }
 }
 impl WorkGate {
+    /// Atomically close admission only when nobody else is using the server.
+    /// SSH cleanup must retain another client's live socket rather than drain it.
+    #[cfg(target_os = "linux")]
+    pub fn pause_if_idle(&self) -> bool {
+        let mut activity = self.activity.lock().unwrap_or_else(|e| e.into_inner());
+        if activity.active != 0 || activity.paused {
+            return false;
+        }
+        activity.paused = true;
+        true
+    }
     pub fn enter(self: &Arc<Self>) -> Option<Work> {
         let mut activity = self.activity.lock().unwrap_or_else(|e| e.into_inner());
         if activity.paused {

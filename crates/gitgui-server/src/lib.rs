@@ -9,17 +9,18 @@ pub mod local_control;
 mod rpc_queue;
 #[cfg(test)]
 mod rpc_tests;
+pub mod ssh_host;
 mod stash;
 mod stash_preparation;
 mod watching;
 
 use auth::{AuthError, AuthStore};
 use axum::{
-    extract::{ws::Message, ws::WebSocket, ws::WebSocketUpgrade, Query, State},
-    http::{header, HeaderMap, HeaderValue, Method, StatusCode},
+    Form, Json, Router,
+    extract::{Query, State, ws::Message, ws::WebSocket, ws::WebSocketUpgrade},
+    http::{HeaderMap, HeaderValue, Method, StatusCode, header},
     response::{IntoResponse, Redirect, Response},
     routing::{get, post},
-    Form, Json, Router,
 };
 use futures_util::{FutureExt, SinkExt, StreamExt};
 use gitgui_core::git::{
@@ -31,91 +32,91 @@ use gitgui_core::git::{
     hunk_cache::SharedHunkReviewCache,
     operations::{
         commit as run_commit, create_branch as run_create_branch, create_tag as run_create_tag,
-        delete_tag as run_delete_tag,
-        fetch as run_fetch,
-        init_repository as run_init_repository, list_local_branches, pull as run_pull,
-        push as run_push, stage as run_stage, stash_pop as run_stash_pop,
-        stash_push as run_stash_push, switch_branch as run_switch_branch, unstage as run_unstage,
+        delete_tag as run_delete_tag, fetch as run_fetch, init_repository as run_init_repository,
+        list_local_branches, pull as run_pull, push as run_push, stage as run_stage,
+        stash_pop as run_stash_pop, stash_push as run_stash_push,
+        switch_branch as run_switch_branch, unstage as run_unstage,
     },
     repository::{
+        ChangedFile as CoreChangedFile, CommitFile as CoreCommitFile,
+        CommitFileDiff as CoreCommitFileDiff, CommitGraph as CoreCommitGraph,
+        RepositoryGraph as CoreRepositoryGraph, RepositorySnapshot as CoreRepositorySnapshot,
+        RepositoryStatus as CoreRepositoryStatus,
         load_commit_file_diff as load_core_commit_file_diff,
         load_commit_files_from_root as load_core_commit_files,
         load_commit_working_tree_file_diff as load_core_commit_working_tree_file_diff,
         load_commit_working_tree_files as load_core_commit_working_tree_files,
         load_repository_for_display as load_core_repository,
         load_repository_graph as load_core_repository_graph,
-        load_repository_status as load_core_repository_status,
-        load_repository_status_from_root,
+        load_repository_status as load_core_repository_status, load_repository_status_from_root,
         load_working_tree_file_diff as load_core_working_tree_file_diff, resolve_repository,
-        ChangedFile as CoreChangedFile, CommitFile as CoreCommitFile,
-        CommitFileDiff as CoreCommitFileDiff, CommitGraph as CoreCommitGraph,
-        RepositoryGraph as CoreRepositoryGraph, RepositorySnapshot as CoreRepositorySnapshot,
-        RepositoryStatus as CoreRepositoryStatus,
     },
 };
 use gitgui_protocol::{
-    error_codes, AdvertisedEndpoint, AuthSession, ChangedFile as ProtocolChangedFile,
-    CommitFile as ProtocolCommitFile, CommitFileDiff as ProtocolCommitFileDiff, CommitFilesParams,
-    CommitFilesResult, CommitGraph as ProtocolCommitGraph, CommitInfo as ProtocolCommitInfo,
+    AdvertisedEndpoint, AuthSession, CAPABILITY_GIT_AMEND, CAPABILITY_GIT_BRANCH_CREATE,
+    CAPABILITY_GIT_BRANCH_DELETE, CAPABILITY_GIT_BRANCH_LIST, CAPABILITY_GIT_BRANCH_RENAME,
+    CAPABILITY_GIT_BRANCH_SWITCH, CAPABILITY_GIT_COMMIT, CAPABILITY_GIT_COMMIT_FILE_DIFF,
+    CAPABILITY_GIT_COMMIT_FILES, CAPABILITY_GIT_COMMIT_WORKING_TREE_FILE_DIFF,
+    CAPABILITY_GIT_COMMIT_WORKING_TREE_FILES, CAPABILITY_GIT_DISCARD, CAPABILITY_GIT_FETCH,
+    CAPABILITY_GIT_HUNKS, CAPABILITY_GIT_PREFETCH_COMMIT_DIFFS,
+    CAPABILITY_GIT_PREFETCH_COMMIT_FILES, CAPABILITY_GIT_PULL, CAPABILITY_GIT_PUSH,
+    CAPABILITY_GIT_STAGE, CAPABILITY_GIT_STASH_POP, CAPABILITY_GIT_STASH_PUSH,
+    CAPABILITY_GIT_STATUS, CAPABILITY_GIT_TAG_CREATE, CAPABILITY_GIT_TAG_DELETE,
+    CAPABILITY_GIT_UNSTAGE, CAPABILITY_GIT_WORKING_TREE_FILE_DIFF, CAPABILITY_REPOSITORIES_CREATE,
+    CAPABILITY_REPOSITORIES_GET_GRAPH, CAPABILITY_REPOSITORIES_GET_SNAPSHOT,
+    CAPABILITY_REPOSITORIES_LIST, CAPABILITY_REPOSITORIES_OPEN, CAPABILITY_REPOSITORIES_REFRESH,
+    CAPABILITY_REPOSITORIES_REMOVE, CAPABILITY_SERVER_INFO, CAPABILITY_SERVER_STATUS,
+    ChangedFile as ProtocolChangedFile, CommitFile as ProtocolCommitFile,
+    CommitFileDiff as ProtocolCommitFileDiff, CommitFilesParams, CommitFilesResult,
+    CommitGraph as ProtocolCommitGraph, CommitInfo as ProtocolCommitInfo,
     CommitRef as ProtocolCommitRef, CommitRefType as ProtocolCommitRefType,
     CommitWorkingTreeFileDiffParams, CommitWorkingTreeFilesParams, EnvironmentAuthPolicy,
     EnvironmentDescriptor, FileDiffResult, GitAmendParams, GitApplyHunksParams, GitBranch,
     GitBranchCreateParams, GitBranchCreateResult, GitBranchListParams, GitBranchListResult,
     GitBranchSwitchParams, GitBranchSwitchResult, GitCommitParams, GitCommitResult,
-    GitTagCreateParams, GitTagCreateResult,
-    GitTagDeleteParams, GitTagDeleteResult,
     GitDiscardParams, GitFetchResult, GitHunkPreviewParams, GitPathsParams, GitPullResult,
     GitPushResult, GitRepositoryParams, GitStageResult, GitStashPopParams, GitStashPopResult,
-    GitStashPushParams, GitStashPushResult, GitStatusParams, GitStatusResult, GitUnstageResult,
+    GitStashPushParams, GitStashPushResult, GitStatusParams, GitStatusResult, GitTagCreateParams,
+    GitTagCreateResult, GitTagDeleteParams, GitTagDeleteResult, GitUnstageResult,
     GraphCommit as ProtocolGraphCommit, GraphEdge as ProtocolGraphEdge,
-    GraphEdgeType as ProtocolGraphEdgeType, PrefetchCommitDiffsParams, PrefetchCommitDiffsResult,
-    PrefetchCommitFilesParams, PrefetchCommitFilesResult, ProtocolError, ProtocolErrorMessage,
-    RepositoriesCreateParams, RepositoriesCreateResult, RepositoriesListResult,
-    RepositoriesOpenParams, RepositoriesOpenResult, RepositoriesRefreshParams,
-    RepositoriesRefreshResult, RepositoriesRemoveParams, RepositoriesRemoveResult,
-    RepositoryGraphParams, RepositoryGraphResult, RepositoryInfo as ProtocolRepositoryInfo,
-    RepositoryRefreshItem, RepositorySnapshot, RepositorySnapshotParams, RepositorySnapshotResult,
-    RepositoryStatus as ProtocolRepositoryStatus, RepositorySummary, RequestEnvelope,
-    ResponseEnvelope, ServerInfo, ServerLifecycle, ServerReadiness, ServerStatus,
-    StashInfo as ProtocolStashInfo, WelcomeMessage, WorktreeInfo as ProtocolWorktreeInfo,
-    CAPABILITY_GIT_AMEND, CAPABILITY_GIT_BRANCH_CREATE, CAPABILITY_GIT_BRANCH_DELETE,
-    CAPABILITY_GIT_BRANCH_LIST, CAPABILITY_GIT_BRANCH_RENAME, CAPABILITY_GIT_BRANCH_SWITCH,
-    CAPABILITY_GIT_COMMIT, CAPABILITY_GIT_COMMIT_FILES, CAPABILITY_GIT_COMMIT_FILE_DIFF,
-    CAPABILITY_GIT_TAG_CREATE,
-    CAPABILITY_GIT_TAG_DELETE,
-    CAPABILITY_GIT_COMMIT_WORKING_TREE_FILES, CAPABILITY_GIT_COMMIT_WORKING_TREE_FILE_DIFF,
-    CAPABILITY_GIT_DISCARD, CAPABILITY_GIT_FETCH, CAPABILITY_GIT_HUNKS,
-    CAPABILITY_GIT_PREFETCH_COMMIT_DIFFS, CAPABILITY_GIT_PREFETCH_COMMIT_FILES,
-    CAPABILITY_GIT_PULL, CAPABILITY_GIT_PUSH, CAPABILITY_GIT_STAGE, CAPABILITY_GIT_STASH_POP,
-    CAPABILITY_GIT_STASH_PUSH, CAPABILITY_GIT_STATUS, CAPABILITY_GIT_UNSTAGE,
-    CAPABILITY_GIT_WORKING_TREE_FILE_DIFF, CAPABILITY_REPOSITORIES_CREATE,
-    CAPABILITY_REPOSITORIES_GET_GRAPH, CAPABILITY_REPOSITORIES_GET_SNAPSHOT,
-    CAPABILITY_REPOSITORIES_LIST, CAPABILITY_REPOSITORIES_OPEN, CAPABILITY_REPOSITORIES_REFRESH,
-    CAPABILITY_REPOSITORIES_REMOVE, CAPABILITY_SERVER_INFO, CAPABILITY_SERVER_STATUS,
-    MAX_GRAPH_TARGETS, MAX_PREFETCH_COMMIT_DIFF_TARGETS, MAX_PREFETCH_COMMIT_HASHES,
-    METHOD_GIT_AMEND, METHOD_GIT_AMEND_INFO, METHOD_GIT_APPLY_HUNKS, METHOD_GIT_BRANCH_CREATE,
-    METHOD_GIT_BRANCH_DELETE, METHOD_GIT_BRANCH_LIST, METHOD_GIT_BRANCH_RENAME,
-    METHOD_GIT_BRANCH_SWITCH, METHOD_GIT_COMMIT, METHOD_GIT_COMMIT_FILES, METHOD_GIT_TAG_CREATE,
-    METHOD_GIT_TAG_DELETE,
-    METHOD_GIT_COMMIT_FILE_DIFF, METHOD_GIT_DISCARD, METHOD_GIT_DISCARD_PREVIEW, METHOD_GIT_FETCH,
-    METHOD_GIT_HUNK_PREVIEW, METHOD_GIT_PREFETCH_COMMIT_DIFFS, METHOD_GIT_PREFETCH_COMMIT_FILES,
-    METHOD_GIT_PULL, METHOD_GIT_PUSH, METHOD_GIT_STAGE, METHOD_GIT_STASH_POP,
-    METHOD_GIT_STASH_PUSH, METHOD_GIT_STATUS, METHOD_GIT_UNSTAGE,
+    GraphEdgeType as ProtocolGraphEdgeType, MAX_GRAPH_TARGETS, MAX_PREFETCH_COMMIT_DIFF_TARGETS,
+    MAX_PREFETCH_COMMIT_HASHES, METHOD_GIT_AMEND, METHOD_GIT_AMEND_INFO, METHOD_GIT_APPLY_HUNKS,
+    METHOD_GIT_BRANCH_CREATE, METHOD_GIT_BRANCH_DELETE, METHOD_GIT_BRANCH_LIST,
+    METHOD_GIT_BRANCH_RENAME, METHOD_GIT_BRANCH_SWITCH, METHOD_GIT_COMMIT,
+    METHOD_GIT_COMMIT_FILE_DIFF, METHOD_GIT_COMMIT_FILES, METHOD_GIT_DISCARD,
+    METHOD_GIT_DISCARD_PREVIEW, METHOD_GIT_FETCH, METHOD_GIT_HUNK_PREVIEW,
+    METHOD_GIT_PREFETCH_COMMIT_DIFFS, METHOD_GIT_PREFETCH_COMMIT_FILES, METHOD_GIT_PULL,
+    METHOD_GIT_PUSH, METHOD_GIT_STAGE, METHOD_GIT_STASH_POP, METHOD_GIT_STASH_PUSH,
+    METHOD_GIT_STATUS, METHOD_GIT_TAG_CREATE, METHOD_GIT_TAG_DELETE, METHOD_GIT_UNSTAGE,
     METHOD_GIT_WORKING_TREE_FILE_DIFF, METHOD_GIT_WORKTREE_REMOVE, METHOD_REPOSITORIES_CREATE,
     METHOD_REPOSITORIES_GET_GRAPH, METHOD_REPOSITORIES_GET_SNAPSHOT, METHOD_REPOSITORIES_LIST,
     METHOD_REPOSITORIES_OPEN, METHOD_REPOSITORIES_REFRESH, METHOD_REPOSITORIES_REMOVE,
-    METHOD_SERVER_GET_INFO, METHOD_SERVER_GET_STATUS, PROTOCOL_VERSION, SCOPE_REPOSITORY_MANAGE,
-    SCOPE_REPOSITORY_OPERATE, SCOPE_REPOSITORY_READ,
+    METHOD_SERVER_GET_INFO, METHOD_SERVER_GET_STATUS, PROTOCOL_VERSION, PrefetchCommitDiffsParams,
+    PrefetchCommitDiffsResult, PrefetchCommitFilesParams, PrefetchCommitFilesResult, ProtocolError,
+    ProtocolErrorMessage, RepositoriesCreateParams, RepositoriesCreateResult,
+    RepositoriesListResult, RepositoriesOpenParams, RepositoriesOpenResult,
+    RepositoriesRefreshParams, RepositoriesRefreshResult, RepositoriesRemoveParams,
+    RepositoriesRemoveResult, RepositoryGraphParams, RepositoryGraphResult,
+    RepositoryInfo as ProtocolRepositoryInfo, RepositoryRefreshItem, RepositorySnapshot,
+    RepositorySnapshotParams, RepositorySnapshotResult,
+    RepositoryStatus as ProtocolRepositoryStatus, RepositorySummary, RequestEnvelope,
+    ResponseEnvelope, SCOPE_REPOSITORY_MANAGE, SCOPE_REPOSITORY_OPERATE, SCOPE_REPOSITORY_READ,
+    ServerInfo, ServerLifecycle, ServerReadiness, ServerStatus, StashInfo as ProtocolStashInfo,
+    WelcomeMessage, WorktreeInfo as ProtocolWorktreeInfo, error_codes,
 };
 use gitgui_protocol::{
-    METHOD_GIT_STASH_APPLY, METHOD_GIT_STASH_BRANCH, METHOD_GIT_STASH_DROP, METHOD_GIT_STASH_FILES,
-    METHOD_GIT_STASH_FILE_DIFF, METHOD_GIT_STASH_POP_TARGET, METHOD_GIT_STASH_PUSH_SELECTED,
+    CAPABILITY_GIT_TAG_APPLY_FETCH, CAPABILITY_GIT_TAG_CHECKOUT, CAPABILITY_GIT_TAG_DETAILS,
+    CAPABILITY_GIT_TAG_PUSH, GitTagApplyFetchParams, GitTagDetails, GitTagFetchConflict,
+    GitTagMutationResult, GitTagTargetParams, METHOD_GIT_TAG_APPLY_FETCH, METHOD_GIT_TAG_CHECKOUT,
+    METHOD_GIT_TAG_DETAILS, METHOD_GIT_TAG_PUSH,
 };
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use gitgui_protocol::{GitTagTargetParams, GitTagMutationResult, GitTagDetails, GitTagApplyFetchParams, GitTagFetchConflict,
-    METHOD_GIT_TAG_CHECKOUT, METHOD_GIT_TAG_PUSH, METHOD_GIT_TAG_DETAILS, METHOD_GIT_TAG_APPLY_FETCH,
-    CAPABILITY_GIT_TAG_CHECKOUT, CAPABILITY_GIT_TAG_PUSH, CAPABILITY_GIT_TAG_DETAILS, CAPABILITY_GIT_TAG_APPLY_FETCH};
-use serde_json::{json, Value};
+use gitgui_protocol::{
+    METHOD_GIT_STASH_APPLY, METHOD_GIT_STASH_BRANCH, METHOD_GIT_STASH_DROP,
+    METHOD_GIT_STASH_FILE_DIFF, METHOD_GIT_STASH_FILES, METHOD_GIT_STASH_POP_TARGET,
+    METHOD_GIT_STASH_PUSH_SELECTED,
+};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde_json::{Value, json};
 use std::{
     collections::HashMap,
     env,
@@ -130,8 +131,8 @@ use std::{
 };
 use tokio::{
     net::TcpListener,
-    sync::{broadcast, oneshot, Mutex, RwLock},
-    task::{spawn_blocking, JoinHandle, JoinSet},
+    sync::{Mutex, RwLock, broadcast, oneshot},
+    task::{JoinHandle, JoinSet, spawn_blocking},
 };
 use tower_http::{
     cors::{AllowOrigin, CorsLayer},
@@ -438,6 +439,8 @@ impl ServerHandle {
 /// Starts a server in a background Tokio task and returns its actual bound address.
 pub async fn start(config: ServerConfig) -> Result<ServerHandle, ServerError> {
     validate_bind_security(&config).map_err(ServerError::Configuration)?;
+    #[cfg(target_os = "linux")]
+    let host = ssh_host::HostGuard::begin(&config, None)?.map(Arc::new);
     let startup = prepare_startup(&config)
         .await
         .map_err(ServerError::Configuration)?;
@@ -447,24 +450,39 @@ pub async fn start(config: ServerConfig) -> Result<ServerHandle, ServerError> {
 
     let listener = TcpListener::bind(config.bind_addr).await?;
     let local_addr = listener.local_addr()?;
-    let state = Arc::new(ServerState::new(&config, local_addr, startup.repositories));
+    let state = initialize_state(&config, local_addr, startup.repositories, false).await?;
+    #[cfg(target_os = "linux")]
+    if let Some(host) = &host {
+        host.ready(&state)?;
+    }
     let watcher = tokio::spawn(watching::run(Arc::downgrade(&state)));
     let stash_worker = tokio::spawn(stash_preparation::run(Arc::downgrade(&state)));
     let router = router(state.clone(), web_dir);
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
     let shutdown_state = state.clone();
+    #[cfg(target_os = "linux")]
+    let shutdown_host = host.clone();
     #[cfg(test)]
     let handle_state = state.clone();
     let task = tokio::spawn(async move {
         let result = axum::serve(listener, router)
             .with_graceful_shutdown(async move {
-                let _ = shutdown_rx.await;
+                tokio::select! {
+                    _ = shutdown_rx => {},
+                    _ = async {
+                        #[cfg(target_os = "linux")]
+                        if let Some(host) = &shutdown_host { host.run(&shutdown_state).await; return; }
+                        std::future::pending::<()>().await;
+                    } => {},
+                }
                 shutdown_state
                     .set_lifecycle(ServerLifecycle::Stopping)
                     .await;
             })
             .await;
         finish_shutdown(&state, watcher, stash_worker).await;
+        #[cfg(target_os = "linux")]
+        drop(host);
         result
     });
 
@@ -480,7 +498,7 @@ pub async fn start(config: ServerConfig) -> Result<ServerHandle, ServerError> {
 
 /// Runs a foreground server until Ctrl-C or a termination signal is received.
 pub async fn run(config: ServerConfig) -> Result<(), ServerError> {
-    run_internal(config, None).await
+    run_internal(config, None, None).await
 }
 
 /// Desktop-owned inherited pipe only; never exposed through HTTP or Git RPC.
@@ -488,14 +506,19 @@ pub async fn run_with_control(
     config: ServerConfig,
     control: tokio::sync::mpsc::Receiver<local_control::Input>,
 ) -> Result<(), ServerError> {
-    run_internal(config, Some(control)).await
+    run_internal(config, Some(control), None).await
 }
 
 async fn run_internal(
     config: ServerConfig,
     control: Option<tokio::sync::mpsc::Receiver<local_control::Input>>,
+    managed_instance: Option<String>,
 ) -> Result<(), ServerError> {
     validate_bind_security(&config).map_err(ServerError::Configuration)?;
+    #[cfg(target_os = "linux")]
+    let host = ssh_host::HostGuard::begin(&config, managed_instance.as_deref())?.map(Arc::new);
+    #[cfg(not(target_os = "linux"))]
+    let _ = managed_instance;
     let startup = prepare_startup(&config)
         .await
         .map_err(ServerError::Configuration)?;
@@ -505,7 +528,17 @@ async fn run_internal(
 
     let listener = TcpListener::bind(config.bind_addr).await?;
     let local_addr = listener.local_addr()?;
-    let state = Arc::new(ServerState::new(&config, local_addr, startup.repositories));
+    let state = initialize_state(
+        &config,
+        local_addr,
+        startup.repositories,
+        managed_instance.is_some(),
+    )
+    .await?;
+    #[cfg(target_os = "linux")]
+    if let Some(host) = &host {
+        host.ready(&state)?;
+    }
     let watcher = tokio::spawn(watching::run(Arc::downgrade(&state)));
     let stash_worker = tokio::spawn(stash_preparation::run(Arc::downgrade(&state)));
     let router = router(state.clone(), web_dir);
@@ -513,11 +546,18 @@ async fn run_internal(
     log_bind_address(local_addr, &config);
     emit_ready_line(local_addr);
     let shutdown_state = state.clone();
+    #[cfg(target_os = "linux")]
+    let shutdown_host = host.clone();
     let result = axum::serve(listener, router)
         .with_graceful_shutdown(async move {
             let state = shutdown_state;
             tokio::select! {
                 _ = shutdown_signal(state.clone()) => {},
+                _ = async {
+                    #[cfg(target_os = "linux")]
+                    if let Some(host) = &shutdown_host { host.run(&state).await; return; }
+                    std::future::pending::<()>().await;
+                } => {},
                 _ = async {
                     match control {
                         Some(input) => local_control::run(&state, input, std::io::stdout(), Duration::from_secs(30)).await,
@@ -530,7 +570,41 @@ async fn run_internal(
         .await
         .map_err(ServerError::Io);
     finish_shutdown(&state, watcher, stash_worker).await;
+    #[cfg(target_os = "linux")]
+    drop(host);
     result
+}
+
+async fn initialize_state(
+    config: &ServerConfig,
+    local_addr: SocketAddr,
+    repositories: Vec<ConfiguredRepository>,
+    managed_auth: bool,
+) -> Result<Arc<ServerState>, ServerError> {
+    let mut state = ServerState::new(config, local_addr, repositories);
+    if let Some(data_dir) = config.data_dir.clone() {
+        let required = managed_auth
+            || config.bootstrap_token.is_some()
+            || AuthStore::authentication_required(&data_dir).map_err(|_| {
+                ServerError::Configuration(
+                    "Could not read persistent environment authentication policy".into(),
+                )
+            })?;
+        if !required {
+            return Ok(Arc::new(state));
+        }
+        let environment_id = config.server_id.clone();
+        let bootstrap = config.bootstrap_token.clone();
+        state.auth = spawn_blocking(move || AuthStore::open(environment_id, bootstrap, &data_dir))
+            .await
+            .map_err(ServerError::Join)?
+            .map_err(|_| {
+                ServerError::Configuration(
+                    "Could not open persistent environment authentication".into(),
+                )
+            })?;
+    }
+    Ok(Arc::new(state))
 }
 
 // Do not abort tasks awaiting spawn_blocking: that only loses ownership of the
@@ -640,6 +714,16 @@ fn auth_error_response(error: AuthError) -> Response {
             StatusCode::BAD_REQUEST,
             "invalid_scope",
             "The requested scope is not granted by this credential",
+        ),
+        AuthError::Storage => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "auth_storage_unavailable",
+            "Environment authentication storage is unavailable",
+        ),
+        AuthError::IdentityMismatch => (
+            StatusCode::CONFLICT,
+            "environment_identity_mismatch",
+            "Authentication storage belongs to another environment",
         ),
     };
     (status, Json(json!({ "error": code, "message": message }))).into_response()
@@ -797,11 +881,12 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<ServerState>, session: 
                     let id = request.id.clone();
                     let method = request.method.clone();
                     let started = std::time::Instant::now();
-                    let response =
-                        std::panic::AssertUnwindSafe(dispatch_authorized(request, &state, &session))
-                            .catch_unwind()
-                            .await
-                            .unwrap_or_else(|_| internal_error(id.clone(), "RPC worker failed"));
+                    let response = std::panic::AssertUnwindSafe(dispatch_authorized(
+                        request, &state, &session,
+                    ))
+                    .catch_unwind()
+                    .await
+                    .unwrap_or_else(|_| internal_error(id.clone(), "RPC worker failed"));
                     let text = serde_json::to_string(&response);
                     if matches!(
                         method.as_str(),
@@ -868,7 +953,9 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<ServerState>, session: 
                 }
                 Ok(Message::Binary(bytes)) => {
                     let result = match std::str::from_utf8(&bytes) {
-                        Ok(text) => process_text_frame(&mut socket, &mut queue, &session, text).await,
+                        Ok(text) => {
+                            process_text_frame(&mut socket, &mut queue, &session, text).await
+                        }
                         Err(_) => {
                             let error = ProtocolErrorMessage::new(ProtocolError::new(
                                 error_codes::INVALID_REQUEST,
@@ -904,7 +991,8 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<ServerState>, session: 
         _ = transport => {},
     }
     if *stopping.borrow() {
-        let _ = tokio::time::timeout(Duration::from_secs(1), socket.send(Message::Close(None))).await;
+        let _ =
+            tokio::time::timeout(Duration::from_secs(1), socket.send(Message::Close(None))).await;
     }
     // Drop queued requests, but let started dispatches finish with their locks
     // intact. Aborting a spawn_blocking await cannot stop the Git worker.
@@ -1017,8 +1105,7 @@ async fn dispatch_authorized(
         && !matches!(
             request.method.as_str(),
             METHOD_SERVER_GET_INFO | METHOD_SERVER_GET_STATUS
-        )
-    {
+        ) {
         match state.work.enter() {
             Some(work) => Some(work),
             None => {
@@ -1028,7 +1115,7 @@ async fn dispatch_authorized(
                         error_codes::SERVER_BUSY,
                         "The server is preparing a desktop update",
                     ),
-                )
+                );
             }
         }
     } else {
@@ -1162,7 +1249,9 @@ async fn dispatch(request: RequestEnvelope, state: &ServerState) -> ResponseEnve
         METHOD_GIT_BRANCH_CREATE => git_branch_create(request.id, request.params, state).await,
         METHOD_GIT_TAG_CREATE => git_tag_create(request.id, request.params, state).await,
         METHOD_GIT_TAG_DELETE => git_tag_delete(request.id, request.params, state).await,
-        METHOD_GIT_TAG_CHECKOUT | METHOD_GIT_TAG_PUSH | METHOD_GIT_TAG_DETAILS => git_tag_target(request.id, &request.method, request.params, state).await,
+        METHOD_GIT_TAG_CHECKOUT | METHOD_GIT_TAG_PUSH | METHOD_GIT_TAG_DETAILS => {
+            git_tag_target(request.id, &request.method, request.params, state).await
+        }
         METHOD_GIT_TAG_APPLY_FETCH => git_tag_apply_fetch(request.id, request.params, state).await,
         METHOD_GIT_BRANCH_SWITCH => git_branch_switch(request.id, request.params, state).await,
         METHOD_GIT_BRANCH_RENAME | METHOD_GIT_BRANCH_DELETE => {
@@ -1225,7 +1314,7 @@ async fn repositories_open(
                     error_codes::REPOSITORY_NOT_FOUND,
                     "path is not a Git repository or could not be found",
                 ),
-            )
+            );
         }
         Ok(Err(OpenRepositoryError::Git(error))) => {
             warn!(error = %error.message, "repository open operation failed");
@@ -1307,7 +1396,7 @@ async fn repositories_create(
                     error_codes::REPOSITORY_CREATE_FAILED,
                     "The selected parent folder could not be found.",
                 ),
-            )
+            );
         }
         Ok(Err(CreateRepositoryError::AlreadyExists)) => {
             return ResponseEnvelope::error(
@@ -1316,7 +1405,7 @@ async fn repositories_create(
                     error_codes::REPOSITORY_CREATE_FAILED,
                     "A folder with that repository name already exists.",
                 ),
-            )
+            );
         }
         Ok(Err(CreateRepositoryError::Filesystem)) => {
             return ResponseEnvelope::error(
@@ -1325,7 +1414,7 @@ async fn repositories_create(
                     error_codes::REPOSITORY_CREATE_FAILED,
                     "The repository folder could not be created.",
                 ),
-            )
+            );
         }
         Ok(Err(CreateRepositoryError::Git(error))) => {
             warn!(error = %error.message, "repository create operation failed");
@@ -1397,10 +1486,20 @@ async fn repositories_get_snapshot(
     let Some(repository) = state.repository(&params.repository_id).await else {
         return repository_not_configured(request_id, &params.repository_id);
     };
-    let repository_summary = repository.summary.clone();
+    let mut repository_summary = repository.summary.clone();
     let snapshot_repository = repository.clone();
     match spawn_blocking(move || load_snapshot(&snapshot_repository)).await {
         Ok(Ok(mut snapshot)) => {
+            if repository_summary.missing.is_some() {
+                let mut repositories = state.repositories.write().await;
+                if let Some(current) = repositories.iter_mut().find(|r| {
+                    r.summary.id == repository_summary.id
+                        && r.operation_path == repository.operation_path
+                }) {
+                    current.summary.missing = None;
+                }
+                repository_summary.missing = None;
+            }
             state
                 .prepare_stashes(&repository, &mut snapshot, cache_generation)
                 .await;
@@ -2153,7 +2252,7 @@ async fn git_tag_target(
                 return ResponseEnvelope::error(
                     request_id,
                     repository_not_configured_error(&params.repository_id),
-                )
+                );
             }
         };
         return match spawn_blocking(move || {
@@ -2287,7 +2386,7 @@ async fn git_branch_mutation(
     params: Value,
     state: &ServerState,
 ) -> ResponseEnvelope {
-    use gitgui_core::git::operations::{delete_branch, rename_branch, BranchDeleteOutcome};
+    use gitgui_core::git::operations::{BranchDeleteOutcome, delete_branch, rename_branch};
     let result: Result<Value, ProtocolError> = async {
         if method == METHOD_GIT_BRANCH_RENAME {
             let p = parse_params::<gitgui_protocol::GitBranchRenameParams>(params, method)?;
@@ -2327,7 +2426,7 @@ async fn git_worktree_remove(
     params: Value,
     state: &ServerState,
 ) -> ResponseEnvelope {
-    use gitgui_core::git::worktrees::{remove, RemoveOutcome};
+    use gitgui_core::git::worktrees::{RemoveOutcome, remove};
     use gitgui_protocol::{GitWorktreeRemoveParams, GitWorktreeRemoveResult};
     let result: Result<GitWorktreeRemoveResult, ProtocolError> = async {
         let p = parse_params::<GitWorktreeRemoveParams>(params, METHOD_GIT_WORKTREE_REMOVE)?;
@@ -2383,7 +2482,7 @@ async fn git_worktree_remove(
                 return Err(ProtocolError::new(
                     error_codes::BRANCH_NOT_MERGED,
                     "This branch contains unmerged commits. The worktree has not been removed.",
-                ))
+                ));
             }
             RemoveOutcome::Removed {
                 branch_deleted,
@@ -3250,6 +3349,15 @@ struct ConfiguredRepository {
     operation_path: String,
 }
 
+// Do not label inaccessible directories as missing: a permission or I/O error
+// needs its own normal failure handling and may be temporary.
+fn directory_missing(path: &str) -> bool {
+    match fs::metadata(path) {
+        Ok(metadata) => !metadata.is_dir(),
+        Err(error) => error.kind() == std::io::ErrorKind::NotFound,
+    }
+}
+
 #[derive(Debug)]
 enum RepositoryLoadError {
     NotFound,
@@ -3413,12 +3521,23 @@ impl ServerState {
     }
 
     async fn repository_summaries(&self) -> Vec<RepositorySummary> {
-        self.repositories
-            .read()
-            .await
-            .iter()
-            .map(|repository| repository.summary.clone())
-            .collect()
+        let paths: Vec<_> = self.repositories.read().await.iter()
+            .map(|repository| (repository.summary.id.clone(), repository.operation_path.clone()))
+            .collect();
+        let checked = spawn_blocking(move || {
+            paths.into_iter().map(|(id, path)| {
+                let missing = directory_missing(&path);
+                (id, path, missing)
+            }).collect::<Vec<_>>()
+        }).await.unwrap_or_default();
+        let mut repositories = self.repositories.write().await;
+        for (id, path, missing) in checked {
+            if let Some(repository) = repositories.iter_mut()
+                .find(|r| r.summary.id == id && r.operation_path == path) {
+                repository.summary.missing = missing.then_some(true);
+            }
+        }
+        repositories.iter().map(|repository| repository.summary.clone()).collect()
     }
 
     async fn repository(&self, id: &str) -> Option<ConfiguredRepository> {
@@ -3452,6 +3571,7 @@ impl ServerState {
                 existing.summary.path = candidate.summary.path.clone();
                 existing.summary.root = candidate.summary.root.clone();
                 existing.summary.is_worktree = candidate.summary.is_worktree;
+                existing.summary.missing = candidate.summary.missing;
                 existing.operation_path = candidate.operation_path.clone();
                 existing.clone()
             } else {
@@ -3594,6 +3714,7 @@ impl PersistedRepository {
                 },
                 root: root.clone(),
                 is_worktree: is_linked_worktree(&root),
+                missing: directory_missing(&root).then_some(true),
             },
             operation_path: root,
         })
@@ -3629,20 +3750,27 @@ fn load_startup_state(config: &ServerConfig) -> Result<StartupState, String> {
     fs::create_dir_all(&data_dir)
         .map_err(|error| format!("could not create server data directory: {error}"))?;
     let identity_path = data_dir.join(SERVER_ID_FILE);
-    let server_id = read_json::<PersistedServerIdentity>(&identity_path)
-        .ok()
-        .filter(|identity| {
-            identity.schema_version == PERSISTENCE_SCHEMA_VERSION
-                && !identity.server_id.trim().is_empty()
-        })
-        .map(|identity| identity.server_id)
-        .unwrap_or_else(generate_environment_id);
-    let identity = PersistedServerIdentity {
-        schema_version: PERSISTENCE_SCHEMA_VERSION,
-        server_id: server_id.clone(),
+    let server_id = if identity_path
+        .try_exists()
+        .map_err(|_| "could not inspect server identity")?
+    {
+        let identity = read_json::<PersistedServerIdentity>(&identity_path)
+            .map_err(|_| "could not read existing server identity")?;
+        if identity.schema_version != PERSISTENCE_SCHEMA_VERSION
+            || !is_valid_environment_id(&identity.server_id)
+        {
+            return Err("existing server identity is invalid or incompatible".into());
+        }
+        identity.server_id
+    } else {
+        let identity = PersistedServerIdentity {
+            schema_version: PERSISTENCE_SCHEMA_VERSION,
+            server_id: generate_environment_id(),
+        };
+        write_json_atomically(&identity_path, &identity)
+            .map_err(|error| format!("could not persist server identity: {error}"))?;
+        identity.server_id
     };
-    write_json_atomically(&identity_path, &identity)
-        .map_err(|error| format!("could not persist server identity: {error}"))?;
 
     let catalog_path = data_dir.join(REPOSITORY_CATALOG_FILE);
     let mut repositories = read_json::<PersistedCatalogOwned>(&catalog_path)
@@ -3718,6 +3846,7 @@ fn configured_from_repository_info(
             path,
             root: root.clone(),
             is_worktree: is_linked_worktree(&root),
+            missing: None,
         },
         operation_path: root,
     }
@@ -3738,6 +3867,7 @@ fn upsert_catalog_entry(
         existing.summary.name = candidate.summary.name;
         existing.summary.root = candidate.summary.root;
         existing.summary.is_worktree = candidate.summary.is_worktree;
+        existing.summary.missing = candidate.summary.missing;
         existing.operation_path = candidate.operation_path;
         return changed;
     }
@@ -3978,6 +4108,15 @@ fn resolve_web_dir(config: &ServerConfig) -> Result<Option<PathBuf>, String> {
     Ok(None)
 }
 
+// New IDs are UUIDs. Earlier releases issued opaque gitgui-<pid>-<time> IDs;
+// retaining an existing identity preserves its registrations and credentials.
+fn is_valid_environment_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 256
+        && value.trim() == value
+        && !value.chars().any(char::is_control)
+}
+
 fn generate_environment_id() -> String {
     uuid::Uuid::new_v4().to_string()
 }
@@ -4076,6 +4215,7 @@ fn load_open_repository(
             path: canonicalize_path(&info.path),
             root: root.clone(),
             is_worktree: is_linked_worktree(&root),
+            missing: None,
         },
         operation_path: root,
     };
@@ -4114,6 +4254,7 @@ fn create_repository_at(
             path: root.clone(),
             root: root.clone(),
             is_worktree: is_linked_worktree(&root),
+            missing: None,
         },
         operation_path: root,
     };
@@ -4142,9 +4283,9 @@ fn load_graph(
 }
 
 fn load_status(repository: &ConfiguredRepository) -> Result<CoreRepositoryStatus, StatusLoadError> {
-    let info = resolve_repository(&repository.operation_path).map_err(|_| StatusLoadError::NotFound)?;
-    load_repository_status_from_root(&info.root)
-        .map_err(StatusLoadError::Git)
+    let info =
+        resolve_repository(&repository.operation_path).map_err(|_| StatusLoadError::NotFound)?;
+    load_repository_status_from_root(&info.root).map_err(StatusLoadError::Git)
 }
 
 fn protocol_snapshot(
@@ -4345,10 +4486,12 @@ fn native_patch_and_complete_content_survive_cache_and_wire_conversion() {
     assert!(serialized.get("omittedContent").is_none());
     let mut legacy = serialized;
     legacy.as_object_mut().unwrap().remove("patch");
-    assert!(serde_json::from_value::<ProtocolCommitFileDiff>(legacy)
-        .unwrap()
-        .patch
-        .is_none());
+    assert!(
+        serde_json::from_value::<ProtocolCommitFileDiff>(legacy)
+            .unwrap()
+            .patch
+            .is_none()
+    );
 }
 
 fn core_changed_file_to_commit_file(file: &CoreChangedFile) -> CoreCommitFile {
@@ -4515,7 +4658,9 @@ fn log_bind_address(local_addr: SocketAddr, config: &ServerConfig) {
         }
         warn!(address = %local_addr, "GitGui server is listening without authentication; loopback-only development mode is active");
     } else if !has_bootstrap_token(config) {
-        warn!("GitGui server is listening on loopback without authentication; use only for explicit local development");
+        warn!(
+            "GitGui server is listening on loopback without authentication; use only for explicit local development"
+        );
     }
     info!(address = %local_addr, "GitGui server listening");
 }
@@ -4582,6 +4727,78 @@ async fn shutdown_signal(state: Arc<ServerState>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn missing_auth_database_never_restarts_the_same_environment_anonymously() {
+        let root = tempfile::tempdir().unwrap();
+        let config = ServerConfig {
+            data_dir: Some(root.path().into()),
+            bootstrap_token: Some("isolated-bootstrap-fixture".into()),
+            ..ServerConfig::default()
+        };
+        let server = start(config.clone()).await.unwrap();
+        let environment_id = server.state.info.environment_id.clone();
+        server.shutdown().await.unwrap();
+        std::fs::remove_file(root.path().join("auth.sqlite3")).unwrap();
+        assert!(
+            start(ServerConfig {
+                bootstrap_token: None,
+                ..config
+            })
+            .await
+            .is_err()
+        );
+        let identity: PersistedServerIdentity =
+            serde_json::from_slice(&std::fs::read(root.path().join("server.json")).unwrap())
+                .unwrap();
+        assert_eq!(identity.server_id, environment_id);
+    }
+
+    #[tokio::test]
+    async fn legacy_identity_catalog_and_bearer_survive_authenticated_restart() {
+        let root = tempfile::tempdir().unwrap();
+        let environment_id = "gitgui-123456-1788413802919117400";
+        let identity = serde_json::to_vec(&PersistedServerIdentity {
+            schema_version: 1,
+            server_id: environment_id.into(),
+        })
+        .unwrap();
+        let catalog = serde_json::to_vec(&serde_json::json!({
+            "schema_version": 1,
+            "repositories": [{ "schema_version": 1, "id": "preserved-repository",
+                "path": root.path().to_str().unwrap(), "root": root.path().to_str().unwrap() }],
+        }))
+        .unwrap();
+        fs::write(root.path().join(SERVER_ID_FILE), &identity).unwrap();
+        fs::write(root.path().join(REPOSITORY_CATALOG_FILE), &catalog).unwrap();
+        let config = ServerConfig {
+            data_dir: Some(root.path().into()),
+            bootstrap_token: Some("isolated-bootstrap-fixture".into()),
+            ..ServerConfig::default()
+        };
+        let first = start(config.clone()).await.unwrap();
+        assert_eq!(first.state.info.environment_id, environment_id);
+        let token = first
+            .state
+            .auth
+            .exchange("isolated-bootstrap-fixture", None)
+            .await
+            .unwrap()
+            .access_token;
+        first.shutdown().await.unwrap();
+        let second = start(config).await.unwrap();
+        assert_eq!(second.state.info.environment_id, environment_id);
+        assert!(second.state.auth.session(&token).await.is_ok());
+        assert_eq!(
+            fs::read(root.path().join(SERVER_ID_FILE)).unwrap(),
+            identity
+        );
+        assert_eq!(
+            fs::read(root.path().join(REPOSITORY_CATALOG_FILE)).unwrap(),
+            catalog
+        );
+        second.shutdown().await.unwrap();
+    }
 
     async fn file_view_test_rpc(state: &ServerState, method: &str, params: Value) -> Value {
         match dispatch(

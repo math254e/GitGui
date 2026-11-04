@@ -26,6 +26,34 @@ class Backend implements EnvironmentCatalogBackend {
 }
 
 describe("platform connection persistence", () => {
+  it.effect("uses the atomic desktop save and leaves no credential after failed browser registration", () => Effect.gen(function* () {
+    const atomic = new Backend();
+    const writes: string[] = [];
+    const desktop: EnvironmentCatalogBackend = {
+      read: () => atomic.read(), write: () => { throw new Error("separate catalog write"); },
+      readCredential: (id) => atomic.readCredential(id),
+      writeCredential: () => { throw new Error("separate credential write"); },
+      removeCredential: (id) => atomic.removeCredential(id),
+      writeWithCredential: async (catalog, id, credential) => {
+        writes.push(id); atomic.catalog = catalog;
+        atomic.credentials.set(id, credential as BearerConnectionCredential);
+      },
+    };
+    yield* (yield* makeRegistrationStore(desktop)).register(direct, [direct.target]);
+    expect(writes).toEqual([environmentId]);
+    expect(atomic.catalog.environments).toHaveLength(1);
+    expect(atomic.credentials.get(environmentId)).toEqual(direct.credential);
+
+    const browser = new Backend();
+    const registrations = yield* makeRegistrationStore(browser);
+    browser.write = async () => { throw new Error("catalog full"); };
+    yield* registrations.register(direct, [direct.target]).pipe(Effect.flip);
+    expect(browser.credentials.size).toBe(0);
+    browser.credentials.set(environmentId, new BearerConnectionCredential({ token: "previous" }));
+    yield* registrations.register(direct, [direct.target]).pipe(Effect.flip);
+    expect(browser.credentials.get(environmentId)?.token).toBe("previous");
+  }));
+
   it.effect("keeps credentials out of records and restores class-backed targets and profiles", () => Effect.gen(function* () {
     const backend = new Backend();
     const registrations = yield* makeRegistrationStore(backend);

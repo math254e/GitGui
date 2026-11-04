@@ -6,9 +6,9 @@ import { InMemoryWorkspaceMetadataAdapter } from "./metadata";
 
 afterEach(() => vi.useRealTimers());
 
-async function fixture(environmentId = "one", watching = true) {
+async function fixture(environmentId = "one", watching = true, missing = false) {
   vi.useFakeTimers();
-  const repository: RepositorySummary = { id: "repo-one", name: "One", path: "/one", root: "/one", isWorktree: false };
+  const repository: RepositorySummary = { id: "repo-one", name: "One", path: "/one", root: "/one", isWorktree: false, ...(missing ? { missing: true } : {}) };
   const snapshot: RepositorySnapshot = {
     info: { path: "/one", root: "/one" },
     status: { currentBranch: "main", headOid: "a", ahead: 0, behind: 0, changedFiles: [] },
@@ -30,6 +30,7 @@ async function fixture(environmentId = "one", watching = true) {
   const workspace = new ClientWorkspace({ client: client as unknown as GitGuiClient, identity: { environmentId }, metadataAdapter: metadata });
   workspace.startUpdates();
   await workspace.restore();
+  if (missing) expect(client.refreshRepositories).not.toHaveBeenCalled();
   client.refreshRepositories.mockClear();
   return { workspace, client, snapshot, emit(kind: "status" | "snapshot", repositoryId = repository.id, paths?: string[]) {
     event?.({ type: "event", sequence: 1, event: "repository.changed", payload: { repositoryId, kind, ...(paths ? { paths } : {}) } });
@@ -37,6 +38,22 @@ async function fixture(environmentId = "one", watching = true) {
 }
 
 describe("repository invalidations", () => {
+  it("parks a missing open repository until the user explicitly retries it", async () => {
+    const f = await fixture("one", true, true);
+    expect(f.workspace.state.openRepositoryIds).toEqual(["repo-one"]);
+    expect(f.workspace.state.repositories["repo-one"].error?.message).toContain("missing");
+    f.emit("snapshot");
+    f.gap();
+    await vi.advanceTimersByTimeAsync(240_000);
+    expect(f.client.refreshRepositories).not.toHaveBeenCalled();
+    expect(f.client.getGitStatus).not.toHaveBeenCalled();
+    const restored = { ...f.workspace.state.repositories["repo-one"].repository, missing: undefined };
+    Object.assign(f.client, { getRepositorySnapshot: vi.fn(async () => ({ repository: restored, snapshot: f.snapshot })) });
+    await f.workspace.openKnownRepository("repo-one");
+    expect(f.workspace.state.repositories["repo-one"].repository.missing).toBeUndefined();
+    expect(f.workspace.state.repositories["repo-one"].error).toBeUndefined();
+    f.workspace.dispose();
+  });
   it("merges newer snapshot invalidations and paths while another repository's read is pending", async () => {
     const f = await fixture();
     const second = { ...f.workspace.state.repositories["repo-one"].repository, id: "repo-two", root: "/two", path: "/two" };

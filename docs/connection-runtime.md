@@ -185,7 +185,9 @@ model.
   can use the desktop's current bootstrap grant. Permission and transient
   failures do not trigger credential exchange.
 - SSH verifies the prepared environment identity, reuses a valid saved bearer,
-  and exchanges a new bootstrap grant only when necessary. Permission failures
+  and issues/exchanges a one-time OS-owner pairing grant only for a missing or
+  rejected bearer. Pairing is independent of launch and also works on reuse.
+  Its repository-management scope does not include access administration. Permission failures
   and transient failures remain classified for the supervisor. Disconnect uses
   the complete SSH target (host, user, port, and identity file), so cleanup
   reaches exactly the bridge that was prepared.
@@ -258,10 +260,59 @@ tests do not enforce browser CORS; the server regression test exercises renderer
 preflights for discovery, token exchange, and WebSocket tickets.
 
 SSH authentication cancellation/rejection and host-trust cancellation/rejection
-are blocked failures requiring external action. The platform recognizes the SSH
-manager's diagnostic messages preserved by Electron IPC; network failures remain
+are blocked failures requiring external action. The preload reconstructs typed
+categories from bounded IPC results; diagnostic text is not the classification
+contract. Network failures remain
 transient. Cancelling a prompt therefore does not start a repeated prompt loop.
 An explicit retry asks the supervisor to attempt the connection again.
+
+## Desktop-managed SSH acquisition
+
+The scoped SSH source set is pinned separately from the client runtime; see
+[source compatibility](ssh-source-compatibility.md), [host runner](ssh-host-runner.md)
+and [host authentication](ssh-auth.md). The Rust helper contract is private and
+versioned independently of Git RPC. Normal descriptor/auth/Git traffic continues
+directly over HTTP/WebSocket to the locally reserved loopback forward.
+
+The shared onboarding service verifies a temporary authenticated RPC welcome and
+initial info response before persistence. Electron atomically replaces the
+non-secret registration and its protected credential. New registrations are
+durably staged disabled, the host acquisition is claimed, the record is enabled,
+and ownership is handed off before the ordinary supervisor is published. This
+commit/activation boundary is masked against interruption. Failed claim leaves
+a disabled record that can be retried or removed, including after restart.
+
+The gateway installs a scope finalizer before its first IPC call, using a UUID
+reserved by the renderer. Interruption therefore cancels actual desktop work
+even if no launch result was received. Successful ownership handoff disarms the
+temporary scope. A replacement RPC connection claims and takes ownership before
+releasing the prior handle for that connection ID; a failed attempt preserves
+the old handle. This does not add a reconnect loop. The supervisor remains the
+only retry owner, and uncertain mutations are never replayed.
+
+Cancellation and explicit-disconnect IPC have a 20-second outer budget, enclosing the desktop's bounded
+host cleanup and local tunnel termination. Lost replies/rejections report
+`cleanup-pending`, and shared resources can report `retained`; settings display
+the outcome without claiming observed remote exit. Desktop journals retain the
+non-secret acquisition/instance/locator information needed for reconciliation.
+
+Saved SSH profiles retain an explicit canonical remote data-directory locator
+after identity validation. Old profiles use the exact legacy key only to locate
+their existing directory; conflicting identity or unverifiable old ownership
+blocks instead of launching against another catalog. New routes use the ordinary
+per-user environment, independently of SSH alias, port or identity-file changes.
+EnvironmentId and ConnectionId retain their existing meanings.
+
+Settings also exposes optional existing-directory recovery. It requires the
+saved environment ID before acquiring that directory, and carries the expected
+identity through onboarding so a mismatch fails before credential exchange.
+This selects existing state; it does not establish ownership of a pre-helper
+process whose ownership evidence is missing.
+
+Discovery/auth JSON is schema-decoded from a bounded 256 KiB stream; redirects
+are rejected, and deadlines include headers and body consumption. A descriptor
+and the saved expected identity must agree before any credential is sent or a
+new pairing grant is requested.
 
 For the primary restart regression, build the Rust binary and run:
 

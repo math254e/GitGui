@@ -33,6 +33,8 @@ import {
 export interface EnvironmentCatalogBackend {
   readonly read: () => Promise<Catalog>;
   readonly write: (catalog: Catalog) => Promise<void>;
+  /** Desktop commits this environment's record and protected credential atomically. */
+  readonly writeWithCredential?: (catalog: Catalog, environmentId: string, credential: ConnectionCredential) => Promise<void>;
   readonly readCredential: (environmentId: string) => Promise<ConnectionCredential | undefined>;
   readonly writeCredential: (
     environmentId: string,
@@ -76,14 +78,18 @@ const blocked = (cause: unknown) =>
 // All catalog writers share a lock: separate environment leases can update
 // the same document concurrently, including profiles learned by a supervisor.
 const catalogLocks = new WeakMap<EnvironmentCatalogBackend, Semaphore.Semaphore>();
-const updateCatalog = (backend: EnvironmentCatalogBackend, update: (catalog: Catalog) => Catalog) => {
+const updateCatalog = (
+  backend: EnvironmentCatalogBackend,
+  update: (catalog: Catalog) => Catalog,
+  persist: (catalog: Catalog) => Promise<void> = (catalog) => backend.write(catalog),
+) => {
   let lock = catalogLocks.get(backend);
   if (lock === undefined) {
     lock = Semaphore.makeUnsafe(1);
     catalogLocks.set(backend, lock);
   }
   return lock.withPermit(Effect.tryPromise(() => backend.read()).pipe(
-    Effect.flatMap((catalog) => Effect.tryPromise(() => backend.write(update(catalog)))),
+    Effect.flatMap((catalog) => Effect.tryPromise(() => persist(update(catalog)))),
   ));
 };
 
@@ -125,11 +131,9 @@ export const makeRegistrationStore = (backend: EnvironmentCatalogBackend) =>
     const register = (
       registration: ConnectionRegistration,
       routes: ReadonlyArray<PersistedConnectionTarget>,
+      options?: { readonly enabled: boolean },
     ) =>
-      Effect.tryPromise({
-        try: () => backend.writeCredential(registration.target.environmentId, registration.credential),
-        catch: (cause) => failure("register-connection", cause),
-      }).pipe(Effect.andThen(write((catalog) => {
+      updateCatalog(backend, (catalog) => {
         const environmentId = registration.target.environmentId;
         const previous = catalog.environments.find((environment) => environment.environmentId === environmentId);
         const profiles = (previous === undefined ? [] : storedProfiles(previous))
@@ -149,10 +153,27 @@ export const makeRegistrationStore = (backend: EnvironmentCatalogBackend) =>
             registration: savedRegistration,
             profiles: retainProfiles([...profiles, registration.profile], routes),
             routes: [...routes],
-            enabled: true,
+            enabled: options?.enabled ?? true,
           },
         ] };
-      })));
+      }, async (catalog) => {
+        const environmentId = registration.target.environmentId;
+        if (backend.writeWithCredential !== undefined) {
+          await backend.writeWithCredential(catalog, environmentId, registration.credential);
+          return;
+        }
+        const previous = await backend.readCredential(environmentId);
+        await backend.writeCredential(environmentId, registration.credential);
+        try {
+          await backend.write(catalog);
+        } catch (error) {
+          // Browser storage has no multi-key transaction. Restore the prior
+          // secret before reporting a failed registration; never publish it.
+          if (previous === undefined) await backend.removeCredential(environmentId);
+          else await backend.writeCredential(environmentId, previous);
+          throw error;
+        }
+      }).pipe(Effect.mapError((cause) => failure("register-connection", cause)));
 
     const setRoutes = (
       environmentId: EnvironmentId,

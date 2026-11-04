@@ -24,18 +24,23 @@ export class BackendManager {
 
   async getConnection(): Promise<DesktopPreparedConnection> {
     if (this.updateReserved) throw new Error("The local server is preparing for an app update.");
+    if (this.stopping) throw new Error("The local server is stopping.");
     if (this.running && this.running.child.exitCode === null) return this.running.connection;
     return (await this.ensureStarted()).connection;
   }
 
   async restart(): Promise<DesktopPreparedConnection> {
     if (this.updateReserved) throw new Error("The local server is preparing for an app update.");
+    if (this.stopping) throw new Error("The local server is stopping.");
     await this.shutdownCurrent();
     return (await this.ensureStarted()).connection;
   }
 
   async shutdown(): Promise<void> {
     this.stopping = true;
+    // A ready/descriptor result can arrive after quit was requested. Retain the
+    // startup promise until it publishes (or cleans up) its exact owned child.
+    try { await this.starting; } catch { /* Failed startup already owns cleanup. */ }
     await this.shutdownCurrent();
   }
 
@@ -66,8 +71,8 @@ export class BackendManager {
   }
 
   private async ensureStarted(): Promise<RunningBackend> {
+    if (this.stopping) throw new Error("The local server is stopping.");
     if (this.starting) return this.starting;
-    this.stopping = false;
     this.starting = this.startBackend();
     try {
       return await this.starting;

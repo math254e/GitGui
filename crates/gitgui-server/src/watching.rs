@@ -58,6 +58,7 @@ struct RepositoryWatch {
     pending: Arc<Mutex<Pending>>,
     retry_at: Instant,
     root: String,
+    missing: bool,
 }
 
 #[derive(Clone)]
@@ -133,6 +134,15 @@ fn normalize(path: &Path) -> PathBuf {
 impl RepositoryWatch {
     fn create(root: &str) -> Self {
         let pending = Arc::new(Mutex::new(Pending::default()));
+        if super::directory_missing(root) {
+            return Self {
+                _watcher: None,
+                pending,
+                retry_at: Instant::now(),
+                root: root.to_string(),
+                missing: true,
+            };
+        }
         let callback_pending = pending.clone();
         let result = Roots::discover(root).and_then(|roots| {
             let classify_roots = roots.clone();
@@ -221,6 +231,7 @@ impl RepositoryWatch {
             pending,
             retry_at: Instant::now() + Duration::from_secs(retry_delay),
             root: root.to_string(),
+            missing: false,
         }
     }
 }
@@ -259,14 +270,22 @@ pub(super) async fn run(state: Weak<ServerState>) {
             });
             for repository in repositories {
                 let replace = watches.get(&repository.summary.id).is_none_or(|watch| {
-                    Instant::now() >= watch.retry_at
-                        && (watch._watcher.is_none() || watch.pending.lock().unwrap().rebuild)
+                    watch.root != repository.operation_path
+                        || (watch.missing && repository.summary.missing != Some(true))
+                        || (!watch.missing && Instant::now() >= watch.retry_at
+                            && (watch._watcher.is_none() || watch.pending.lock().unwrap().rebuild))
                 });
                 if replace {
                     let root = repository.operation_path;
                     if let Ok(watch) =
                         tokio::task::spawn_blocking(move || RepositoryWatch::create(&root)).await
                     {
+                        if watch.missing {
+                            if let Some(current) = state.repositories.write().await.iter_mut()
+                                .find(|r| r.summary.id == repository.summary.id && r.operation_path == watch.root) {
+                                current.summary.missing = Some(true);
+                            }
+                        }
                         watches.insert(repository.summary.id, watch);
                     }
                 }
@@ -423,6 +442,56 @@ mod tests {
             RepositoryChangeKind::Snapshot
         );
         assert!(pending.take_ready().is_none());
+    }
+
+    #[tokio::test]
+    async fn missing_catalog_entry_stays_parked_until_explicit_catalog_recheck() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = repo(temp.path(), "missing");
+        let repository = load_open_repository(root.to_str().unwrap()).unwrap().0;
+        let id = repository.summary.id.clone();
+        let parked = temp.path().join("parked");
+        fs::rename(&root, &parked).unwrap();
+        let state = Arc::new(ServerState::new(
+            &ServerConfig::default(), "127.0.0.1:0".parse::<SocketAddr>().unwrap(), vec![repository],
+        ));
+        assert_eq!(state.repository_summaries().await[0].missing, Some(true));
+        let mut rx = state.repository_events.subscribe();
+        let task = tokio::spawn(run(Arc::downgrade(&state)));
+        assert!(tokio::time::timeout(Duration::from_millis(1400), rx.recv()).await.is_err());
+        fs::rename(&parked, &root).unwrap();
+        // Returning the directory does not cause background probing; listing it
+        // explicitly rechecks the path and allows the watcher to be restored.
+        assert!(tokio::time::timeout(Duration::from_millis(1400), rx.recv()).await.is_err());
+        assert_eq!(state.repository_summaries().await[0].missing, None);
+        change(&mut rx, &id, RepositoryChangeKind::Snapshot).await;
+        state.set_lifecycle(ServerLifecycle::Stopping).await;
+        task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn explicitly_opening_restored_repository_restarts_its_watch() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = repo(temp.path(), "restore");
+        let repository = load_open_repository(root.to_str().unwrap()).unwrap().0;
+        let id = repository.summary.id.clone();
+        let parked = temp.path().join("parked");
+        fs::rename(&root, &parked).unwrap();
+        let state = Arc::new(ServerState::new(
+            &ServerConfig::default(), "127.0.0.1:0".parse::<SocketAddr>().unwrap(), vec![repository],
+        ));
+        assert_eq!(state.repository_summaries().await[0].missing, Some(true));
+        let mut rx = state.repository_events.subscribe();
+        let task = tokio::spawn(run(Arc::downgrade(&state)));
+        assert!(tokio::time::timeout(Duration::from_millis(1400), rx.recv()).await.is_err());
+        fs::rename(&parked, &root).unwrap();
+        let result = super::super::repositories_get_snapshot("test".into(), serde_json::json!({ "repositoryId": id }), &state).await;
+        let result = serde_json::to_value(result).unwrap();
+        assert!(result.get("error").is_none() || result["error"].is_null(), "{result}");
+        assert_eq!(state.repository(&id).await.unwrap().summary.missing, None);
+        change(&mut rx, &id, RepositoryChangeKind::Snapshot).await;
+        state.set_lifecycle(ServerLifecycle::Stopping).await;
+        task.await.unwrap();
     }
 
     #[tokio::test]

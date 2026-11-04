@@ -9,9 +9,12 @@
  * - GitGui authenticates with bearer sessions only, so the DPoP branch of
  *   `PreparedHttpAuthorization` and `DPOP_ACCESS_TOKEN_REFRESH_SKEW_MS` are gone.
  * - `ConnectionFailureCause` keeps only the causes GitGui can name.
+ * - Prepared connections can finalize a provisional SSH acquisition after
+ *   RPC readiness, or cancel it if establishment fails.
  */
 import { EnvironmentId, type EnvironmentDescriptor } from "@gitgui/contracts/environment";
 import * as Schema from "effect/Schema";
+import type * as Effect from "effect/Effect";
 
 const ConnectionTargetBase = {
   environmentId: EnvironmentId,
@@ -139,6 +142,9 @@ export type PreparedHttpAuthorization = {
 };
 
 export interface PreparedConnection {
+  /** GitGui's provisional SSH acquisition is claimed only after live RPC. */
+  readonly onReady?: Effect.Effect<void, ConnectionAttemptError>;
+  readonly onFailure?: Effect.Effect<void>;
   readonly environmentId: EnvironmentId;
   readonly label: string;
   readonly httpBaseUrl: string;

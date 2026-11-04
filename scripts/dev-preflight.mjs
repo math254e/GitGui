@@ -29,6 +29,6 @@ export function assertDevBackendStopped(root, { platform = process.platform, run
   const pids = Array.isArray(parsed) ? parsed : [parsed];
   if (pids.some((pid) => !Number.isSafeInteger(pid) || pid <= 0)) throw new Error("Invalid desktop session process result.");
   if (pids.length) {
-    throw new Error(`GitGui is already running from this checkout (server PID ${pids.join(", ")}). Close the desktop app before rebuilding, then run npm run dev:desktop again.`);
+    throw new Error(`GitGui's development server is still running from this checkout (PID ${pids.join(", ")}). Close its desktop window or stop its launcher terminal before rebuilding, then run npm run dev:desktop again.`);
   }
 }

@@ -1,5 +1,5 @@
 use gitgui_server::{
-    local_control, run, run_with_control, ConfigError, ServerConfig, BOOTSTRAP_STDIN_ENV,
+    BOOTSTRAP_STDIN_ENV, ConfigError, ServerConfig, local_control, run, run_with_control,
 };
 use std::io::BufRead;
 use tracing_subscriber::EnvFilter;
@@ -8,7 +8,26 @@ const USAGE: &str = "Usage: gitgui-server [--bind <ip>] [--port <port>] [--data-
 
 #[tokio::main]
 async fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(String::as_str) == Some("ssh") {
+        let operation = if args.len() == 4 && args[3] == "--json" {
+            args[2].as_str()
+        } else {
+            "invalid"
+        };
+        if gitgui_server::ssh_host::command(operation).await.is_err() {
+            std::process::exit(1);
+        }
+        return;
+    }
+    if args.get(1).map(String::as_str) == Some("ssh-serve") {
+        if args.len() != 2 || gitgui_server::ssh_host::serve_child().await.is_err() {
+            std::process::exit(1);
+        }
+        return;
+    }
     tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
         .with_env_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
         )
