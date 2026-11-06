@@ -12,6 +12,7 @@
     commitsByHash?: ReadonlyMap<string, CommitInfo>;
     treeId: string;
     onSwitchWorktree?: (path: string) => void;
+    onOpenWorktreeInNewTab?: (path: string) => void;
     contextKey?: string | null;
     canRenameBranch?: boolean;
     canDeleteBranch?: boolean;
@@ -30,6 +31,7 @@
     commitsByHash = new Map<string, CommitInfo>(),
     treeId,
     onSwitchWorktree,
+    onOpenWorktreeInNewTab,
     contextKey = null,
     canRenameBranch = false,
     canDeleteBranch = false,
@@ -243,7 +245,7 @@
     const worktree = worktreeByPath.get(normalizePath(row.getAttribute("data-item-path") ?? ""));
     if (!worktree) return;
     const key = contextKey;
-    const menu = showContextMenu(worktreeMenuItems(worktree, { canRename: canRenameBranch, canRemove: canRemoveWorktree, canDeleteBranch }), position, contextMenuOwner, { width: 320 });
+    const menu = showContextMenu(worktreeMenuItems(worktree, { canRename: canRenameBranch, canRemove: canRemoveWorktree, canDeleteBranch, canOpenInNewTab: Boolean(onOpenWorktreeInNewTab) }), position, contextMenuOwner, { width: 320 });
     // Keep the menu target visible through refreshes and virtualized row replacements.
     const treePath = row.dataset.itemPath ?? "";
     const highlight = document.createElement("style");
@@ -256,6 +258,7 @@
     void menu.then((selected) => {
       highlight.remove();
       if (key !== contextKey) return;
+      if (selected === "open-in-new-tab") onOpenWorktreeInNewTab?.(worktree.path);
       if (selected === "rename") onRenameWorktreeBranch?.(worktree);
       if (selected === "remove-worktree") onRemoveWorktree?.(worktree, false);
       if (selected === "remove-worktree-branch") onRemoveWorktree?.(worktree, true);
@@ -270,6 +273,15 @@
   }
 
   function handleContextKey(event: KeyboardEvent) {
+    if ((event.key === "Enter" || event.key === " ") && !event.repeat && !event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey) {
+      const row = contextRow(event) ?? host?.shadowRoot?.querySelector<HTMLElement>('[data-item-focused="true"][data-item-type="file"]');
+      const worktree = row && worktreeByPath.get(normalizePath(row.getAttribute("data-item-path") ?? ""));
+      if (!worktree || !onSwitchWorktree) return;
+      event.preventDefault();
+      event.stopPropagation();
+      onSwitchWorktree(worktree.path);
+      return;
+    }
     if (event.key !== "ContextMenu" && event.key !== "Apps" && !(event.shiftKey && event.key === "F10")) return;
     const row = contextRow(event) ?? host?.querySelector<HTMLElement>('[data-item-focused="true"][data-item-type="file"]');
     if (!row) return;

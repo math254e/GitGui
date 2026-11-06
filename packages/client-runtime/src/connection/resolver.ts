@@ -13,6 +13,7 @@
  *   requests through a source-control host.
  * - SSH credential/profile persistence and claim follow live RPC readiness;
  *   failures cancel the provisional acquisition, preserving selected locators.
+ * - Bearer and SSH preparations retain authenticated session scopes.
  */
 import type {
   ClientConnectionMethod,
@@ -141,6 +142,7 @@ const makeBearerBroker = Effect.fn("clientRuntime.connection.broker.makeBearer")
       httpBaseUrl: authorized.httpBaseUrl,
       socketUrl: authorized.socketUrl,
       httpAuthorization: authorized.httpAuthorization,
+      sessionScopes: authorized.sessionScopes,
       target,
     } satisfies PreparedConnection;
   });
@@ -199,6 +201,7 @@ const makeSshBroker = Effect.fn("clientRuntime.connection.broker.makeSsh")(funct
       httpBaseUrl: authorized.httpBaseUrl,
       socketUrl: authorized.socketUrl,
       httpAuthorization: authorized.httpAuthorization,
+      sessionScopes: authorized.sessionScopes,
       target,
       onFailure: prepared.cancel ?? Effect.void,
       onReady: Effect.uninterruptibleMask((restore) => Effect.gen(function* () {

@@ -68,7 +68,7 @@
       "target": "packages/client-runtime/src/connection/model.ts",
       "mode": "adapted",
       "upstreamSha256": "ad14fb39a1487dc31fdcfe2ced2fbadce51e69785199d0a4fd55ee2eb20ad510",
-      "targetSha256": "9a18f34b1980d20c071b8671ae7cfa18764cb295da0f7d7b89b3a9587933f631"
+      "targetSha256": "b2945f9352d8895c55855433536fbd7e92eef428de863219fd9cc4cbd4148c4d"
     },
     {
       "upstream": "packages/client-runtime/src/connection/catalog.ts",
@@ -103,7 +103,7 @@
       "target": "packages/client-runtime/src/connection/resolver.ts",
       "mode": "adapted",
       "upstreamSha256": "97ed45571050907fe188d946da8e0610b6f314081d232c5649b02d49dffb7e6b",
-      "targetSha256": "dd257bc428494539bf8f05e60e4d0f34edbf8d510f0b2f1cd8e9d439d758abda"
+      "targetSha256": "19700f26e17fc34f96521d917d05eb8ef91557de8a2ed4075116d36d37808810"
     },
     {
       "upstream": "packages/client-runtime/src/connection/driver.ts",
@@ -124,7 +124,7 @@
       "target": "packages/client-runtime/src/connection/registry.ts",
       "mode": "adapted",
       "upstreamSha256": "3f04106c0b98736bcf448c8c2310bc8ea3938617d89da0f41fbafb82caae1a48",
-      "targetSha256": "6bf79c41cd34a490a6d60ad7d5ddac5c6cba4dfc42478b107684c719654678bf"
+      "targetSha256": "3502afc7393894a65fbb346c4c18ef145d49e3ed742825d1fdf5362c8e30ad9c"
     },
     {
       "upstream": "packages/client-runtime/src/connection/layer.ts",
@@ -145,14 +145,14 @@
       "target": "packages/client-runtime/src/rpc/session.ts",
       "mode": "adapted",
       "upstreamSha256": "e4ae1f02896adf7458ac19e7cd243979985da757b923d765656bc228ce0e9808",
-      "targetSha256": "438724f398459a78e1e2d99e8c3e03d733119119eb660ce0a1ca7934d6dc1f55"
+      "targetSha256": "5f44cdf62f3967b151488efbee8f6b58b3182e3935b96bb8bcf6324a4ed6672f"
     },
     {
       "upstream": "packages/client-runtime/src/rpc/client.ts",
       "target": "packages/client-runtime/src/rpc/client.ts",
       "mode": "adapted",
       "upstreamSha256": "fa7e606065b06f6f8d933bd3a561c1ee91fb7b93030777e9e0aa15f27358d1f7",
-      "targetSha256": "c978f7b293d0531bf6a5904d9b3729af0d61ed87bc586d51dfe4744cf25fec78"
+      "targetSha256": "6c8fb3db4e286b8f54dd16a9ba1b78b318037676d2b29f2bd848c368a78707a6"
     },
     {
       "upstream": "packages/client-runtime/src/rpc/http.ts",
@@ -201,7 +201,7 @@
       "target": "packages/client-runtime/src/authorization/service.ts",
       "mode": "adapted",
       "upstreamSha256": "685346c75408619107f4960d0fce78758490d547a5f1c10885796079b788d2a5",
-      "targetSha256": "9a0816e47ada7c8f2fc5e281d5f38d13faf12eb9432342e65b6ff17a91c49127"
+      "targetSha256": "b07449e97ba4d9a0e60d9da118dd9b3cdd0d82968ff6681787b331178ffe6d12"
     },
     {
       "upstream": "packages/client-runtime/src/platform/capabilities.ts",
@@ -215,7 +215,7 @@
       "target": "packages/client-runtime/src/platform/persistence.ts",
       "mode": "adapted",
       "upstreamSha256": "430344ddf397990710cf672455766e82e55b5e49fe6932bfc547a7fca9e72db1",
-      "targetSha256": "70f797ed4315bb83ea9b64c989300d43a34253d684d9712094647ef0f84b6149"
+      "targetSha256": "11d941edd5e056568e2d30a3991c6fb78d8cdc57b2712ec4d2faab29ce8928ee"
     },
     {
       "upstream": "packages/shared/src/hostClassification.ts",
@@ -246,5 +246,28 @@
       "packages/client-runtime/src/rpc/http.ts"
     ],
     "note": "Reviewed GitGui target hashes only. Original runtime commit and upstream hashes retained. That commit is absent from the local reference object database; a minimal fetch timed out. Full original-snapshot validation remains unavailable; SSH/onboarding use the separate validated 70cd258d source inventory."
+  },
+  "sessionScopeAdaptationReview": {
+    "date": "2026-11-05",
+    "inspectedReferenceCommit": "70cd258d8aac43ea57494527b00bf36de3efa6c0",
+    "recordedRuntimeSnapshotUnchanged": true,
+    "targets": [
+      "packages/client-runtime/src/authorization/service.ts",
+      "packages/client-runtime/src/connection/model.ts",
+      "packages/client-runtime/src/connection/resolver.ts",
+      "packages/client-runtime/src/rpc/client.ts",
+      "packages/client-runtime/src/rpc/session.ts"
+    ],
+    "note": "Reviewed GitGui target hashes for authenticated per-session scope propagation and catalog management guards. Original upstream snapshot and hashes retained; the current reference checkout is not the pinned runtime snapshot, so full original-snapshot validation remains unavailable."
+  },
+  "removalRecoveryAdaptationReview": {
+    "date": "2026-11-05",
+    "inspectedReferenceCommit": "70cd258d8aac43ea57494527b00bf36de3efa6c0",
+    "recordedRuntimeSnapshotUnchanged": true,
+    "targets": [
+      "packages/client-runtime/src/connection/registry.ts",
+      "packages/client-runtime/src/platform/persistence.ts"
+    ],
+    "note": "Reviewed target hashes for durable removal recovery under the environment lease, SSH release before owned-data cleanup, and partial-commit persistence semantics. Original upstream snapshot and hashes retained; full pinned-snapshot validation remains unavailable in the current reference checkout."
   }
 }

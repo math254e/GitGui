@@ -10,6 +10,9 @@
  *   bearer authorization path remains.
  * - The DPoP access token cache is replaced by a short-lived descriptor cache,
  *   which keeps the same shape as upstream.
+ * - Each bearer preparation reads the authenticated session and retains only
+ *   its granted scopes for the resulting RPC session (never a cached grant).
+ *   The scope read bypasses the browser's HTTP cache.
  */
 import {
   type ClientConnectionMethod,
@@ -22,8 +25,10 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 import * as HttpClient from "effect/http/HttpClient";
+import * as FetchHttpClient from "effect/http/FetchHttpClient";
 
 import {
+  fetchRemoteSessionState,
   resolveRemoteWebSocketConnectionUrl,
   type RemoteEnvironmentAuthError,
 } from "./remote.ts";
@@ -41,6 +46,7 @@ import { fetchRemoteEnvironmentDescriptor } from "../environment/descriptor.ts";
 import * as ClientCapabilities from "../platform/capabilities.ts";
 
 export interface AuthorizedRemoteEnvironment {
+  readonly sessionScopes?: readonly string[];
   readonly environmentId: EnvironmentId;
   readonly label: string;
   readonly httpBaseUrl: string;
@@ -137,6 +143,17 @@ export const make = Effect.gen(function* () {
       readonly connectionMethod: ClientConnectionMethod;
     }) {
       const descriptor = yield* verifyDirectEndpoint(input);
+      const session = yield* fetchRemoteSessionState({
+        httpBaseUrl: input.httpBaseUrl,
+        bearerToken: input.bearerToken,
+      }).pipe(
+        Effect.provideService(FetchHttpClient.RequestInit, { cache: "no-store" }),
+        Effect.mapError(mapRemoteEnvironmentError),
+        Effect.provideService(HttpClient.HttpClient, httpClient),
+      );
+      if (session.environmentId !== input.expectedEnvironmentId) {
+        return yield* environmentMismatchError({ expected: input.expectedEnvironmentId, actual: session.environmentId });
+      }
       const socketUrl = yield* resolveRemoteWebSocketConnectionUrl({
         wsBaseUrl: input.wsBaseUrl,
         httpBaseUrl: input.httpBaseUrl,
@@ -148,6 +165,7 @@ export const make = Effect.gen(function* () {
         Effect.provideService(HttpClient.HttpClient, httpClient),
       );
       return {
+        sessionScopes: Object.freeze([...session.scopes]),
         environmentId: descriptor.environmentId,
         label: descriptor.label,
         httpBaseUrl: input.httpBaseUrl,

@@ -13,9 +13,13 @@
   let connectionNotice = $state("");
   let connectionBusy = $state(false);
   let directUrl = $state("");
+  let directName = $state("");
   let directToken = $state("");
   let directCredentialKind = $state<"pairing" | "bearer">("pairing");
   let sshHost = $state("");
+  let sshName = $state("");
+  let editingEnvironmentId = $state<string | null>(null);
+  let editedName = $state("");
   let sshUser = $state("");
   let sshPort = $state("");
   let sshIdentityFile = $state("");
@@ -52,6 +56,7 @@
         directToken.trim()
           ? { kind: directCredentialKind, token: directToken.trim() }
           : undefined,
+        directName,
       );
       directToken = "";
       connectionNotice = "Environment connected and saved.";
@@ -85,6 +90,7 @@
         },
         sshToken.trim() ? { kind: "pairing", token: sshToken.trim() } : undefined,
         acquisition.signal,
+        sshName,
       );
       sshToken = "";
       connectionNotice = "SSH environment connected and saved.";
@@ -125,6 +131,19 @@
       connectionBusy = false;
     }
   }
+
+  async function saveEnvironmentName(environmentId: string) {
+    connectionBusy = true;
+    try {
+      await applicationRuntime.renameEnvironment(environmentId, editedName);
+      editingEnvironmentId = null;
+      connectionNotice = "Environment name saved on this client.";
+    } catch (error) {
+      connectionNotice = error instanceof Error ? error.message : "The name could not be saved.";
+    } finally {
+      connectionBusy = false;
+    }
+  }
 </script>
 
             <div class="divide-y divide-[var(--app-theme-border-subtle)]">
@@ -149,6 +168,7 @@
                 <div class="mb-5">
                   <h3 id="connections-environments" class="text-sm font-semibold text-[var(--app-theme-text)]">Environments</h3>
                   <p class="mt-1 text-sm text-[var(--app-theme-text-subtle)]">Each environment is one independent GitGui backend and repository catalog.</p>
+                  <p class="mt-1 text-xs text-[var(--app-theme-text-subtle)]">Choose a name when connecting, or rename an environment here. Names are saved on this client.</p>
                 </div>
                 <div class="divide-y divide-[var(--app-theme-border-subtle)] border-y border-[var(--app-theme-border-subtle)]">
                   {#each runtimeState.registry.entries as entry (entry.registration.environmentId)}
@@ -159,16 +179,28 @@
                           aria-hidden="true"
                         ></span>
                         <div class="min-w-0">
-                          <p class="truncate text-sm font-semibold text-[var(--app-theme-text-secondary)]">{entry.registration.displayName}</p>
+                          {#if editingEnvironmentId === entry.registration.environmentId}
+                            <form class="flex flex-wrap items-center gap-2" onsubmit={(event) => { event.preventDefault(); void saveEnvironmentName(entry.registration.environmentId); }}>
+                              <label class="block">
+                                <span class="sr-only">Environment name</span>
+                                <input bind:value={editedName} required maxlength="512" disabled={connectionBusy} class="h-8 rounded-md border border-[var(--app-theme-border)] bg-[var(--app-theme-input)] px-2 text-sm outline-none" />
+                              </label>
+                              <button type="submit" disabled={connectionBusy || !editedName.trim()} class="h-8 rounded-md border border-[var(--app-theme-border)] px-3 text-xs disabled:opacity-50">Save name</button>
+                              <button type="button" disabled={connectionBusy} onclick={() => editingEnvironmentId = null} class="h-8 px-2 text-xs">Cancel</button>
+                            </form>
+                          {:else}
+                            <p class="truncate text-sm font-semibold text-[var(--app-theme-text-secondary)]">{entry.registration.displayName}</p>
+                          {/if}
                           <p class="mt-1 truncate text-xs text-[var(--app-theme-text-subtle)]">
                             {entry.registration.target.kind} · {entry.connection.phase} · {entry.registration.environmentId}
                           </p>
                         </div>
                       </div>
                       <div class="flex items-center gap-2">
-                        {#if runtimeState.registry.selectedEnvironmentId !== entry.registration.environmentId}
+                        <button type="button" disabled={connectionBusy} onclick={() => { editingEnvironmentId = entry.registration.environmentId; editedName = entry.registration.displayName; }} aria-label={`Rename ${entry.registration.displayName}`} class="inline-flex h-8 items-center rounded-md border border-[var(--app-theme-border)] px-3 text-xs font-semibold text-[var(--app-theme-text-muted)] disabled:opacity-50">Rename</button>
+                        {#if applicationRuntime.tabOwnership !== "external" && runtimeState.registry.selectedEnvironmentId !== entry.registration.environmentId}
                           <button type="button" disabled={connectionBusy} onclick={() => applicationRuntime.selectEnvironment(entry.registration.environmentId)} class="inline-flex h-8 items-center rounded-md border border-[var(--app-theme-border)] bg-[var(--app-theme-surface-raised)] px-3 text-xs font-semibold text-[var(--app-theme-text-muted)] disabled:opacity-50">Use</button>
-                        {:else}
+                        {:else if applicationRuntime.tabOwnership !== "external"}
                           <span class="px-2 text-xs font-semibold text-[var(--app-theme-accent)]">Active</span>
                         {/if}
                         {#if entry.connection.phase === "blocked" || entry.connection.phase === "offline" || entry.connection.phase === "available"}
@@ -191,6 +223,10 @@
                   <p class="mt-1 text-sm text-[var(--app-theme-text-subtle)]">Connect directly over HTTP/WebSocket. Tailscale endpoints use this same connection type.</p>
                 </div>
                 <div class="grid max-w-[720px] gap-3 md:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+                  <label class="block md:col-span-2">
+                    <span class="mb-1 block text-xs font-semibold text-[var(--app-theme-text-subtle)]">Environment name</span>
+                    <input bind:value={directName} maxlength="512" placeholder="Defaults to the server's host name" class="h-9 w-full rounded-md border border-[var(--app-theme-border)] bg-[var(--app-theme-input)] px-3 text-sm outline-none" />
+                  </label>
                   <label class="block md:col-span-2">
                     <span class="mb-1 block text-xs font-semibold text-[var(--app-theme-text-subtle)]">Backend URL</span>
                     <input bind:value={directUrl} placeholder="https://git.example.com" class="h-9 w-full rounded-md border border-[var(--app-theme-border)] bg-[var(--app-theme-input)] px-3 text-sm outline-none" />
@@ -217,6 +253,7 @@
                     <p class="mt-1 text-sm text-[var(--app-theme-text-subtle)]">Electron starts or restores the remote backend and gives the normal client runtime a forwarded endpoint.</p>
                   </div>
                   <div class="grid max-w-[720px] gap-3 md:grid-cols-2">
+                    <label class="block md:col-span-2"><span class="mb-1 block text-xs font-semibold text-[var(--app-theme-text-subtle)]">Environment name</span><input bind:value={sshName} maxlength="512" placeholder="Defaults to the remote host name" class="h-9 w-full rounded-md border border-[var(--app-theme-border)] bg-[var(--app-theme-input)] px-3 text-sm outline-none" /></label>
                     {#if discoveredSshHosts.length > 0}
                       <label class="block md:col-span-2">
                         <span class="mb-1 block text-xs font-semibold text-[var(--app-theme-text-subtle)]">Discovered host</span>
@@ -262,7 +299,7 @@
                 </div>
               </section>
 
-              {#if connectionNotice}
-                <p class="flex items-start gap-2 py-6 text-xs leading-5 text-[var(--app-theme-text-subtle)]"><Info aria-hidden="true" class="mt-0.5 shrink-0" size={14} />{connectionNotice}</p>
-              {/if}
+              <p role="status" aria-live="polite" class={`flex items-start gap-2 text-xs leading-5 text-[var(--app-theme-text-subtle)] ${connectionNotice ? "py-6" : ""}`}>
+                {#if connectionNotice}<Info aria-hidden="true" class="mt-0.5 shrink-0" size={14} />{connectionNotice}{/if}
+              </p>
             </div>

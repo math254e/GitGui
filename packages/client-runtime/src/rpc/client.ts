@@ -10,8 +10,8 @@
  *   is method-addressed, so the client exposes one `request` and one
  *   `subscribeEvents` instead of a tag union. The method, its payload, and
  *   its result are still typed, through the generated contract.
- * - The client-side `RpcPermissionGuard` is gone: GitGui's scopes are decided
- *   by the server, and the client has no privileged command boundary.
+ * - GitGui guards catalog Open/Create/Remove with the authenticated session's
+ *   repository:manage scope at execution time. The server remains authoritative.
  */
 import type { OrderedEventEnvelope } from "@gitgui/contracts";
 import * as Context from "effect/Context";
@@ -108,6 +108,16 @@ export const request = <K extends GitGuiRpcMethod>(
       "rpc.method": method,
     });
     const session = yield* currentSession();
+    if (method === "repositories.open" || method === "repositories.create" || method === "repositories.remove") {
+      if (!session.sessionScopes?.includes("repository:manage")) {
+        return yield* new GitGuiRpcError({
+          code: "permission_denied",
+          message: session.sessionScopes === undefined
+            ? "Session authorization is unavailable. Reconnect before managing repositories."
+            : "This session does not grant repository:manage permission.",
+        });
+      }
+    }
     const observer = yield* EnvironmentRpcRequestObserver;
     const completeObservation = yield* observer.observe({
       environmentId: supervisor.target.environmentId,

@@ -7,4 +7,7 @@ description = "Browser-friendly wire contracts for the GitGui server"
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-ts-rs = { version = "12.0.1", features = ["serde-json-impl"] }
+# Serde's deny_unknown_fields is runtime validation, not a TypeScript shape.
+# ts-rs cannot express it on tagged enums; keep the Serde check and exercise it
+# in protocol tests rather than emitting its non-actionable macro warning.
+ts-rs = { version = "12.0.1", features = ["serde-json-impl", "no-serde-warnings"] }

@@ -26,7 +26,9 @@
     "./connection/onboarding": "./src/connection/onboarding.ts",
     "./connection/supervisor": "./src/connection/supervisor.ts",
     "./rpc/session": "./src/rpc/session.ts",
-    "./environment/descriptor": "./src/environment/descriptor.ts"
+    "./environment/descriptor": "./src/environment/descriptor.ts",
+    "./environment/names": "./src/environment/names.ts",
+    "./workspace": "./src/workspace/index.ts"
   },
   "dependencies": {
     "@gitgui/contracts": "0.1.0",

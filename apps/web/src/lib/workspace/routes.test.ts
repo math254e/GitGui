@@ -3,7 +3,12 @@ import {
   isSettingsRouteId,
   repositoryIdFromParam,
   repositoryPath,
+  scopedRepositoryPath,
   settingsPath,
+  repositoryRouteFromParams,
+  isRepositoryRouteId,
+  REPOSITORY_ROUTE_ID,
+  SCOPED_REPOSITORY_ROUTE_ID,
 } from "./routes";
 
 describe("route paths", () => {
@@ -13,12 +18,27 @@ describe("route paths", () => {
 
   it("escapes identifiers that would otherwise change the path", () => {
     expect(repositoryPath("repo/../settings")).toBe("/repo/repo%2F..%2Fsettings");
+    expect(scopedRepositoryPath("host/one", "repo/../settings")).toBe("/repo/host%2Fone/repo%2F..%2Fsettings");
   });
 
   it("builds settings paths from a section name", () => {
     expect(settingsPath("general")).toBe("/settings/general");
     expect(settingsPath("appearance")).toBe("/settings/appearance");
     expect(settingsPath("connections")).toBe("/settings/connections");
+  });
+
+  it("recognizes and decodes the mounted route IDs without selected-environment inference", () => {
+    expect(isRepositoryRouteId(REPOSITORY_ROUTE_ID)).toBe(true);
+    expect(isRepositoryRouteId(SCOPED_REPOSITORY_ROUTE_ID)).toBe(true);
+    expect(isRepositoryRouteId("/")).toBe(false);
+    expect(isRepositoryRouteId(null)).toBe(false);
+    expect(repositoryRouteFromParams(REPOSITORY_ROUTE_ID, { repositoryId: "same", environmentId: "ignored" }))
+      .toEqual({ kind: "legacy", repositoryId: "same" });
+    expect(repositoryRouteFromParams(SCOPED_REPOSITORY_ROUTE_ID, { environmentId: "host/one", repositoryId: "repo%two" }))
+      .toEqual({ kind: "scoped", target: { environmentId: "host/one", repositoryId: "repo%two" } });
+    expect(repositoryRouteFromParams(SCOPED_REPOSITORY_ROUTE_ID, { repositoryId: "same" })).toBeNull();
+    expect(repositoryRouteFromParams(SCOPED_REPOSITORY_ROUTE_ID, { environmentId: "host" })).toBeNull();
+    expect(repositoryRouteFromParams("/settings", { repositoryId: "same" })).toBeNull();
   });
 
   it("recognizes every settings route", () => {

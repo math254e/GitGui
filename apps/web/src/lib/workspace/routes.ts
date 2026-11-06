@@ -12,6 +12,29 @@ export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
 
 /** The route id SvelteKit reports for the repository workspace. */
 export const REPOSITORY_ROUTE_ID = "/repo/[repositoryId]";
+export const SCOPED_REPOSITORY_ROUTE_ID = "/repo/(scoped)/[environmentId]/[repositoryId]";
+
+export type RepositoryRouteRequest =
+  | { readonly kind: "legacy"; readonly repositoryId: string }
+  | { readonly kind: "scoped"; readonly target: { readonly environmentId: string; readonly repositoryId: string } };
+
+export function isRepositoryRouteId(routeId: string | null): boolean {
+  return routeId === REPOSITORY_ROUTE_ID || routeId === SCOPED_REPOSITORY_ROUTE_ID;
+}
+
+/** SvelteKit has already decoded params. Never infer an environment from selection. */
+export function repositoryRouteFromParams(
+  routeId: string | null,
+  params: { readonly repositoryId?: string; readonly environmentId?: string },
+): RepositoryRouteRequest | null {
+  const repositoryId = repositoryIdFromParam(params.repositoryId);
+  if (!repositoryId) return null;
+  if (routeId === REPOSITORY_ROUTE_ID) return { kind: "legacy", repositoryId };
+  const environmentId = repositoryIdFromParam(params.environmentId);
+  return routeId === SCOPED_REPOSITORY_ROUTE_ID && environmentId
+    ? { kind: "scoped", target: { environmentId, repositoryId } }
+    : null;
+}
 
 /** The route id SvelteKit reports for the repositories home page. */
 export const HOME_ROUTE_ID = "/";
@@ -24,6 +47,11 @@ export const SETTINGS_ROUTE_PREFIX = "/settings";
 
 export function repositoryPath(repositoryId: string): string {
   return `/repo/${encodeURIComponent(repositoryId)}`;
+}
+
+/** Canonical repository URL. The route group is absent from the public path. */
+export function scopedRepositoryPath(environmentId: string, repositoryId: string): string {
+  return `/repo/${encodeURIComponent(environmentId)}/${encodeURIComponent(repositoryId)}`;
 }
 
 export function settingsPath(section: SettingsSection): string {

@@ -5,8 +5,10 @@
  * live Rust RPC preflight and disabled durable staging before host claim.
  * The acquisition finalizer spans all these stages, including persistence.
  * Existing-directory recovery pins the expected identity before authentication.
+ * Optional labels follow T3 onboarding; legacy defaults use the remote host.
  */
 import type { EnvironmentId, SshEnvironmentTarget } from "@gitgui/contracts/environment";
+import { defaultEnvironmentName, environmentName } from "../environment/names.ts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -21,6 +23,7 @@ import { protocolCompatibilityError } from "./compatibility.ts";
 
 export interface SshConnectionInput {
   readonly target: SshEnvironmentTarget;
+  readonly label?: string;
   readonly expectedEnvironmentId?: EnvironmentId;
   readonly credential?: { readonly kind: string; readonly token: string };
 }
@@ -36,6 +39,10 @@ export const make = Effect.gen(function* () {
   const registry = yield* EnvironmentRegistry;
 
   const registerSsh = (input: SshConnectionInput) => Effect.scoped(Effect.gen(function* () {
+    const chosenLabel = yield* Effect.try({
+      try: () => input.label?.trim() ? environmentName(input.label) : undefined,
+      catch: () => new ConnectionBlockedError({ reason: "configuration", detail: "Enter a valid environment name." }),
+    });
     if (gateway.provision === undefined) {
       return yield* new ConnectionBlockedError({ reason: "unsupported", detail: "Recoverable SSH onboarding is unavailable." });
     }
@@ -52,7 +59,8 @@ export const make = Effect.gen(function* () {
     const incompatible = protocolCompatibilityError(descriptor);
     if (incompatible !== null) return yield* incompatible;
     const connectionId = `ssh:${crypto.randomUUID()}`;
-    const target = new SshConnectionTarget({ environmentId: descriptor.environmentId, label: descriptor.label, connectionId });
+    const label = chosenLabel ?? defaultEnvironmentName(descriptor.label, input.target.alias || input.target.hostname);
+    const target = new SshConnectionTarget({ environmentId: descriptor.environmentId, label, connectionId });
     const authorized = yield* authorization.authorizeBearer({
       expectedEnvironmentId: descriptor.environmentId,
       httpBaseUrl: acquisition.bootstrap.httpBaseUrl,
@@ -69,7 +77,7 @@ export const make = Effect.gen(function* () {
     const registration = new SshConnectionRegistration({
       target,
       profile: new SshConnectionProfile({ connectionId, environmentId: descriptor.environmentId,
-        label: descriptor.label, target: acquisition.target ?? input.target }),
+        label, target: acquisition.target ?? input.target }),
       credential: new BearerConnectionCredential({ token: acquisition.bearerToken }),
     });
     const registered = yield* registry.register(registration, {

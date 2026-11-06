@@ -1,4 +1,5 @@
 export * from "@gitgui/client-runtime";
+export { ApplicationWorkspaceMetadataAdapter, createApplicationWorkspaceCoordinator } from "./application-workspace-metadata";
 export {
   ClientWorkspace,
   type ClientWorkspaceOptions,

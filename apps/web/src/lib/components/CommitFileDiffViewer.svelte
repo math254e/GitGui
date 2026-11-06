@@ -31,6 +31,7 @@
 
   type Props = {
     client: GitGuiClient;
+    environmentGeneration?: number;
     repositoryId: string;
     snapshot: RepositorySnapshot;
     diffSource: DiffSource;
@@ -43,7 +44,7 @@
     pending?: boolean;
   };
 
-  let { client, repositoryId, snapshot, diffSource, selectedCommit, selectedStash = null, selectedFile, contentRevision = 0, onClose, onApplyHunks, pending = false }: Props = $props();
+  let { client, environmentGeneration = 0, repositoryId, snapshot, diffSource, selectedCommit, selectedStash = null, selectedFile, contentRevision = 0, onClose, onApplyHunks, pending = false }: Props = $props();
   const viewerId = $props.id();
   let releaseRendererResources: (() => void) | undefined;
   let viewerContainer: HTMLDivElement;
@@ -78,7 +79,7 @@
   let activeDiffRequestKey = "";
   let activeDiffClient: GitGuiClient | null = null;
   let destroyed = false;
-  const diffRequestKey = $derived(buildFileDiffRequestKey(repositoryId, snapshot, diffSource, selectedCommit, selectedFile, contentRevision, selectedStash, client.serverWelcome.environment_id));
+  const diffRequestKey = $derived(`${environmentGeneration}\0${buildFileDiffRequestKey(repositoryId, snapshot, diffSource, selectedCommit, selectedFile, contentRevision, selectedStash, client.serverWelcome.environment_id)}`);
   const noContentChanges = $derived(diff !== null && diff.originalContent === diff.modifiedContent);
   const showingDeletedFile = $derived(statusLabel(selectedFile) === "D");
   const displayedFileIsEmpty = $derived(diff !== null &&
@@ -225,8 +226,9 @@
     selectionController?.abort();
     selectionController = new AbortController();
     const signal = selectionController.signal;
-    const requestKey = buildFileDiffRequestKey(repositoryId, currentSnapshot, source, commit, file, contentRevision, selectedStash, client.serverWelcome.environment_id);
-    const selectionKey = buildFileDiffSelectionKey(repositoryId, source, commit, file, selectedStash, client.serverWelcome.environment_id);
+    const requestKey = `${environmentGeneration}\0${buildFileDiffRequestKey(repositoryId, currentSnapshot, source, commit, file, contentRevision, selectedStash, client.serverWelcome.environment_id)}`;
+    // Reviews belong to the session that issued them, even for identical text.
+    const selectionKey = `${environmentGeneration}\0${buildFileDiffSelectionKey(repositoryId, source, commit, file, selectedStash, client.serverWelcome.environment_id)}`;
     if (selectionKey !== activeSelectionKey) {
       activeSelectionKey = selectionKey;
       activeSelection += 1;

@@ -38,6 +38,31 @@ async function fixture(environmentId = "one", watching = true, missing = false) 
 }
 
 describe("repository invalidations", () => {
+  it("opens another worktree in a new tab and rejects its canonical alias", async () => {
+    const f = await fixture();
+    const first = f.workspace.state.repositories["repo-one"].repository;
+    const second = { ...first, id: "repo-two", root: "/two", path: "/two", isWorktree: true };
+    Object.assign(f.client, { openRepository: vi.fn(async () => ({ repository: second, snapshot: f.snapshot })) });
+    await f.workspace.openRepositoryPathInNewTab("/two");
+    await expect(f.workspace.openRepositoryPathInNewTab("/alias-for-two")).rejects.toThrow("already open");
+    expect(f.workspace.state.openRepositoryIds).toEqual(["repo-one", "repo-two"]);
+    expect(f.workspace.state.activeRepositoryId).toBe("repo-two");
+    f.workspace.dispose();
+  });
+  it("does not collapse open tabs when switching to an already open worktree", async () => {
+    const f = await fixture();
+    const first = f.workspace.state.repositories["repo-one"].repository;
+    const second = { ...first, id: "repo-two", root: "/two", path: "/two", isWorktree: true };
+    Object.assign(f.client, {
+      getRepositorySnapshot: vi.fn(async () => ({ repository: second, snapshot: f.snapshot })),
+      openRepository: vi.fn(async () => ({ repository: second, snapshot: f.snapshot })),
+    });
+    await f.workspace.openKnownRepository("repo-two");
+    await expect(f.workspace.switchRepositoryPath("/two", "repo-one")).rejects.toThrow("already open");
+    expect(f.workspace.state.openRepositoryIds).toEqual(["repo-one", "repo-two"]);
+    expect(f.workspace.state.activeRepositoryId).toBe("repo-two");
+    f.workspace.dispose();
+  });
   it("parks a missing open repository until the user explicitly retries it", async () => {
     const f = await fixture("one", true, true);
     expect(f.workspace.state.openRepositoryIds).toEqual(["repo-one"]);
@@ -71,7 +96,7 @@ describe("repository invalidations", () => {
     await vi.advanceTimersByTimeAsync(0);
     f.workspace.reconcileDiscard(checkpoint, [], []);
     await vi.advanceTimersByTimeAsync(100);
-    expect(f.client.refreshRepositories).toHaveBeenCalledExactlyOnceWith(["repo-two"]);
+    expect(f.client.refreshRepositories).toHaveBeenCalledExactlyOnceWith(["repo-two"], expect.any(AbortSignal));
     expect(f.workspace.state.fileContentRevisions["repo-two"]).toEqual({ old: 1, new: 1 });
     f.workspace.dispose();
   });

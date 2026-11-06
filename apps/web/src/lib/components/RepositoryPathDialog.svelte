@@ -6,6 +6,10 @@
     value: string;
     error?: string;
     loading?: boolean;
+    allowCancelWhileLoading?: boolean;
+    canOpen?: boolean;
+    unavailableReason?: string;
+    environmentLabel?: string;
     onValueChange: (value: string) => void;
     onSubmit: () => void | Promise<void>;
     onCancel: () => void;
@@ -16,6 +20,10 @@
     value,
     error = "",
     loading = false,
+    allowCancelWhileLoading = false,
+    canOpen = false,
+    unavailableReason = "Session authorization is unavailable.",
+    environmentLabel = "",
     onValueChange,
     onSubmit,
     onCancel,
@@ -30,7 +38,7 @@
   });
 
   function cancel() {
-    if (!loading) {
+    if (!loading || allowCancelWhileLoading) {
       onCancel();
     }
   }
@@ -50,7 +58,7 @@
 
   function submit(event: SubmitEvent) {
     event.preventDefault();
-    void onSubmit();
+    if (canOpen && !loading) void onSubmit();
   }
 </script>
 
@@ -76,14 +84,14 @@
             <h2 id="repository-path-title" class="text-lg font-semibold text-[var(--app-theme-text)]">
               Open repository on this host
             </h2>
-            <p class="mt-0.5 text-sm text-[var(--app-theme-text-muted)]">Enter a path that exists on the connected GitGui server.</p>
+            <p class="mt-0.5 text-sm text-[var(--app-theme-text-muted)]">{environmentLabel ? `Enter a path on ${environmentLabel}.` : "Enter a path that exists on the connected GitGui server."}</p>
           </div>
         </div>
         <button
           class="grid h-8 w-8 shrink-0 place-items-center rounded text-[var(--app-theme-text-muted)] transition hover:bg-[var(--app-theme-sidebar-row-hover)] hover:text-[var(--app-theme-text)] disabled:opacity-50"
           type="button"
           aria-label="Close repository path dialog"
-          disabled={loading}
+          disabled={loading && !allowCancelWhileLoading}
           onclick={cancel}
         >
           <X aria-hidden="true" size={18} />
@@ -91,6 +99,7 @@
       </header>
 
       <form class="px-5 py-5" onsubmit={submit}>
+        {#if !canOpen}<p class="mb-3 text-sm text-[var(--app-theme-text-muted)]" role="status">{unavailableReason}</p>{/if}
         <label class="block text-sm font-medium text-[var(--app-theme-text-secondary)]" for="repository-server-path">
           Repository path
         </label>
@@ -117,7 +126,7 @@
           <button
             class="h-9 rounded-md border border-[var(--app-theme-border)] bg-[var(--app-theme-surface-raised)] px-4 text-sm font-medium text-[var(--app-theme-text-secondary)] transition hover:bg-[var(--app-theme-canvas)] disabled:cursor-not-allowed disabled:opacity-50"
             type="button"
-            disabled={loading}
+            disabled={loading && !allowCancelWhileLoading}
             onclick={cancel}
           >
             Cancel
@@ -125,7 +134,7 @@
           <button
             class="h-9 rounded-md border border-[var(--app-theme-accent-hover)] bg-[var(--app-theme-accent)] px-4 text-sm font-semibold text-[var(--app-theme-accent-foreground)] transition hover:bg-[var(--app-theme-accent-hover)] disabled:cursor-not-allowed disabled:opacity-50"
             type="submit"
-            disabled={loading || !value.trim()}
+            disabled={loading || !canOpen || !value.trim()}
           >
             {loading ? "Opening…" : "Open repository"}
           </button>

@@ -5,7 +5,9 @@
 //! operations; repository paths never cross the wire after catalog lookup.
 
 mod auth;
+mod environment_label;
 pub mod local_control;
+mod repository_metadata;
 mod rpc_queue;
 #[cfg(test)]
 mod rpc_tests;
@@ -1483,7 +1485,7 @@ async fn repositories_get_snapshot(
         return ResponseEnvelope::error(request_id, error);
     }
     let cache_generation = state.stash_cache.generation();
-    let Some(repository) = state.repository(&params.repository_id).await else {
+    let Some(repository) = state.repository_with_metadata(&params.repository_id).await else {
         return repository_not_configured(request_id, &params.repository_id);
     };
     let mut repository_summary = repository.summary.clone();
@@ -1544,7 +1546,7 @@ async fn repositories_get_graph(
         );
     }
 
-    let Some(repository) = state.repository(&params.repository_id).await else {
+    let Some(repository) = state.repository_with_metadata(&params.repository_id).await else {
         return repository_not_configured(request_id, &params.repository_id);
     };
     let repository_summary = repository.summary.clone();
@@ -1598,7 +1600,7 @@ async fn repositories_refresh(
         }
 
         let cache_generation = state.stash_cache.generation();
-        let Some(repository) = state.repository(&repository_id).await else {
+        let Some(repository) = state.repository_with_metadata(&repository_id).await else {
             repositories.push(RepositoryRefreshItem {
                 repository_id: repository_id.clone(),
                 repository: None,
@@ -1661,7 +1663,7 @@ async fn git_status(request_id: String, params: Value, state: &ServerState) -> R
     if let Err(error) = validate_repository_id(&params.repository_id) {
         return ResponseEnvelope::error(request_id, error);
     }
-    let Some(repository) = state.repository(&params.repository_id).await else {
+    let Some(repository) = state.repository_with_metadata(&params.repository_id).await else {
         return repository_not_configured(request_id, &params.repository_id);
     };
     let repository_summary = repository.summary.clone();
@@ -3329,6 +3331,7 @@ struct ServerState {
     lifecycle: RwLock<ServerLifecycle>,
     repositories: RwLock<Vec<ConfiguredRepository>>,
     catalog_mutation: Mutex<()>,
+    metadata_slots: Arc<tokio::sync::Semaphore>,
     git_mutation_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
     stash_mutation_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
     repository_events: broadcast::Sender<gitgui_protocol::OrderedEventEnvelope>,
@@ -3347,6 +3350,7 @@ struct ServerState {
 struct ConfiguredRepository {
     summary: RepositorySummary,
     operation_path: String,
+    metadata: Arc<Mutex<repository_metadata::Cached>>,
 }
 
 // Do not label inaccessible directories as missing: a permission or I/O error
@@ -3451,6 +3455,9 @@ impl ServerState {
             lifecycle: RwLock::new(ServerLifecycle::Ready),
             repositories: RwLock::new(repositories),
             catalog_mutation: Mutex::new(()),
+            metadata_slots: Arc::new(tokio::sync::Semaphore::new(
+                repository_metadata::CONCURRENCY,
+            )),
             git_mutation_locks: Mutex::new(HashMap::new()),
             stash_mutation_locks: Mutex::new(HashMap::new()),
             repository_events: broadcast::channel(256).0,
@@ -3485,7 +3492,7 @@ impl ServerState {
         EnvironmentDescriptor {
             schema_version: 1,
             environment_id: self.info.environment_id.clone(),
-            label: environment_label(),
+            label: environment_label::resolve(),
             server_version: self.info.server_version.clone(),
             protocol_version: self.info.protocol_version,
             platform: env::consts::OS.to_string(),
@@ -3521,26 +3528,23 @@ impl ServerState {
     }
 
     async fn repository_summaries(&self) -> Vec<RepositorySummary> {
-        let paths: Vec<_> = self.repositories.read().await.iter()
-            .map(|repository| (repository.summary.id.clone(), repository.operation_path.clone()))
-            .collect();
-        let checked = spawn_blocking(move || {
-            paths.into_iter().map(|(id, path)| {
-                let missing = directory_missing(&path);
-                (id, path, missing)
-            }).collect::<Vec<_>>()
-        }).await.unwrap_or_default();
-        let mut repositories = self.repositories.write().await;
-        for (id, path, missing) in checked {
-            if let Some(repository) = repositories.iter_mut()
-                .find(|r| r.summary.id == id && r.operation_path == path) {
-                repository.summary.missing = missing.then_some(true);
-            }
-        }
-        repositories.iter().map(|repository| repository.summary.clone()).collect()
+        let repositories = self.repositories.read().await.clone();
+        futures_util::stream::iter(repositories.into_iter().map(|repository| async move {
+            let repository = self.hydrate_repository(repository).await;
+            self.registration_is_current(&repository)
+                .await
+                .then_some(repository.summary)
+        }))
+        .buffered(repository_metadata::CONCURRENCY)
+        .filter_map(|summary| async move { summary })
+        .collect()
+        .await
     }
 
     async fn repository(&self, id: &str) -> Option<ConfiguredRepository> {
+        // Mutations acquire their registration lock immediately after lookup.
+        // Metadata discovery belongs to catalog/snapshot reads, never ahead of
+        // that lock acquisition.
         self.repositories
             .read()
             .await
@@ -3562,8 +3566,8 @@ impl ServerState {
         candidate: ConfiguredRepository,
     ) -> Result<ConfiguredRepository, String> {
         let _mutation = self.catalog_mutation.lock().await;
+        let mut repositories = self.repositories.read().await.clone();
         let repository = {
-            let mut repositories = self.repositories.write().await;
             if let Some(existing) = repositories.iter_mut().find(|existing| {
                 path_key(&existing.summary.root) == path_key(&candidate.summary.root)
             }) {
@@ -3572,7 +3576,13 @@ impl ServerState {
                 existing.summary.root = candidate.summary.root.clone();
                 existing.summary.is_worktree = candidate.summary.is_worktree;
                 existing.summary.missing = candidate.summary.missing;
+                existing.summary.repository_identity = candidate.summary.repository_identity.clone();
+                existing.summary.worktree_family = candidate.summary.worktree_family.clone();
+                existing.summary.metadata_stale = candidate.summary.metadata_stale;
                 existing.operation_path = candidate.operation_path.clone();
+                // A new registration owns a fresh cache; late reads retain only
+                // their old entry and cannot overwrite this registration.
+                existing.metadata = candidate.metadata.clone();
                 existing.clone()
             } else {
                 repositories.push(candidate.clone());
@@ -3580,14 +3590,16 @@ impl ServerState {
             }
         };
 
-        self.persist_catalog().await?;
-        Ok(repository)
+        self.persist_catalog(&repositories).await?;
+        self.publish_catalog(repositories).await;
+        drop(_mutation);
+        Ok(self.hydrate_repository(repository).await)
     }
 
     async fn remove_repository(&self, repository_id: &str) -> Result<bool, String> {
         let _mutation = self.catalog_mutation.lock().await;
+        let mut repositories = self.repositories.read().await.clone();
         let removed_repository = {
-            let mut repositories = self.repositories.write().await;
             let Some(index) = repositories
                 .iter()
                 .position(|repository| repository.summary.id == repository_id)
@@ -3596,6 +3608,9 @@ impl ServerState {
             };
             repositories.remove(index)
         };
+
+        self.persist_catalog(&repositories).await?;
+        self.publish_catalog(repositories).await;
 
         if let Ok(mut cache) = self.cache.lock() {
             cache.evict_repo(&removed_repository.operation_path);
@@ -3607,18 +3622,14 @@ impl ServerState {
             .evict_repo(&removed_repository.operation_path);
         self.stash_preparation
             .forget(&removed_repository.operation_path);
-        self.persist_catalog().await?;
         Ok(true)
     }
 
-    async fn persist_catalog(&self) -> Result<(), String> {
+    async fn persist_catalog(&self, repositories: &[ConfiguredRepository]) -> Result<(), String> {
         let Some(data_dir) = self.data_dir.clone() else {
             return Ok(());
         };
-        let entries = self
-            .repositories
-            .read()
-            .await
+        let entries = repositories
             .iter()
             .map(PersistedRepository::from_configured)
             .collect::<Vec<_>>();
@@ -3626,6 +3637,19 @@ impl ServerState {
             .await
             .map_err(|error| format!("catalog writer failed: {error}"))??;
         Ok(())
+    }
+
+    async fn publish_catalog(&self, mut repositories: Vec<ConfiguredRepository>) {
+        let mut current = self.repositories.write().await;
+        // Hydration can finish while the catalog is being persisted. Preserve
+        // its latest hints for registrations that this mutation did not replace.
+        for repository in &mut repositories {
+            if let Some(existing) = current.iter().find(|existing|
+                Arc::ptr_eq(&existing.metadata, &repository.metadata)) {
+                repository.summary = existing.summary.clone();
+            }
+        }
+        *current = repositories;
     }
 
     async fn set_lifecycle(&self, lifecycle: ServerLifecycle) {
@@ -3715,8 +3739,12 @@ impl PersistedRepository {
                 root: root.clone(),
                 is_worktree: is_linked_worktree(&root),
                 missing: directory_missing(&root).then_some(true),
+                repository_identity: None,
+                worktree_family: None,
+                metadata_stale: None,
             },
             operation_path: root,
+            metadata: Arc::default(),
         })
     }
 }
@@ -3847,8 +3875,12 @@ fn configured_from_repository_info(
             root: root.clone(),
             is_worktree: is_linked_worktree(&root),
             missing: None,
+            repository_identity: None,
+            worktree_family: None,
+            metadata_stale: None,
         },
         operation_path: root,
+        metadata: Arc::default(),
     }
 }
 
@@ -4216,8 +4248,12 @@ fn load_open_repository(
             root: root.clone(),
             is_worktree: is_linked_worktree(&root),
             missing: None,
+            repository_identity: None,
+            worktree_family: None,
+            metadata_stale: None,
         },
         operation_path: root,
+        metadata: Arc::default(),
     };
     Ok((candidate, snapshot))
 }
@@ -4255,8 +4291,12 @@ fn create_repository_at(
             root: root.clone(),
             is_worktree: is_linked_worktree(&root),
             missing: None,
+            repository_identity: None,
+            worktree_family: None,
+            metadata_stale: None,
         },
         operation_path: root,
+        metadata: Arc::default(),
     };
     Ok((candidate, snapshot))
 }
@@ -4663,15 +4703,6 @@ fn log_bind_address(local_addr: SocketAddr, config: &ServerConfig) {
         );
     }
     info!(address = %local_addr, "GitGui server listening");
-}
-
-fn environment_label() -> String {
-    let host = env::var("COMPUTERNAME")
-        .or_else(|_| env::var("HOSTNAME"))
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| "This computer".to_string());
-    format!("GitGui on {host}")
 }
 
 fn emit_ready_line(local_addr: SocketAddr) {

@@ -129,6 +129,7 @@ class FakeWebSocket implements Socket.WebSocketLike {
 }
 
 const makeSession = Effect.fn("TestRpcSession.make")(function* (options?: {
+  readonly sessionScopes?: readonly string[];
   readonly socket?: FakeWebSocket;
   readonly requestTimeout?: Duration.Input;
   readonly welcomeTimeout?: Duration.Input;
@@ -145,7 +146,7 @@ const makeSession = Effect.fn("TestRpcSession.make")(function* (options?: {
   // stay open for the whole test.
   const session = yield* Effect.gen(function* () {
     const factory = yield* RpcSession.RpcSessionFactory;
-    return yield* factory.connect(PREPARED_CONNECTION);
+    return yield* factory.connect({ ...PREPARED_CONNECTION, sessionScopes: options?.sessionScopes });
   }).pipe(Effect.provide(layer));
   return { socket, session };
 });
@@ -169,6 +170,15 @@ const welcome = (protocolVersion = 2) => ({
 });
 
 describe("the GitGui RPC session", () => {
+  it.effect("carries only the prepared grant's scopes and leaves absent authorization unknown", () => Effect.gen(function* () {
+    const scopes = ["repository:read"];
+    const limited = yield* makeSession({ sessionScopes: scopes });
+    const unknown = yield* makeSession();
+    scopes.push("repository:manage");
+    expect(limited.session.sessionScopes).toEqual(["repository:read"]);
+    expect(Object.isFrozen(limited.session.sessionScopes)).toBe(true);
+    expect(unknown.session.sessionScopes).toBeUndefined();
+  }));
   it.effect("records bounded, content-free measurements for file view RPCs", () =>
     Effect.gen(function* () {
       const { socket, session } = yield* makeSession();
@@ -291,14 +301,16 @@ describe("the GitGui RPC session", () => {
         client.getWorkingTreeFileDiff({ repositoryId: "repo", filePath: "old.txt", staged: false }, controller.signal),
         client.getHunkPreview({ repositoryId: "repo", filePath: "old.txt", staged: false }, controller.signal),
         client.getCommitWorkingTreeFileDiff({ repositoryId: "repo", commitHash: "a".repeat(40), filePath: "old.txt" }, controller.signal),
+        client.getRepositorySnapshot("repo", controller.signal),
       ].map((request) => request.catch((error: unknown) => error));
       yield* waitFor(() => socket.requestsFor("git.commit_working_tree_file_diff").length === 1);
+      yield* waitFor(() => socket.requestsFor("repositories.get_snapshot").length === 1);
       controller.abort();
       const errors = yield* Effect.promise(() => Promise.all(old));
-      expect(errors).toHaveLength(3);
+      expect(errors).toHaveLength(4);
       for (const error of errors) expect(error).toEqual(expect.objectContaining({ code: "request_cancelled" }));
       expect(yield* session.pendingRequests).toBe(0);
-      expect(socket.sent.filter((raw) => JSON.parse(raw).type === "cancel")).toHaveLength(3);
+      expect(socket.sent.filter((raw) => JSON.parse(raw).type === "cancel")).toHaveLength(4);
       const before = socket.sent.length;
       const aborted = yield* Effect.promise(() => client.getCommitFileDiff({
         repositoryId: "repo", commitHash: "a".repeat(40), filePath: "aborted.txt",

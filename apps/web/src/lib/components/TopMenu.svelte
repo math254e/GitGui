@@ -11,6 +11,7 @@
 
 <script lang="ts">
   import { Home, Settings, TreeDeciduous, X } from "@lucide/svelte";
+  import { displayHostPath } from "$lib/display-host-path";
   import DesktopUpdateControl from "$lib/updates/DesktopUpdateControl.svelte";
 
   type Props = {
@@ -53,7 +54,7 @@
           role="tab"
           aria-selected={activeView === "repo" && activeRepoId === tab.id}
           tabindex={activeView === "repo" && activeRepoId === tab.id ? 0 : -1}
-          title={`${tab.root} (${tab.branch})`}
+          title={tab.branch ? `${displayHostPath(tab.root)} (${tab.branch})` : displayHostPath(tab.root)}
           onclick={() => onSelectRepo(tab.id)}
           onkeydown={(event) => {
             if (event.key === "Enter" || event.key === " ") {
@@ -78,7 +79,7 @@
           <button
             class="mr-2 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-[var(--app-theme-text-muted)] transition hover:bg-[var(--app-theme-control-hover)] hover:text-[var(--app-theme-text)]"
             type="button"
-            aria-label={`Close ${tab.title}`}
+            aria-label={`Close ${tab.title}${tab.root ? `, ${displayHostPath(tab.root)}` : ""}${tab.branch ? `, ${tab.branch}` : ""}`}
             title={`Close ${tab.title}`}
             onclick={(event) => {
               event.stopPropagation();

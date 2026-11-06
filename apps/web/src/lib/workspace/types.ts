@@ -1,6 +1,8 @@
 import type { CommitFile, CommitInfo, CommitRef, RepositorySnapshot, StashInfo } from "$lib/types/repository";
 import type { GitStashTarget } from "@gitgui/contracts";
 import type { WorkingTreeDiffSource } from "$lib/components/WorkingTreePanel.svelte";
+import type { GitGuiClient } from "@gitgui/client-runtime";
+import type { ClientWorkspace } from "$lib/client-runtime";
 
 /** The graph row the user has selected in a repository. */
 export type SelectedGraphItem =
@@ -76,7 +78,7 @@ export type GitActionKind =
 export type GitActionRequest = {
   kind: GitActionKind;
   label: string;
-  action: (repositoryId: string) => Promise<unknown>;
+  action: (repositoryId: string, client: GitGuiClient) => Promise<unknown>;
   affectedPaths?: string[];
   successMessage?: string;
   notifySuccess?: boolean;
@@ -89,6 +91,9 @@ export type GitActionRequest = {
 
 export type PendingGitAction = GitActionRequest & {
   repositoryId: string;
+  environmentId: string;
+  client: GitGuiClient;
+  workspace: ClientWorkspace;
 };
 
 export type LayoutStorage = {

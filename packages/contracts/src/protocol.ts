@@ -410,6 +410,22 @@ export type WebSocketTicketResponse = { ticket: string, expiresIn: number, };
 
 export type PairingCredentialResponse = { credential: string, expiresIn: number, scopes: Array<string>, };
 
+export type RepositoryIdentity = {
+/**
+ * Credential-free canonical Git remote comparison key.
+ */
+canonicalKey: string, };
+
+export type RepositoryWorktreeFamily = {
+/**
+ * Opaque host-local family key, not a path or cross-host identity.
+ */
+id: string,
+/**
+ * Canonical main worktree path on this host, if known.
+ */
+mainRoot?: string, };
+
 export type RepositorySummary = {
 /**
  * Stable host-local repository identifier.
@@ -434,7 +450,19 @@ isWorktree: boolean,
 /**
  * The configured directory was not present when the catalog was checked.
  */
-missing?: boolean, };
+missing?: boolean,
+/**
+ * Best-effort matching identity; older servers omit this field.
+ */
+repositoryIdentity?: RepositoryIdentity,
+/**
+ * Host-local relationship to linked worktrees, when available.
+ */
+worktreeFamily?: RepositoryWorktreeFamily,
+/**
+ * Metadata could not be refreshed; any grouping hints are last-known only.
+ */
+metadataStale?: boolean, };
 
 export type RepositoriesListResult = {
 /**

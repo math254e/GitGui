@@ -11,6 +11,8 @@
  * - Registration storage separates secrets; removal clears its credential.
  * - Registration can stage a disabled record before SSH claim and activation;
  *   Electron commits the record and protected credential atomically.
+ * - Removal documents partial commit: failures require authoritative durable
+ *   target checks before recovery, rather than assuming the catalog rolled back.
  * - The persistence error operations list only the ones GitGui performs.
  */
 import type { EnvironmentId } from "@gitgui/contracts/environment";
@@ -64,7 +66,9 @@ export class ConnectionRegistrationStore extends Context.Service<
       environmentId: EnvironmentId,
       routes: ReadonlyArray<PersistedConnectionTarget>,
     ) => Effect.Effect<void, ConnectionPersistenceError>;
-    /** Removes the registration, its profiles, and its protected credential. */
+    /** Removes the registration, its profiles, and its protected credential.
+     * A failure may follow a committed catalog deletion. Recovery must read
+     * durable targets rather than infer rollback from this effect's exit. */
     readonly remove: (
       environmentId: EnvironmentId,
     ) => Effect.Effect<void, ConnectionPersistenceError>;

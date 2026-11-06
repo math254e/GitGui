@@ -16,7 +16,7 @@ function deferred<T>() {
 function client() {
   return { serverWelcome: { capabilities: ["git.stash.files"] }, getStashFiles: vi.fn<GitGuiClient["getStashFiles"]>() };
 }
-let component: { update(next: Partial<{ client: GitGuiClient; repositoryId: string; stash: StashInfo }>): void } | undefined;
+let component: { update(next: Partial<{ client: GitGuiClient; repositoryId: string; stash: StashInfo; environmentGeneration: number }>): void } | undefined;
 afterEach(async () => { if (component) await unmount(component); component = undefined; document.body.replaceChildren(); });
 function setup(mock: ReturnType<typeof client>, entry = stash, repositoryId = "repo") {
   const target = document.createElement("div"); document.body.append(target);
@@ -27,6 +27,17 @@ function setup(mock: ReturnType<typeof client>, entry = stash, repositoryId = "r
 function tree(target: HTMLElement) { return [...target.querySelectorAll("div")].find((node) => node.shadowRoot)!; }
 
 describe("fast stash details", () => {
+  it("retries an interrupted read after the environment session changes", async () => {
+    const mock = client(), old = deferred<GitStashFilesResult>();
+    mock.getStashFiles.mockReturnValueOnce(old.promise).mockResolvedValueOnce({ stash, files: [file] });
+    const target = setup(mock);
+    const previousSignal = mock.getStashFiles.mock.calls[0][1]!;
+    component!.update({ environmentGeneration: 2 }); flushSync();
+    expect(previousSignal.aborted).toBe(true);
+    old.reject(new Error("old session disconnected"));
+    await vi.waitFor(() => expect(target.textContent).toContain("1 saved file"));
+    expect(target.textContent).not.toContain("old session disconnected");
+  });
   it("shows cached files immediately, verifies the current selector and preserves the tree on equal results", async () => {
     const mock = client(), pending = deferred<GitStashFilesResult>();
     stashFilesCache(mock as unknown as GitGuiClient).put("repo", stash.hash, [file]);

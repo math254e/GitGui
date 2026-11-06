@@ -97,27 +97,45 @@ export class GitGuiClient {
   private readonly client: GitGuiRpcProtocolClient;
   private readonly run: <A, E>(effect: Effect.Effect<A, E>) => Promise<A>;
   private readonly eventBus = new OrderedEventBus();
-  private readonly welcome: WelcomeMessage;
+  private welcome: WelcomeMessage;
   private readonly readers: Array<Fiber.Fiber<void, GitGuiRpcError>> = [];
+  private sourceGeneration = 0;
 
   constructor(options: GitGuiClientOptions) {
     this.client = options.client;
     this.welcome = options.welcome;
     this.run = options.run ?? ((effect) => Effect.runPromise(effect));
+    this.replaceSessionSources(options);
+  }
+
+  /** Keep the environment facade and its listeners while replacing session readers.
+   * Calls may use a registry-backed protocol client, independently of these sources. */
+  replaceSessionSources(options: Pick<GitGuiClientOptions, "welcome" | "sequenceGaps"> & {
+    readonly client: Pick<GitGuiRpcProtocolClient, "events">;
+  }): void {
+    this.dispose();
+    this.welcome = options.welcome;
+    this.eventBus.reset();
+    const generation = this.sourceGeneration;
     this.readers.push(Effect.runFork(
-      Stream.runForEach(this.client.events, (event) => Effect.sync(() => this.eventBus.accept(event))),
+      Stream.runForEach(options.client.events, (event) => Effect.sync(() => {
+        if (generation === this.sourceGeneration) this.eventBus.accept(event);
+      })),
     ));
     if (options.sequenceGaps !== undefined) {
       this.readers.push(Effect.runFork(
         Stream.runForEach(options.sequenceGaps, (gap) =>
-          Effect.sync(() => this.eventBus.reportGap(gap)),
+          Effect.sync(() => {
+            if (generation === this.sourceGeneration) this.eventBus.reportGap(gap);
+          }),
         ),
       ));
     }
   }
 
-  /** Releases readers when the selected workspace stops using this session. */
+  /** Releases readers when this environment stops using their session. */
   dispose(): void {
+    this.sourceGeneration += 1;
     for (const reader of this.readers.splice(0)) Effect.runFork(Fiber.interrupt(reader));
   }
 
@@ -172,8 +190,8 @@ export class GitGuiClient {
     return this.call("server.get_status", {});
   }
 
-  async listRepositories() {
-    const result = await this.call("repositories.list", {});
+  async listRepositories(signal?: AbortSignal) {
+    const result = await this.call("repositories.list", {}, signal);
     return result.repositories;
   }
 
@@ -202,10 +220,10 @@ export class GitGuiClient {
     return this.call("repositories.remove", { repositoryId: assertRepositoryId(repositoryId) });
   }
 
-  getRepositorySnapshot(repositoryId: string) {
+  getRepositorySnapshot(repositoryId: string, signal?: AbortSignal) {
     return this.call("repositories.get_snapshot", {
       repositoryId: assertRepositoryId(repositoryId),
-    });
+    }, signal);
   }
 
   getRepositoryGraph(params: RepositoryGraphParams) {
@@ -216,14 +234,14 @@ export class GitGuiClient {
     });
   }
 
-  refreshRepositories(repositoryIds: string[]) {
+  refreshRepositories(repositoryIds: string[], signal?: AbortSignal) {
     return this.call("repositories.refresh", {
       repositoryIds: uniqueRepositoryIds(repositoryIds),
-    });
+    }, signal);
   }
 
-  getGitStatus(repositoryId: string) {
-    return this.call("git.status", { repositoryId: assertRepositoryId(repositoryId) });
+  getGitStatus(repositoryId: string, signal?: AbortSignal) {
+    return this.call("git.status", { repositoryId: assertRepositoryId(repositoryId) }, signal);
   }
 
   stage(repositoryId: string, paths: string[] = []) {
@@ -278,18 +296,18 @@ export class GitGuiClient {
     }, signal);
   }
 
-  prefetchCommitFiles(repositoryId: string, commitHashes: string[]) {
+  prefetchCommitFiles(repositoryId: string, commitHashes: string[], signal?: AbortSignal) {
     return this.call("git.prefetch_commit_files", {
       repositoryId: assertRepositoryId(repositoryId),
       commitHashes: uniqueCommitHashes(commitHashes),
-    });
+    }, signal);
   }
 
-  prefetchCommitDiffs(params: PrefetchCommitDiffsParams) {
+  prefetchCommitDiffs(params: PrefetchCommitDiffsParams, signal?: AbortSignal) {
     return this.call("git.prefetch_commit_diffs", {
       ...params,
       repositoryId: assertRepositoryId(params.repositoryId),
-    });
+    }, signal);
   }
 
   getHunkPreview(params: GitHunkPreviewParams, signal?: AbortSignal) {

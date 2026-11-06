@@ -27,6 +27,8 @@
  * - The event stream is lossless and ordered, and the server's monotonic event
  *   sequence is watched, so a missing event is detected instead of silently
  *   leaving the client with a hole.
+ * - The session retains only the authenticated grant's scopes for availability
+ *   and command guards; bearer material stays inside connection preparation.
  */
 import type { OrderedEventEnvelope, ServerInfo, WelcomeMessage } from "@gitgui/contracts";
 import { CAPABILITY_RPC_CANCEL, type CancelRequest } from "@gitgui/contracts";
@@ -68,6 +70,8 @@ export interface SequenceGap {
 }
 
 export interface RpcSession {
+  /** Undefined means authorization is unknown. Replaced with each session. */
+  readonly sessionScopes?: readonly string[];
   readonly client: GitGuiRpcProtocolClient;
   readonly welcome: Effect.Effect<WelcomeMessage, ConnectionAttemptError>;
   readonly initialConfig: Effect.Effect<ServerInfo, ConnectionAttemptError>;
@@ -538,6 +542,7 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
     );
 
     return {
+      sessionScopes: connection.sessionScopes === undefined ? undefined : Object.freeze([...connection.sessionScopes]),
       client,
       welcome: welcomeEffect,
       initialConfig,

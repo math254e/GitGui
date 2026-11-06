@@ -37,7 +37,7 @@ type StoreInternals = {
   applyApplicationRuntimeState(state: WebApplicationRuntimeState): void;
 };
 const cleanups: Array<() => void> = [];
-function setup(capabilities: string[] = Object.values(stashMethods)) {
+function setup(capabilities: string[] = Object.values(stashMethods), externalTabs = false) {
   const client = {
     serverWelcome: { environment_id: "env-a", capabilities },
     getAmendInfo: vi.fn(async () => ({})),
@@ -45,12 +45,17 @@ function setup(capabilities: string[] = Object.values(stashMethods)) {
     getStashFiles: vi.fn(), getStashFileDiff: vi.fn(),
   };
   const workspace = { state: state(), refreshRepository: vi.fn(async () => workspace.state), prefetchCommitFiles: vi.fn(async () => {}) };
-  const runtimeState = { client, workspace, registry: { selectedEnvironmentId: "env-a", entries: [] }, loading: false, error: "", connection: null, workspaceState: workspace.state };
-  const runtime = { isDesktop: false, get state() { return runtimeState; } };
+  const runtimeState = { client, workspace, registry: { selectedEnvironmentId: "env-a", entries: [] }, catalogs: {}, environmentWorkspaces: {}, repositoryGroups: [], loading: false, error: "", connection: null, workspaceState: workspace.state };
+  const runtime = { isDesktop: false, tabOwnership: externalTabs ? "external" : "legacy", get state() { return runtimeState; },
+    getEnvironmentWorkspace: (environmentId: string) => environmentId === "env-a" ? { client, workspace } : null };
   let store!: WorkspaceStore;
   cleanups.push(effect_root(() => { store = new WorkspaceStore(runtime as unknown as WebApplicationRuntime); }));
   store.client = client as unknown as GitGuiClient;
   store.workspace = workspace as never;
+  if (externalTabs) {
+    store.environmentEntries = [{ registration: { environmentId: "env-a", displayName: "A", target: { kind: "bearer" } }, connection: { phase: "connected" } }] as unknown as typeof store.environmentEntries;
+    store.environmentViews = { "env-a": { sessionScopes: ["repository:read", "repository:operate"] } } as unknown as typeof store.environmentViews;
+  }
   const internals = store as unknown as StoreInternals;
   internals.connectionEnvironmentId = "env-a";
   internals.applyWorkspaceState(workspace.state);
@@ -64,6 +69,26 @@ const diagnostic = { code: "stash_incomplete", message: "The stash was retained.
 const mutation = (overrides: Partial<GitStashMutationResult> = {}): GitStashMutationResult => ({ repositoryId: "repo", target: { selector: stash.selector, expectedOid: stash.hash }, outcome: "success", stashState: "removed", restore: "succeeded", branch: null, error: overrides.outcome && overrides.outcome !== "success" ? diagnostic : null, ...overrides });
 
 describe("stash workspace actions", () => {
+  it("uses the displayed environment for stash mutation, conflict selection and refresh despite a different global selection", async () => {
+    const { store, client, workspace, runtimeState } = setup(Object.values(stashMethods), true);
+    const other = { ...workspace, state: state("env-b"), refreshRepository: vi.fn() };
+    runtimeState.registry.selectedEnvironmentId = "env-b";
+    runtimeState.client = { ...client, serverWelcome: { ...client.serverWelcome, environment_id: "env-b" }, stashPopTarget: vi.fn() };
+    runtimeState.workspace = other;
+    client.stashPopTarget.mockResolvedValue(mutation({ outcome: "conflicts", stashState: "retained", restore: "conflicts" }));
+    workspace.refreshRepository.mockRejectedValueOnce(new Error("Refresh unavailable"));
+    const selectChanges = vi.spyOn(store, "selectChanges");
+    store.popStash(); store.submitStashReview("");
+    await vi.waitFor(() => expect(notifications.warning).toHaveBeenCalled());
+    expect(client.stashPopTarget).toHaveBeenCalledExactlyOnceWith({ repositoryId: "repo", target: { selector: stash.selector, expectedOid: stash.hash } });
+    expect(runtimeState.client.stashPopTarget).not.toHaveBeenCalled();
+    expect(selectChanges).toHaveBeenCalledOnce();
+    expect(workspace.refreshRepository).toHaveBeenCalledExactlyOnceWith("repo");
+    notifications.warning.mock.calls[0][1].action.onClick();
+    await vi.waitFor(() => expect(workspace.refreshRepository).toHaveBeenCalledTimes(2));
+    expect(other.refreshRepository).not.toHaveBeenCalled();
+  });
+
   // These are resolved facade values from ok:true envelopes, not thrown errors.
   // The RPC session forwards result without checking its action-specific schema.
   it.each([
@@ -549,12 +574,15 @@ describe("stash workspace actions", () => {
     expect(store.selectedFile?.path).toBe(file.path);
   });
 
-  it("invalidates known linked-worktree tabs without clearing unrelated tabs with identical stash OIDs", async () => {
+  it.each([
+    ["/linked", "/linked"],
+    ["D:/repo/linked", "\\\\?\\D:\\repo\\linked"],
+  ])("invalidates linked worktrees reported as %s and stored as %s", async (worktreePath, root) => {
     const { store, client, workspace } = setup();
     store.selectStash(older); store.selectFile(file);
-    store.openRepos[0].snapshot!.worktrees = [{ path: "/linked", current: false, isMain: false, headOid: "head", branch: "linked" }];
+    store.openRepos[0].snapshot!.worktrees = [{ path: worktreePath, current: false, isMain: false, headOid: "head", branch: "linked" }];
     const original = store.openRepos[0];
-    store.openRepos = [original, { ...original, id: "linked", root: "/linked" }, { ...original, id: "unrelated", root: "/unrelated", snapshot: snapshot() }];
+    store.openRepos = [original, { ...original, id: "linked", root }, { ...original, id: "unrelated", root: "/unrelated", snapshot: snapshot() }];
     client.stashPopTarget.mockResolvedValue(mutation());
     workspace.refreshRepository.mockRejectedValue(new Error("Refresh unavailable"));
     store.popStash(); store.submitStashReview("");

@@ -6,6 +6,7 @@ import type {
   RepositoryChangeKind,
 } from "@gitgui/contracts";
 import { assertRepositoryId, GitGuiClient } from "@gitgui/client-runtime";
+import { CheckoutAlreadyOpenError } from "@gitgui/client-runtime/workspace";
 import {
   createEmptyWorkspaceMetadata,
   InMemoryWorkspaceMetadataAdapter,
@@ -24,6 +25,11 @@ export interface WorkspaceRepositoryState {
   error?: WorkspaceRepositoryError;
   loading: boolean;
   refreshing: boolean;
+}
+
+export interface PreparedWorkspaceRepository {
+  readonly repository: RepositorySummary;
+  readonly snapshot: RepositorySnapshot;
 }
 
 export interface WorkspaceRepositoryError {
@@ -49,6 +55,8 @@ export interface ClientWorkspaceOptions {
   identity: WorkspaceMetadataIdentity;
   metadataAdapter?: WorkspaceMetadataAdapter;
   recentLimit?: number;
+  /** External mode projects the application coordinator's reads; it never writes tabs. */
+  tabOwnership?: "legacy" | "external";
 }
 
 /** A receipt may reconcile only the repository view that submitted its review. */
@@ -66,6 +74,7 @@ export class ClientWorkspace {
   private readonly identity: WorkspaceMetadataIdentity;
   private readonly metadataAdapter: WorkspaceMetadataAdapter;
   private readonly recentLimit: number;
+  private readonly tabOwnership: "legacy" | "external";
   private readonly listeners = new Set<(state: ClientWorkspaceState) => void>();
   private readonly requestGenerations = new Map<string, number>();
   private metadataWrite: Promise<void> = Promise.resolve();
@@ -74,6 +83,7 @@ export class ClientWorkspace {
   private metadata?: WorkspaceMetadata;
   private stateOperation: Promise<void> = Promise.resolve();
   private lifecycleGeneration = 0;
+  private readRequests = new AbortController();
   private nextRequestGeneration = 0;
   private readonly pendingChanges = new Map<string, RepositoryChangeKind>();
   private readonly pendingStatusPaths = new Map<string, Set<string>>();
@@ -85,6 +95,7 @@ export class ClientWorkspace {
   private recoveryTimer?: ReturnType<typeof setInterval>;
   private applyingChanges = false;
   private disposed = false;
+  private cachedSummaries = new Map<string, RepositorySummary>();
   private _state: ClientWorkspaceState;
 
   constructor(options: ClientWorkspaceOptions) {
@@ -94,6 +105,7 @@ export class ClientWorkspace {
     this.environmentId = options.identity.environmentId;
     this.metadataAdapter = options.metadataAdapter ?? new InMemoryWorkspaceMetadataAdapter();
     this.recentLimit = options.recentLimit ?? DEFAULT_RECENT_LIMIT;
+    this.tabOwnership = options.tabOwnership ?? "legacy";
     if (!Number.isInteger(this.recentLimit) || this.recentLimit <= 0) throw new RangeError("recentLimit must be positive");
     this._state = {
       environmentId: this.environmentId,
@@ -121,6 +133,7 @@ export class ClientWorkspace {
   /** Session-scoped invalidations share the same serialization as tab changes. */
   startUpdates(): void {
     if (this.updateSubscriptions.length || this.disposed) return;
+    if (this.tabOwnership === "external" && !this._state.openRepositoryIds.length) return;
     this.updateSubscriptions = [
       this.client.on("repository.changed", ({ payload }) => {
         if (!payload || typeof payload !== "object" || Array.isArray(payload)) return;
@@ -157,6 +170,8 @@ export class ClientWorkspace {
 
   stopUpdates(): void {
     this.lifecycleGeneration += 1;
+    this.readRequests.abort();
+    this.readRequests = new AbortController();
     for (const unsubscribe of this.updateSubscriptions) unsubscribe();
     this.updateSubscriptions = [];
     clearTimeout(this.updateTimer);
@@ -167,6 +182,72 @@ export class ClientWorkspace {
     this.discardCheckpoints.clear();
     this.statusRefreshErrors.clear();
     this.metadataRevisions.clear();
+    // Interrupted reads belong to the old session. They must not keep a new
+    // generation behind a hung Promise or leave its loading indicators set.
+    this.stateOperation = Promise.resolve();
+    this.updateRepositories(this._state.openRepositoryIds, (repository) => ({ ...repository, loading: false, refreshing: false }));
+    this.update({ opening: false, refreshing: false, restoring: false });
+  }
+
+  /** Restore local placeholders before any network access, including while offline. */
+  async restorePlaceholders(catalog: readonly RepositorySummary[] = []): Promise<void> {
+    this.cachedSummaries = new Map(catalog.map((repository) => [repository.id, repository]));
+    const metadata = await this.loadMetadata();
+    if (this.disposed) return;
+    const ids = this.tabOwnership === "legacy" ? uniqueValidIds(metadata.openRepositoryIds) : this._state.openRepositoryIds;
+    const summaries = new Map(catalog.map((repository) => [repository.id, repository]));
+    this.replace({
+      openRepositoryIds: ids,
+      activeRepositoryId: this.tabOwnership === "legacy"
+        ? (metadata.activeRepositoryId && ids.includes(metadata.activeRepositoryId) ? metadata.activeRepositoryId : ids[0] ?? null)
+        : this._state.activeRepositoryId,
+      recentRepositories: metadata.recentRepositories.map((recent) => ({ ...recent })),
+      repositories: Object.fromEntries(ids.map((id) => [id, this._state.repositories[id] ?? {
+        repository: summaries.get(id) ?? { id, name: id, path: "", root: "", isWorktree: false },
+        loading: false, refreshing: false,
+      }])),
+    });
+  }
+
+  /** Attach data readers for the global tab owner without persisting another tab list. */
+  setRepositoryTargets(repositoryIds: readonly string[], activeRepositoryId: string | null = null, prepared: readonly PreparedWorkspaceRepository[] = []): boolean {
+    if (this.tabOwnership !== "external") throw new Error("Repository targets require external tab ownership.");
+    if (this.disposed) throw new Error("Workspace is disposed.");
+    const ids = uniqueValidIds([...repositoryIds]);
+    const activeId = activeRepositoryId && ids.includes(activeRepositoryId) ? activeRepositoryId : null;
+    if (ids.length === this._state.openRepositoryIds.length && ids.every((id, index) => id === this._state.openRepositoryIds[index])) {
+      // Selection changes do not invalidate healthy readers or re-fetch catalogs.
+      if (activeId !== this._state.activeRepositoryId) this.update({ activeRepositoryId: activeId });
+      return false;
+    }
+    this.stopUpdates();
+    const preparedById = new Map(prepared.map((item) => [item.repository.id, item]));
+    const repositories = Object.fromEntries(ids.map((id) => {
+      const existing = this._state.repositories[id];
+      const item = preparedById.get(id);
+      return [id, existing ?? (item ? { ...item, loading: false, refreshing: false } : {
+        repository: this.cachedSummaries.get(id) ?? { id, name: id, path: "", root: "", isWorktree: false }, loading: false, refreshing: false,
+      })];
+    }));
+    this.replace({ openRepositoryIds: ids, repositories,
+      fileContentRevisions: Object.fromEntries(ids.map((id) => [id, this._state.fileContentRevisions[id] ?? {}])),
+      activeRepositoryId: activeId });
+    return true;
+  }
+
+  /** Revalidate this generation without replacing cached data or its tab placeholders. */
+  async hydrate(): Promise<ClientWorkspaceState> {
+    const lifecycle = this.lifecycleGeneration;
+    const catalog = await this.client.listRepositories(this.readRequests.signal);
+    if (this.disposed || lifecycle !== this.lifecycleGeneration) return this.state;
+    const summaries = new Map(catalog.map((repository) => [repository.id, repository]));
+    this.updateRepositories(this._state.openRepositoryIds, (state) => {
+      const repository = summaries.get(state.repository.id);
+      return repository ? { ...state, repository, error: repository.missing ? { message: "Repository directory is missing." } : undefined }
+        : { ...state, error: { code: "repository_not_found", message: "Repository is no longer in this environment's catalog." } };
+    });
+    const availableIds = this._state.openRepositoryIds.filter((id) => summaries.has(id) && !summaries.get(id)?.missing);
+    return this.refreshRepositories(availableIds, { lifecycle, persist: false });
   }
 
   private invalidate(repositoryId: string, kind: RepositoryChangeKind, paths: string[] = []): void {
@@ -227,7 +308,7 @@ export class ClientWorkspace {
     const lifecycle = this.lifecycleGeneration;
     const generation = this.beginRequest(id);
     try {
-      const result = await this.client.getGitStatus(id);
+      const result = await this.client.getGitStatus(id, this.readRequests.signal);
       if (!this.isCurrentRequest(id, generation, lifecycle)) return;
       const snapshot = this._state.repositories[id]?.snapshot;
       if (!snapshot || snapshot.status.headOid !== result.status.headOid || snapshot.status.currentBranch !== result.status.currentBranch) {
@@ -301,6 +382,7 @@ export class ClientWorkspace {
   }
 
   restore(): Promise<ClientWorkspaceState> {
+    this.assertLegacyTabOwnership();
     return this.serializeStateOperation(() => this.restoreWorkspace());
   }
 
@@ -359,12 +441,21 @@ export class ClientWorkspace {
   }
 
   async openRepositoryPath(path: string): Promise<ClientWorkspaceState> {
+    this.assertLegacyTabOwnership();
     if (!path.trim()) throw new TypeError("Repository path cannot be empty");
     return this.serializeStateOperation(() => this.openRepositoryPathOperation(path));
   }
 
+  /** Open a worktree as a distinct tab, rejecting an existing canonical target. */
+  async openRepositoryPathInNewTab(path: string): Promise<ClientWorkspaceState> {
+    this.assertLegacyTabOwnership();
+    if (!path.trim()) throw new TypeError("Repository path cannot be empty");
+    return this.serializeStateOperation(() => this.openRepositoryPathOperation(path, true));
+  }
+
   /** Replace one open tab with another repository path without adding a tab. */
   async switchRepositoryPath(path: string, repositoryId: string): Promise<ClientWorkspaceState> {
+    this.assertLegacyTabOwnership();
     if (!path.trim()) throw new TypeError("Repository path cannot be empty");
     return this.serializeStateOperation(() => this.switchRepositoryPathOperation(path, repositoryId));
   }
@@ -374,6 +465,7 @@ export class ClientWorkspace {
     name: string,
     options: { initialBranch?: string; initializeLfs?: boolean } = {},
   ): Promise<ClientWorkspaceState> {
+    this.assertLegacyTabOwnership();
     if (!parentPath.trim()) throw new TypeError("Repository parent path cannot be empty");
     if (!name.trim()) throw new TypeError("Repository name cannot be empty");
     return this.serializeStateOperation(() => this.createRepositoryOperation(parentPath, name, options));
@@ -400,12 +492,15 @@ export class ClientWorkspace {
     }
   }
 
-  private async openRepositoryPathOperation(path: string): Promise<ClientWorkspaceState> {
+  private async openRepositoryPathOperation(path: string, requireNew = false): Promise<ClientWorkspaceState> {
     const lifecycle = this.lifecycleGeneration;
     this.update({ opening: true, error: undefined });
     try {
       const result = await this.client.openRepository(path);
       if (lifecycle !== this.lifecycleGeneration) return this.state;
+      if (requireNew && this._state.openRepositoryIds.includes(assertRepositoryId(result.repository.id))) {
+        throw new CheckoutAlreadyOpenError();
+      }
       this.addHydratedRepository(result.repository, result.snapshot);
       await this.persist();
       return this.state;
@@ -430,6 +525,9 @@ export class ClientWorkspace {
       if (lifecycle !== this.lifecycleGeneration) return this.state;
 
       const replacementId = assertRepositoryId(result.repository.id);
+      if (replacementId !== replacedId && this._state.openRepositoryIds.includes(replacementId)) {
+        throw new CheckoutAlreadyOpenError();
+      }
       const replacedIndex = this._state.openRepositoryIds.indexOf(replacedId);
       const openRepositoryIds = this._state.openRepositoryIds.filter(
         (id) => id !== replacedId && id !== replacementId,
@@ -467,6 +565,7 @@ export class ClientWorkspace {
   }
 
   async openKnownRepository(repositoryId: string): Promise<ClientWorkspaceState> {
+    this.assertLegacyTabOwnership();
     return this.serializeStateOperation(() => this.openKnownRepositoryOperation(repositoryId));
   }
 
@@ -490,6 +589,7 @@ export class ClientWorkspace {
   }
 
   selectRepository(repositoryId: string): Promise<void> {
+    this.assertLegacyTabOwnership();
     return this.serializeStateOperation(async () => {
       const id = assertRepositoryId(repositoryId);
       if (!this._state.openRepositoryIds.includes(id)) throw new Error(`Repository is not open: ${id}`);
@@ -499,6 +599,7 @@ export class ClientWorkspace {
   }
 
   closeRepository(repositoryId: string): Promise<void> {
+    this.assertLegacyTabOwnership();
     return this.serializeStateOperation(async () => {
       const id = assertRepositoryId(repositoryId);
       if (!this._state.openRepositoryIds.includes(id)) return;
@@ -519,26 +620,30 @@ export class ClientWorkspace {
   }
 
   async removeRepository(repositoryId: string): Promise<ClientWorkspaceState> {
+    this.assertLegacyTabOwnership();
     return this.serializeStateOperation(() => this.removeRepositoryOperation(repositoryId));
   }
 
   private async removeRepositoryOperation(repositoryId: string): Promise<ClientWorkspaceState> {
     const id = assertRepositoryId(repositoryId);
+    const lifecycle = this.lifecycleGeneration;
     this.update({ opening: true, error: undefined });
 
     try {
       await this.client.removeRepository(id);
+      if (lifecycle !== this.lifecycleGeneration) return this.state;
       return await this.forgetRepositoryOperation(id);
     } catch (error) {
-      this.update({ error: toWorkspaceError(error) });
+      if (lifecycle === this.lifecycleGeneration) this.update({ error: toWorkspaceError(error) });
       throw error;
     } finally {
-      this.update({ opening: false });
+      if (lifecycle === this.lifecycleGeneration) this.update({ opening: false });
     }
   }
 
   /** The server already removed this catalog entry with its worktree. */
   forgetRepository(repositoryId: string): Promise<ClientWorkspaceState> {
+    this.assertLegacyTabOwnership();
     return this.serializeStateOperation(() => this.forgetRepositoryOperation(assertRepositoryId(repositoryId)));
   }
 
@@ -639,7 +744,8 @@ export class ClientWorkspace {
 
   async prefetchCommitFiles(repositoryId: string, commitHashes: string[]): Promise<void> {
     try {
-      await this.client.prefetchCommitFiles(assertRepositoryId(repositoryId), commitHashes);
+      if (this.disposed) return;
+      await this.client.prefetchCommitFiles(assertRepositoryId(repositoryId), commitHashes, this.readRequests.signal);
     } catch {
       // Prefetch is a performance hint and never affects workspace correctness.
     }
@@ -647,7 +753,8 @@ export class ClientWorkspace {
 
   async prefetchCommitDiffs(params: Parameters<GitGuiClient["prefetchCommitDiffs"]>[0]): Promise<void> {
     try {
-      await this.client.prefetchCommitDiffs({ ...params, repositoryId: assertRepositoryId(params.repositoryId) });
+      if (this.disposed) return;
+      await this.client.prefetchCommitDiffs({ ...params, repositoryId: assertRepositoryId(params.repositoryId) }, this.readRequests.signal);
     } catch {
       // Prefetch is a performance hint and never affects workspace correctness.
     }
@@ -662,7 +769,7 @@ export class ClientWorkspace {
     this.update({ refreshing: true, error: undefined });
 
     try {
-      const result = await this.client.refreshRepositories(ids);
+      const result = await this.client.refreshRepositories(ids, this.readRequests.signal);
       const returned = new Map(result.repositories.map((item) => [item.repositoryId, item]));
       for (const id of ids) {
         const generation = generations.get(id)!;
@@ -779,11 +886,19 @@ export class ClientWorkspace {
       await this.loadMetadata();
       if (this.disposed) return;
       const metadata = stateToMetadata(this._state);
+      if (this.tabOwnership === "external") {
+        metadata.openRepositoryIds = [...this.metadata!.openRepositoryIds];
+        metadata.activeRepositoryId = this.metadata!.activeRepositoryId;
+      }
       await this.metadataAdapter.save(this.identity, metadata);
       this.metadata = metadata;
       this.metadataLoaded = true;
     });
     return this.metadataWrite;
+  }
+
+  private assertLegacyTabOwnership(): void {
+    if (this.tabOwnership !== "legacy") throw new Error("Application tabs are owned by the external coordinator.");
   }
 
   private serializeStateOperation<T>(operation: () => Promise<T>): Promise<T> {
@@ -796,7 +911,10 @@ export class ClientWorkspace {
 
     return previous
       .catch(() => undefined)
-      .then(operation)
+      .then(() => {
+        if (this.disposed) throw new Error("Workspace is disposed.");
+        return operation();
+      })
       .finally(() => {
         // Every queued operation must release the promise that represents it.
         // A later operation may already have replaced `stateOperation`, but it

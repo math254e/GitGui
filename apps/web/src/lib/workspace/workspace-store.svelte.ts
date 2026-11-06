@@ -12,12 +12,15 @@
  * - The store never owns a socket, a retry, or a credential. It consumes the
  *   connection runtime's projected state and nothing else.
  */
-import { goto } from "$app/navigation";
+import { beforeNavigate, goto } from "$app/navigation";
 import { page } from "$app/state";
 import { browser } from "$app/environment";
 import { toast } from "svelte-sonner";
 import { untrack } from "svelte";
 import type { GitGuiClient } from "@gitgui/client-runtime";
+import { sameRepository, scopedRepositoryKey, type RepositoryTabs, type ScopedRepositoryRef } from "@gitgui/client-runtime/workspace";
+import { ApplicationWorkspace, sameHostPath } from "$lib/client-runtime/application-workspace";
+import { displayHostPath } from "$lib/display-host-path";
 import type {
   ChangedFile,
   GitAmendInfo,
@@ -34,6 +37,12 @@ import { type ClientWorkspace, type ClientWorkspaceState } from "$lib/client-run
 import { reconcileWorkingTreeFile } from "$lib/client-runtime/file-selection";
 import { readDesktopBridge } from "$lib/connection/platform";
 import type { WebApplicationRuntime, WebApplicationRuntimeState } from "$lib/connection/runtime";
+import type { EnvironmentEntryView, EnvironmentRepositoryCatalogView } from "$lib/connection/runtime";
+import type { EnvironmentWorkspaceView } from "$lib/connection/environment-workspace";
+import type { RepositoryGroup, ScopedRepositorySummary } from "@gitgui/client-runtime/workspace";
+import type { GroupedRepository } from "$lib/components/GroupedRepositoriesHome.svelte";
+import { repositoryLocations } from "$lib/components/repository-locations";
+import { repositoryManagementAvailability, type RepositoryManagementAction } from "$lib/connection/repository-availability";
 import { readBranchSwitchMergePreference, resolveProjectsLocation } from "$lib/preferences";
 import { graphRefKey, isCurrentBranchRef } from "$lib/types/branch-visibility";
 import { tagName, tagNameError } from "$lib/types/tags";
@@ -58,7 +67,7 @@ import {
   readHiddenGraphRefKeys,
   readLayoutPreferences,
 } from "./preferences";
-import { HOME_ROUTE_ID, repositoryIdFromParam, repositoryPath } from "./routes";
+import { HOME_ROUTE_ID, repositoryIdFromParam, repositoryPath, scopedRepositoryPath } from "./routes";
 import { resolveClosedRepositoryTarget } from "./repository-routing";
 import { resolveDeepLinkTarget } from "./deep-links";
 import type {
@@ -92,7 +101,9 @@ export class WorkspaceStore {
   /* Connection runtime projection                                            */
   /* ---------------------------------------------------------------------- */
 
-  readonly isDesktop: boolean;
+  readonly isDesktop: boolean = false;
+  private externalTabs = false;
+  get usesApplicationTabs(): boolean { return this.externalTabs; }
 
   client = $state<GitGuiClient | null>(null);
   workspace = $state<ClientWorkspace | null>(null);
@@ -101,6 +112,9 @@ export class WorkspaceStore {
   connectionError = $state(false);
   startError = $state("");
   operationPending = $state(false);
+  repositoryPathPending = $state(false);
+  private pendingCreateEnvironments = $state<Record<string, boolean>>({});
+  applicationReady = $state(false);
   private connectionEnvironmentId = $state<string | null>(null);
 
   /* ---------------------------------------------------------------------- */
@@ -108,6 +122,11 @@ export class WorkspaceStore {
   /* ---------------------------------------------------------------------- */
 
   repositoryCatalog = $state<RepositorySummary[]>([]);
+  applicationTabs = $state<RepositoryTabs>({ tabs: [], activeTabId: null });
+  environmentViews = $state<Readonly<Record<string, EnvironmentWorkspaceView>>>({});
+  environmentEntries = $state<readonly EnvironmentEntryView[]>([]);
+  environmentCatalogs = $state<Readonly<Record<string, EnvironmentRepositoryCatalogView>>>({});
+  repositoryGroups = $state<readonly RepositoryGroup<ScopedRepositorySummary>[]>([]);
   openRepos = $state<WorkspaceRepo[]>([]);
   activeRepositoryId = $state<string | null>(null);
   stashContextKey = $derived(this.connectionEnvironmentId && this.activeRepositoryId ? `${this.connectionEnvironmentId}:${this.activeRepositoryId}` : null);
@@ -116,7 +135,10 @@ export class WorkspaceStore {
   /* Git actions                                                             */
   /* ---------------------------------------------------------------------- */
 
-  gitAction = $state<{ repositoryId: string; kind: string; label: string } | null>(null);
+  private pendingGitActions = $state.raw<Record<string, { environmentId: string; repositoryId: string; kind: string; label: string }>>({});
+  gitAction = $derived(this.connectionEnvironmentId && this.activeRepositoryId
+    ? this.pendingGitActions[scopedRepositoryKey({ environmentId: this.connectionEnvironmentId, repositoryId: this.activeRepositoryId })] ?? null : null);
+  // Entries retain their captured client/workspace and drain independently by checkout.
   queuedGitActions = $state<PendingGitAction[]>([]);
   commitDrafts = $state<Record<string, WorkingTreeDraftState>>({});
   amendInfo = $state<GitAmendInfo | null>(null);
@@ -156,6 +178,7 @@ export class WorkspaceStore {
   private discardPreviewGeneration = 0;
   private discardActionGeneration = 0;
   repositoryPathDialogOpen = $state(false);
+  repositoryPathEnvironmentId = $state<string | null>(null);
   stashReview = $state<StashDialog | null>(null);
   repositoryPathValue = $state("");
   repositoryPathError = $state("");
@@ -196,12 +219,15 @@ export class WorkspaceStore {
   /* ---------------------------------------------------------------------- */
 
   createRepositoryParentPath = $state("");
+  createRepositoryEnvironmentId = $state<string | null>(null);
+  createRepositoryPending = $derived(Boolean(this.createRepositoryEnvironmentId && this.pendingCreateEnvironments[this.createRepositoryEnvironmentId]));
   createRepositoryName = $state("");
   createRepositoryInitialBranch = $state("");
   createRepositoryInitializeLfs = $state(false);
   createRepositoryError = $state("");
   /** True once the create form has been filled with its defaults. */
   createRepositoryPrepared = $state(false);
+  createRepositoryPreparing = $state(false);
 
   /* ---------------------------------------------------------------------- */
   /* Route state                                                             */
@@ -220,11 +246,42 @@ export class WorkspaceStore {
     this.openRepos.find((repo) => repo.id === this.activeRepositoryId) ?? null,
   );
   snapshot = $derived(this.activeRepository?.snapshot ?? null);
+  repositoryDisconnected = $derived(this.externalTabs && Boolean(this.connectionEnvironmentId) &&
+    this.environmentEntries.find((entry) => entry.registration.environmentId === this.connectionEnvironmentId)?.connection.phase !== "connected");
+  activeEnvironmentGeneration = $derived.by(() => {
+    const view = this.connectionEnvironmentId ? this.environmentViews[this.connectionEnvironmentId] : undefined;
+    // Invalidate on loss, then revalidate once replacement capabilities are installed.
+    // The stable client briefly carries an offline welcome during activation.
+    return view?.welcome ? view.generation : 0;
+  });
+  repositoryAvailability = $derived.by(() => {
+    const id = this.connectionEnvironmentId;
+    const entry = this.environmentEntries.find((item) => item.registration.environmentId === id);
+    const view = id ? this.environmentViews[id] : undefined;
+    const phase = entry?.connection.phase;
+    const environmentLabel = entry?.registration.displayName ?? id ?? "Environment";
+    const failure = this.activeRepository?.error || view?.error || entry?.connection.lastFailure?.detail;
+    if (phase === "offline") return { environmentLabel, title: "Environment offline", detail: failure || "Reconnect to load this repository.", canRetry: true };
+    if (phase === "backoff") return {
+      environmentLabel, title: "Reconnecting to environment", detail: failure || "The connection will retry automatically.", canRetry: true,
+    };
+    if (phase === "blocked" || phase === "available" || !entry) return {
+      environmentLabel, title: "Environment unavailable", detail: failure || "Connect to this environment to load the repository.", canRetry: Boolean(entry),
+    };
+    // A restored placeholder has no snapshot until connection and hydration finish.
+    if (view?.loading || this.activeRepository?.loading || phase !== "connected") return {
+      environmentLabel, title: "Loading repository…", detail: "Waiting for the environment and repository snapshot.", canRetry: false,
+    };
+    return failure
+      ? { environmentLabel, title: "Repository unavailable", detail: failure, canRetry: true }
+      : { environmentLabel, title: "Loading repository…", detail: "Waiting for the repository snapshot.", canRetry: false };
+  });
   private graphSourceRefs = $derived(this.snapshot?.refs ?? []);
   private graphSourceCommits = $derived(this.snapshot?.commits ?? []);
   private graphCurrentBranch = $derived(this.snapshot?.status.currentBranch);
   private graphHeadOid = $derived(this.snapshot?.status.headOid);
-  gitActionPending = $derived(this.gitAction !== null);
+  repositoryCanOperate = $derived(!this.externalTabs || Boolean(this.connectionEnvironmentId && this.environmentViews[this.connectionEnvironmentId]?.sessionScopes?.includes("repository:operate")));
+  gitActionPending = $derived(this.gitAction !== null || this.repositoryDisconnected || !this.repositoryCanOperate);
   canRenameBranch = $derived(!this.gitActionPending && (this.client?.serverWelcome.capabilities.includes("git.branch.rename") ?? false));
   canDeleteBranch = $derived(!this.gitActionPending && (this.client?.serverWelcome.capabilities.includes("git.branch.delete") ?? false));
   canCreateTag = $derived(!this.gitActionPending && (this.client?.serverWelcome.capabilities.includes("git.tag.create") ?? false));
@@ -238,7 +295,7 @@ export class WorkspaceStore {
   });
   canPopStash = $derived(this.stashCapabilities.pop && Boolean(this.snapshot?.stashes.length));
   activeWorkingTreeAction = $derived(
-    this.gitAction?.repositoryId === this.activeRepositoryId ? this.gitAction : null,
+    this.gitAction?.repositoryId === this.activeRepositoryId && this.gitAction.environmentId === this.connectionEnvironmentId ? this.gitAction : null,
   );
   commitPending = $derived(
     this.activeWorkingTreeAction?.kind === "commit" || this.activeWorkingTreeAction?.kind === "amend",
@@ -249,7 +306,7 @@ export class WorkspaceStore {
   queuedStageAction = $derived(
     this.queuedGitActions.find(
       (action) =>
-        action.repositoryId === this.activeRepositoryId &&
+        action.repositoryId === this.activeRepositoryId && action.environmentId === this.connectionEnvironmentId &&
         (action.kind === "stage" || action.kind === "unstage"),
     ) ?? null,
   );
@@ -313,7 +370,9 @@ export class WorkspaceStore {
   selectedGraphItem = $derived(this.activeRepository?.selectedGraphItem ?? null);
   selectedFile = $derived(this.activeRepository?.selectedFile ?? null);
   selectedFileSource = $derived(this.activeRepository?.selectedFileSource ?? "workingTree");
-  comparingCommitToWorkingTreeHash = $state<string | null>(null);
+  private comparisonHashes = $state<Record<string, string>>({});
+  comparingCommitToWorkingTreeHash = $derived(this.connectionEnvironmentId && this.activeRepositoryId
+    ? this.comparisonHashes[scopedRepositoryKey({ environmentId: this.connectionEnvironmentId, repositoryId: this.activeRepositoryId })] ?? null : null);
   selectedChangePaths = $derived(this.activeRepository?.selectedChangePaths ?? []);
   selectedChangeSource = $derived(this.activeRepository?.selectedChangeSource ?? "workingTree");
   selectedCommit = $derived(
@@ -325,19 +384,33 @@ export class WorkspaceStore {
   comparingCommitToWorkingTree = $derived(this.comparingCommitToWorkingTreeHash === this.selectedCommit?.hash);
   changesSelected = $derived(this.selectedGraphItem?.type === "changes");
 
-  repoTabs = $derived<RepoTab[]>(
-    this.openRepos.map((repo) => ({
+  repoTabs = $derived.by<RepoTab[]>(() => {
+    const tabs: RepoTab[] = this.externalTabs ? this.applicationTabs.tabs.map((tab) => {
+      const view = this.environmentViews[tab.target.environmentId];
+      const repository = view?.workspaceState.repositories[tab.target.repositoryId];
+      const summary = repository?.repository;
+      const entry = this.environmentEntries.find((item) => item.registration.environmentId === tab.target.environmentId);
+      const title = summary?.name || tab.target.repositoryId;
+      const branch = repository?.snapshot?.status.currentBranch;
+      const label = this.isDesktop && entry?.registration.target.kind === "primary" ? "" : entry?.registration.displayName ?? tab.target.environmentId;
+      return { id: tab.tabId, title, root: summary?.root || "", isWorktree: summary?.isWorktree ?? false,
+        branch: [label, branch && branch !== title ? branch : ""].filter(Boolean).join(" · "), error: repository?.error?.message ?? "" };
+    }) : this.openRepos.map((repo) => ({
       id: repo.id,
       title: repo.title,
       root: repo.root,
       isWorktree: repo.isWorktree,
       branch: repo.snapshot ? repo.snapshot.status.currentBranch ?? "Detached HEAD" : "",
       error: repo.error ?? "",
-    })),
-  );
+    }));
+    return tabs.map((tab) => {
+      const duplicate = tabs.some((other) => other.id !== tab.id && other.title === tab.title && other.branch === tab.branch);
+      return duplicate && tab.root ? { ...tab, branch: [tab.branch, displayHostPath(tab.root)].filter(Boolean).join(" · ") } : tab;
+    });
+  });
 
   loading = $derived(
-    this.bootstrapping ||
+    (this.externalTabs && !this.applicationReady) || this.bootstrapping ||
       this.operationPending ||
       this.workspaceState?.restoring === true ||
       this.workspaceState?.opening === true,
@@ -393,16 +466,71 @@ export class WorkspaceStore {
       })),
   );
 
+  groupedHomeRepositories = $derived<GroupedRepository[]>(this.repositoryGroups.map((group) => {
+    const families = new Map<string, ScopedRepositorySummary>();
+    for (const member of group.members) {
+      const key = JSON.stringify([member.ref.environmentId, member.worktreeFamilyKey ?? member.ref.repositoryId]);
+      const previous = families.get(key);
+      if (!previous || (previous.repository.isWorktree && !member.repository.isWorktree)) families.set(key, member);
+    }
+    return { groupId: group.key, title: group.members[0]?.repository.name || "Repository",
+    locations: [...families.values()].map((member) => {
+      const entry = this.environmentEntries.find((candidate) => candidate.registration.environmentId === member.ref.environmentId);
+      return { target: member.ref, environmentLabel: entry?.registration.displayName ?? member.ref.environmentId,
+        local: this.isDesktop && entry?.registration.target.kind === "primary",
+        removeAvailability: this.repositoryActionAvailability(member.ref.environmentId, "remove"),
+        environmentStatus: entry?.connection.phase, path: member.repository.root, missing: member.repository.missing };
+    }),
+  }; }).filter((group) => group.locations.length > 0));
+
+  operationEnvironments = $derived(this.environmentEntries.map((entry) => ({
+    id: entry.registration.environmentId, label: entry.registration.displayName,
+    primary: this.isDesktop && entry.registration.target.kind === "primary",
+    canOpen: this.repositoryActionAvailability(entry.registration.environmentId, "open").allowed,
+    openReason: this.repositoryActionAvailability(entry.registration.environmentId, "open").reason,
+    canCreate: this.repositoryActionAvailability(entry.registration.environmentId, "create").allowed,
+    createReason: this.repositoryActionAvailability(entry.registration.environmentId, "create").reason,
+  })));
+  homeEnvironmentCatalogs = $derived(this.environmentEntries.map((entry) => {
+    const id = entry.registration.environmentId;
+    const catalog = this.environmentCatalogs[id];
+    return {
+      id, label: entry.registration.displayName,
+      loading: catalog?.status === "syncing" || (!catalog?.hasSnapshot && !catalog?.error && (entry.connection.phase === "connected" || entry.connection.phase === "connecting")),
+      error: catalog?.error || entry.connection.lastFailure?.detail || "",
+      connectionStatus: entry.connection.phase,
+    };
+  }));
+  createEnvironmentLabel = $derived(this.environmentEntries.find((entry) => entry.registration.environmentId === this.createRepositoryEnvironmentId)?.registration.displayName ?? "");
+  selectedRepositoryActions = $derived({
+    open: this.repositoryActionAvailability(this.connectionEnvironmentId, "open"),
+    create: this.repositoryActionAvailability(this.connectionEnvironmentId, "create"),
+    remove: this.repositoryActionAvailability(this.connectionEnvironmentId, "remove"),
+  });
+  createAvailability = $derived(this.repositoryActionAvailability(this.createRepositoryEnvironmentId, "create"));
+  pathOpenAvailability = $derived(this.repositoryActionAvailability(this.repositoryPathEnvironmentId ?? this.connectionEnvironmentId, "open"));
+  canBrowseCreateLocation = $derived(this.isDesktop && this.environmentEntries.some((entry) => entry.registration.environmentId === this.createRepositoryEnvironmentId && entry.registration.target.kind === "primary"));
+  activeApplicationTab = $derived(this.applicationTabs.tabs.find((tab) => tab.tabId === this.applicationTabs.activeTabId) ?? null);
+  activeRepositoryEnvironments = $derived(this.activeApplicationTab ? repositoryLocations(
+    this.repositoryGroups.find((group) => group.members.some((member) => sameRepository(member.ref, this.activeApplicationTab!.target))),
+    this.environmentEntries, this.activeApplicationTab.target, this.isDesktop,
+  ) : []);
+
   /* ---------------------------------------------------------------------- */
   /* Internals                                                               */
   /* ---------------------------------------------------------------------- */
 
   private readonly runtime: WebApplicationRuntime;
+  private applicationWorkspace: ApplicationWorkspace | null = null;
+  private unsubscribeApplicationWorkspace: (() => void) | null = null;
   private unsubscribeRuntime: (() => void) | null = null;
   private unsubscribeDeepLink: (() => void) | null = null;
   private appliedRuntimeWorkspace: ClientWorkspace | null = null;
   private largeScreenMediaQuery: MediaQueryList | null = null;
   private activeWorkspaceRequest = 0;
+  private pendingRepositorySwitch: AbortController | null = null;
+  private pendingPathRequest: AbortController | null = null;
+  private createPreparation = 0;
   private amendRequest = 0;
   private amendSnapshotGraph: RepositorySnapshot["graph"] | undefined;
   private amendMetadataRevision = 0;
@@ -414,10 +542,14 @@ export class WorkspaceStore {
   private hasResumed = false;
   private readonly graphScrollPositions = new Map<string, number>();
   private readonly prefetchedInitialCommits = new Map<string, string>();
+  private readonly repositorySelections = new Map<string, WorkspaceRepo>();
 
   constructor(runtime: WebApplicationRuntime) {
     this.runtime = runtime;
     this.isDesktop = runtime.isDesktop;
+    this.externalTabs = runtime.tabOwnership === "external";
+    // Browser history and links can navigate without going through store actions.
+    if (browser) beforeNavigate(() => this.cancelRepositorySwitch());
 
     $effect(() => {
       const client = this.client;
@@ -569,6 +701,23 @@ export class WorkspaceStore {
     this.unsubscribeRuntime = this.runtime.subscribe((state) =>
       this.applyApplicationRuntimeState(state),
     );
+    if (this.runtime.tabOwnership === "external") {
+      const application = new ApplicationWorkspace(this.runtime, localStorage);
+      this.applicationWorkspace = application;
+      void application.start().then(() => {
+        if (this.applicationWorkspace !== application) return;
+        this.applicationReady = true;
+        this.unsubscribeApplicationWorkspace = application.subscribe((tabs) => {
+          this.applicationTabs = tabs;
+          this.applyApplicationRuntimeState(this.runtime.state);
+          if (!this.hasResumed && this.currentRouteId === HOME_ROUTE_ID) {
+            this.hasResumed = true;
+            const target = tabs.tabs.find((tab) => tab.tabId === tabs.activeTabId)?.target;
+            if (target) void this.navigate(scopedRepositoryPath(target.environmentId, target.repositoryId), { replaceState: true });
+          }
+        });
+      }).catch((error) => { this.applicationReady = true; this.startError = formatError(error); });
+    }
     this.unsubscribeDeepLink = readDesktopBridge()?.onDeepLink((url) => {
       const target = resolveDeepLinkTarget(url);
       if (target) void this.navigateTo(target);
@@ -576,6 +725,11 @@ export class WorkspaceStore {
   }
 
   dispose(): void {
+    this.cancelRepositorySwitch();
+    this.unsubscribeApplicationWorkspace?.();
+    this.unsubscribeApplicationWorkspace = null;
+    this.applicationWorkspace?.dispose();
+    this.applicationWorkspace = null;
     this.largeScreenMediaQuery?.removeEventListener("change", this.updateLargeScreen);
     this.largeScreenMediaQuery = null;
     this.unsubscribeRuntime?.();
@@ -599,6 +753,7 @@ export class WorkspaceStore {
    * was started with.
    */
   private async navigate(path: string, options: { replaceState?: boolean } = {}): Promise<void> {
+    this.cancelRepositorySwitch();
     if (!browser) return;
     const target = new URL(path, page.url);
     target.search = page.url.search;
@@ -623,16 +778,49 @@ export class WorkspaceStore {
     await this.navigate(path);
   }
 
+  private cancelRepositorySwitch(): void {
+    this.pendingRepositorySwitch?.abort();
+    if (this.pendingPathRequest && this.pendingPathRequest === this.pendingRepositorySwitch) {
+      this.pendingPathRequest = null;
+      this.repositoryPathPending = false;
+      this.repositoryPathDialogOpen = false;
+      this.repositoryPathError = "";
+    }
+    this.pendingRepositorySwitch = null;
+  }
+
+  private beginRepositorySwitch(): AbortController {
+    this.cancelRepositorySwitch();
+    const request = new AbortController();
+    this.pendingRepositorySwitch = request;
+    return request;
+  }
+
   /* ---------------------------------------------------------------------- */
   /* Runtime state                                                           */
   /* ---------------------------------------------------------------------- */
 
   private applyApplicationRuntimeState(state: WebApplicationRuntimeState): void {
+    this.environmentViews = state.environmentWorkspaces ?? {};
+    this.environmentEntries = state.registry.entries;
+    this.environmentCatalogs = state.catalogs;
+    this.repositoryGroups = state.repositoryGroups ?? [];
+    if (this.runtime.tabOwnership === "external") {
+      const active = this.applicationTabs.tabs.find((tab) => tab.tabId === this.applicationTabs.activeTabId);
+      const environmentId = active?.target.environmentId;
+      const view = environmentId ? state.environmentWorkspaces?.[environmentId] : undefined;
+      const connection = state.registry.entries.find((entry) => entry.registration.environmentId === environmentId)?.connection ?? null;
+      state = { ...state, registry: { ...state.registry, selectedEnvironmentId: environmentId }, connection,
+        client: view?.client ?? null, workspace: view?.workspace ?? null, workspaceState: view?.workspaceState ?? null,
+        loading: Boolean(active && (!view || view.loading)), error: view?.error ?? "" };
+    }
     if (this.discardDialog && (this.discardDialog.client !== state.client || this.discardDialog.workspace !== state.workspace)) {
       this.discardDialog = null;
       this.discardPreviewGeneration += 1;
     }
-    if (this.workspace && state.workspace && this.workspace !== state.workspace) this.queuedGitActions = [];
+    // The legacy selected-workspace projection cannot safely retain queued
+    // actions across replacement; external tab ownership will scope its queue.
+    if (this.runtime.tabOwnership !== "external" && this.workspace && state.workspace && this.workspace !== state.workspace) this.queuedGitActions = [];
     this.connectionEnvironmentId = state.registry.selectedEnvironmentId ?? state.client?.serverWelcome.environment_id ?? null;
     if (this.workspaceState && this.connectionEnvironmentId !== this.workspaceState.environmentId) {
       this.stashReview = null;
@@ -644,6 +832,7 @@ export class WorkspaceStore {
     const registeredEnvironments = new Set(
       state.registry.entries.map((entry) => entry.registration.environmentId),
     );
+    if (this.externalTabs) this.queuedGitActions = this.queuedGitActions.filter((action) => registeredEnvironments.has(action.environmentId));
     for (const key of Object.keys(this.commitDrafts)) {
       if (!registeredEnvironments.has(key.slice(0, key.indexOf(":")))) delete this.commitDrafts[key];
     }
@@ -651,15 +840,21 @@ export class WorkspaceStore {
     this.connectionError =
       state.connection?.phase === "blocked" || state.connection?.phase === "offline";
     this.startError = state.error;
-    if (this.connectionError) {
+    if (this.connectionError && this.runtime.tabOwnership !== "external") {
       void this.navigate("/");
     }
 
-    if (!state.client || !state.workspace || !state.workspaceState) return;
+    if (!state.client || !state.workspace || !state.workspaceState) {
+      if (this.runtime.tabOwnership === "external") { this.client = null; this.workspace = null; this.workspaceState = null; this.activeRepositoryId = null; this.openRepos = []; }
+      return;
+    }
     this.client = state.client;
     this.workspace = state.workspace;
+    if (this.runtime.tabOwnership === "external") {
+      this.repositoryCatalog = [...(state.catalogs[state.workspaceState.environmentId]?.repositories ?? [])];
+    }
     this.applyWorkspaceState(state.workspaceState);
-    if (this.appliedRuntimeWorkspace !== state.workspace) {
+    if (this.runtime.tabOwnership !== "external" && this.appliedRuntimeWorkspace !== state.workspace) {
       // Only a cold start resumes. A later session replacement must not pull
       // the user out of the page they are on.
       const isColdStart = this.appliedRuntimeWorkspace === null;
@@ -706,7 +901,9 @@ export class WorkspaceStore {
       this.amendMetadataRevision = metadataRevision;
       this.amendRefreshGeneration += 1;
     }
-    const previousRepos = this.workspaceState?.environmentId === state.environmentId ? this.openRepos : [];
+    const previousRepos = this.runtime.tabOwnership === "external"
+      ? state.openRepositoryIds.flatMap((id) => { const value = this.repositorySelections.get(scopedRepositoryKey({ environmentId: state.environmentId, repositoryId: id })); return value ? [value] : []; })
+      : this.workspaceState?.environmentId === state.environmentId ? this.openRepos : [];
     this.workspaceState = state;
     this.repositoryCatalog = this.mergeRepositoryCatalog(this.repositoryCatalog, state);
     this.activeRepositoryId = state.activeRepositoryId;
@@ -765,6 +962,9 @@ export class WorkspaceStore {
         },
       ];
     });
+    if (this.runtime.tabOwnership === "external") {
+      for (const repository of this.openRepos) this.repositorySelections.set(scopedRepositoryKey({ environmentId: state.environmentId, repositoryId: repository.id }), repository);
+    }
     this.prunePrefetchState(this.openRepos);
     this.prefetchInitialCommitFiles(this.openRepos);
 
@@ -835,14 +1035,16 @@ export class WorkspaceStore {
    */
   private async runWorkspaceCommand(
     action: () => Promise<unknown>,
-    options: { navigate?: boolean; successMessage?: string; errorMessage?: string } = {},
+    options: { navigate?: boolean; successMessage?: string; errorMessage?: string; refreshCatalog?: boolean } = {},
   ): Promise<boolean> {
     const request = ++this.activeWorkspaceRequest;
+    const environmentId = this.workspace?.environmentId;
     this.operationPending = true;
     this.startError = "";
 
     try {
       await action();
+      if (options.refreshCatalog && environmentId) void this.runtime.refreshEnvironmentCatalog?.(environmentId);
       if (request === this.activeWorkspaceRequest && options.navigate !== false) {
         await this.navigateToActiveRepository();
       }
@@ -876,6 +1078,15 @@ export class WorkspaceStore {
   async retryLocalConnection(): Promise<void> {
     if (this.bootstrapping) return;
     this.connectionError = true;
+    if (this.runtime.tabOwnership === "external" && this.connectionEnvironmentId) {
+      this.startError = "Retrying the GitGui connection…";
+      try {
+        await this.runtime.retry(this.connectionEnvironmentId);
+      } catch (caught) {
+        this.startError = formatError(caught);
+      }
+      return;
+    }
     this.startError = this.isDesktop
       ? "Restarting the local GitGui server…"
       : "Retrying the GitGui connection…";
@@ -887,7 +1098,35 @@ export class WorkspaceStore {
     }
   }
 
+  async retryEnvironmentCatalog(environmentId: string): Promise<void> {
+    const entry = this.environmentEntries.find((item) => item.registration.environmentId === environmentId);
+    if (!entry) return;
+    try {
+      if (entry.connection.phase === "connected") await this.runtime.refreshEnvironmentCatalog(environmentId);
+      else await this.runtime.retry(environmentId);
+    } catch (error) {
+      toast.error(`Could not retry ${entry.registration.displayName}`, { description: formatError(error) });
+    }
+  }
+
+  async retryActiveRepository(): Promise<void> {
+    const environmentId = this.connectionEnvironmentId, repositoryId = this.activeRepositoryId;
+    if (!environmentId || !repositoryId) return;
+    const entry = this.environmentEntries.find((item) => item.registration.environmentId === environmentId);
+    if (!entry) return;
+    try {
+      if (entry.connection.phase === "connected") {
+        await this.runtime.getEnvironmentWorkspace(environmentId)?.workspace.refreshRepository(repositoryId);
+      } else await this.runtime.retry(environmentId);
+    } catch (error) {
+      toast.error(`Could not reload repository on ${entry.registration.displayName}`, { description: formatError(error) });
+    }
+  }
+
   async chooseRepository(): Promise<void> {
+    if (this.externalTabs && this.connectionEnvironmentId) return this.chooseRepositoryForEnvironment(this.connectionEnvironmentId);
+    const availability = this.selectedRepositoryActions.open;
+    if (!availability.allowed) { this.startError = availability.reason; return; }
     this.startError = "";
 
     if (!this.isDesktop) {
@@ -904,6 +1143,7 @@ export class WorkspaceStore {
         await this.runWorkspaceCommand(() => this.requireWorkspace().openRepositoryPath(selectedPath), {
           successMessage: "Repository opened",
           errorMessage: "Could not open repository",
+          refreshCatalog: true,
         });
       }
     } catch (caught) {
@@ -911,7 +1151,37 @@ export class WorkspaceStore {
     }
   }
 
+  async chooseRepositoryForEnvironment(environmentId: string): Promise<void> {
+    const availability = this.repositoryActionAvailability(environmentId, "open");
+    if (!availability.allowed) { this.startError = availability.reason; return; }
+    this.cancelRepositorySwitch();
+    const entry = this.environmentEntries.find((candidate) => candidate.registration.environmentId === environmentId);
+    if (!entry || !this.applicationWorkspace) return;
+    if (!this.isDesktop || entry.registration.target.kind !== "primary") {
+      this.repositoryPathEnvironmentId = environmentId;
+      this.repositoryPathValue = "";
+      this.repositoryPathError = "";
+      this.repositoryPathDialogOpen = true;
+      return;
+    }
+    const request = this.beginRepositorySwitch();
+    try {
+      const path = await this.runtime.pickFolder();
+      if (!path || request.signal.aborted) return;
+      await this.applicationWorkspace.openPath(environmentId, path, undefined, request.signal);
+      if (request.signal.aborted) return;
+      const state = this.applicationWorkspace.state;
+      const target = state.tabs.find((tab) => tab.tabId === state.activeTabId)?.target;
+      if (target) await this.navigate(scopedRepositoryPath(target.environmentId, target.repositoryId));
+    } catch (error) { if (!request.signal.aborted) toast.error("Could not open repository", { description: formatError(error) }); }
+    finally { if (this.pendingRepositorySwitch === request) this.pendingRepositorySwitch = null; }
+  }
+
   async openRepository(repositoryId: string): Promise<boolean> {
+    if (this.runtime.tabOwnership === "external") {
+      const environmentId = this.connectionEnvironmentId;
+      return environmentId ? this.openScopedRepository({ environmentId, repositoryId }) : false;
+    }
     const opened = await this.runWorkspaceCommand(() => this.requireWorkspace().openKnownRepository(repositoryId));
     if (opened) {
       const repository = this.workspace?.state.repositories[repositoryId]?.repository;
@@ -921,12 +1191,15 @@ export class WorkspaceStore {
   }
 
   async removeRepository(repositoryId: string): Promise<void> {
+    if (!this.selectedRepositoryActions.remove.allowed) {
+      toast.error("Could not remove repository", { description: this.selectedRepositoryActions.remove.reason }); return;
+    }
     const draftKey = this.workspaceState?.environmentId
       ? `${this.workspaceState.environmentId}:${repositoryId}`
       : null;
     const removed = await this.runWorkspaceCommand(
       () => this.requireWorkspace().removeRepository(repositoryId),
-      { navigate: false },
+      { navigate: false, refreshCatalog: true },
     );
     if (removed) {
       if (draftKey) delete this.commitDrafts[draftKey];
@@ -938,10 +1211,12 @@ export class WorkspaceStore {
   }
 
   async selectRepository(repositoryId: string): Promise<void> {
+    if (this.runtime.tabOwnership === "external") { await this.selectApplicationTab(repositoryId); return; }
     await this.runWorkspaceCommand(() => this.requireWorkspace().selectRepository(repositoryId));
   }
 
   async closeRepository(repositoryId: string): Promise<void> {
+    if (this.runtime.tabOwnership === "external") { await this.closeApplicationTab(repositoryId); return; }
     const wasRouted = this.routedRepositoryId === repositoryId;
     await this.runWorkspaceCommand(() => this.requireWorkspace().closeRepository(repositoryId), {
       navigate: false,
@@ -954,30 +1229,155 @@ export class WorkspaceStore {
   }
 
   async switchWorktree(path: string): Promise<void> {
+    if (this.runtime.tabOwnership === "external") {
+      const source = this.applicationTabs.tabs.find((tab) => tab.tabId === this.applicationTabs.activeTabId);
+      if (!source || !this.applicationWorkspace) return;
+      const request = this.beginRepositorySwitch();
+      try {
+        await this.applicationWorkspace.switchPath(source.tabId, path, source.target, request.signal);
+        if (request.signal.aborted) return;
+        const target = this.applicationWorkspace.state.tabs.find((tab) => tab.tabId === source.tabId)?.target;
+        if (target) await this.navigate(scopedRepositoryPath(target.environmentId, target.repositoryId));
+      } catch (error) { if (!request.signal.aborted) toast.error("Could not switch worktree", { description: formatError(error) }); }
+      finally { if (this.pendingRepositorySwitch === request) this.pendingRepositorySwitch = null; }
+      return;
+    }
     const repositoryId = this.activeRepositoryId;
     if (!path.trim() || !repositoryId || !this.workspace || this.operationPending) {
       return;
     }
 
-    void this.runWorkspaceCommand(() =>
-      this.requireWorkspace().switchRepositoryPath(path, repositoryId),
+    void this.runWorkspaceCommand(
+      () => this.requireWorkspace().switchRepositoryPath(path, repositoryId),
+      { errorMessage: "Could not switch worktree", refreshCatalog: true },
     );
   }
 
+  async openWorktreeInNewTab(path: string): Promise<void> {
+    this.cancelRepositorySwitch();
+    if (this.runtime.tabOwnership === "external") {
+      const source = this.applicationTabs.tabs.find((tab) => tab.tabId === this.applicationTabs.activeTabId);
+      if (!source || !this.applicationWorkspace) return;
+      const request = this.beginRepositorySwitch();
+      try {
+        await this.applicationWorkspace.openPath(source.target.environmentId, path, source, request.signal);
+        if (request.signal.aborted) return;
+        const target = this.applicationWorkspace.state.tabs.find((tab) => tab.tabId === this.applicationWorkspace?.state.activeTabId)?.target;
+        if (target) await this.navigate(scopedRepositoryPath(target.environmentId, target.repositoryId));
+      } catch (error) { if (!request.signal.aborted) toast.error("Could not open worktree", { description: formatError(error) }); }
+      finally { if (this.pendingRepositorySwitch === request) this.pendingRepositorySwitch = null; }
+      return;
+    }
+    const workspace = this.workspace;
+    if (!path.trim() || !workspace || this.operationPending) return;
+    await this.runWorkspaceCommand(() => workspace.openRepositoryPathInNewTab(path), {
+      errorMessage: "Could not open worktree",
+      refreshCatalog: true,
+    });
+  }
+
+  async openScopedRepository(target: ScopedRepositoryRef, source?: { tabId: string; target: ScopedRepositoryRef }): Promise<boolean> {
+    this.cancelRepositorySwitch();
+    if (!this.applicationWorkspace) return false;
+    const request = this.beginRepositorySwitch();
+    try {
+      await this.applicationWorkspace.open(target, source, request.signal);
+      if (request.signal.aborted) return false;
+      await this.navigate(scopedRepositoryPath(target.environmentId, target.repositoryId));
+      return true;
+    } catch (error) { if (!request.signal.aborted) toast.error("Could not open repository", { description: formatError(error) }); return false; }
+    finally { if (this.pendingRepositorySwitch === request) this.pendingRepositorySwitch = null; }
+  }
+
+  async activateRouteRepository(target: ScopedRepositoryRef, signal: AbortSignal): Promise<void> {
+    this.cancelRepositorySwitch();
+    if (!this.applicationWorkspace) throw new Error("Application workspace is not ready.");
+    await this.applicationWorkspace.activate(target, signal);
+  }
+
+  async removeScopedRepository(target: ScopedRepositoryRef): Promise<void> {
+    const availability = this.repositoryActionAvailability(target.environmentId, "remove");
+    if (!availability.allowed) { toast.error("Could not remove repository", { description: availability.reason }); return; }
+    this.cancelRepositorySwitch();
+    const application = this.applicationWorkspace;
+    const data = this.runtime.getEnvironmentWorkspace(target.environmentId);
+    if (!application || !data) return;
+    const existing = application.state.tabs.find((tab) => sameRepository(tab.target, target));
+    let removed = false;
+    try {
+      await data.client.removeRepository(target.repositoryId);
+      removed = true;
+      if (existing) await application.closeIfMatches(existing.tabId, target);
+      // The repository route observes the resulting active tab and owns URL
+      // replacement. Home/settings must survive a late removal unchanged.
+    } catch (error) {
+      if (removed) toast.warning("Repository removed; the tab could not be closed", { description: formatError(error) });
+      else toast.error("Could not remove repository", { description: formatError(error) });
+    } finally { if (removed) void this.runtime.refreshEnvironmentCatalog(target.environmentId); }
+  }
+
+  async selectApplicationTab(tabId: string): Promise<void> {
+    this.cancelRepositorySwitch();
+    if (!this.applicationWorkspace) return;
+    try {
+      await this.applicationWorkspace.select(tabId);
+      const target = this.applicationWorkspace.state.tabs.find((tab) => tab.tabId === tabId)?.target;
+      if (target) await this.navigate(scopedRepositoryPath(target.environmentId, target.repositoryId));
+    } catch (error) { toast.error("Could not select repository", { description: formatError(error) }); }
+  }
+
+  async closeApplicationTab(tabId: string): Promise<void> {
+    this.cancelRepositorySwitch();
+    if (!this.applicationWorkspace) return;
+    try {
+      await this.applicationWorkspace.close(tabId);
+    } catch (error) { toast.error("Could not close repository", { description: formatError(error) }); }
+  }
+
+  async switchScopedRepository(target: ScopedRepositoryRef, source: { tabId: string; target: ScopedRepositoryRef }): Promise<void> {
+    if (!this.applicationWorkspace) return;
+    const request = this.beginRepositorySwitch();
+    try {
+      await this.applicationWorkspace.switch(source.tabId, target, source.target, request.signal);
+      if (request.signal.aborted) return;
+      await this.navigate(scopedRepositoryPath(target.environmentId, target.repositoryId));
+    } catch (error) { if (!request.signal.aborted) toast.error("Could not switch repository", { description: formatError(error) }); }
+    finally { if (this.pendingRepositorySwitch === request) this.pendingRepositorySwitch = null; }
+  }
+
   closeRepositoryPathDialog(): void {
-    if (!this.operationPending) {
+    if (this.externalTabs && this.repositoryPathPending) this.cancelRepositorySwitch();
+    if (!(this.externalTabs ? this.repositoryPathPending : this.operationPending)) {
       this.repositoryPathDialogOpen = false;
       this.repositoryPathError = "";
     }
   }
 
   async submitRepositoryPath(): Promise<void> {
+    if (!this.pathOpenAvailability.allowed) { this.repositoryPathError = this.pathOpenAvailability.reason; return; }
     const path = this.repositoryPathValue.trim();
     if (!path) {
       this.repositoryPathError = "Enter a repository path on the connected host.";
       return;
     }
 
+    if (this.runtime.tabOwnership === "external") {
+      const environmentId = this.repositoryPathEnvironmentId;
+      if (!environmentId || !this.applicationWorkspace || this.repositoryPathPending) return;
+      this.repositoryPathPending = true;
+      const request = this.beginRepositorySwitch();
+      this.pendingPathRequest = request;
+      try {
+        await this.applicationWorkspace.openPath(environmentId, path, undefined, request.signal);
+        if (request.signal.aborted) return;
+        this.repositoryPathDialogOpen = false;
+        const state = this.applicationWorkspace.state;
+        const target = state.tabs.find((tab) => tab.tabId === state.activeTabId)?.target;
+        if (target) await this.navigate(scopedRepositoryPath(target.environmentId, target.repositoryId));
+      } catch (error) { if (!request.signal.aborted) this.repositoryPathError = formatError(error); }
+      finally { if (this.pendingPathRequest === request) { this.repositoryPathPending = false; this.pendingPathRequest = null; } if (this.pendingRepositorySwitch === request) this.pendingRepositorySwitch = null; }
+      return;
+    }
     const workspace = this.workspace;
     if (!workspace || this.operationPending) return;
     this.repositoryPathDialogOpen = false;
@@ -986,6 +1386,7 @@ export class WorkspaceStore {
     await this.runWorkspaceCommand(() => workspace.openRepositoryPath(path), {
       successMessage: "Repository opened",
       errorMessage: "Could not open repository",
+      refreshCatalog: true,
     });
   }
 
@@ -999,21 +1400,38 @@ export class WorkspaceStore {
    * The form is prepared before the page is shown, so the default project
    * location is already in place when the page appears.
    */
-  async prepareCreateRepository(): Promise<void> {
-    this.createRepositoryParentPath = await resolveProjectsLocation();
+  async prepareCreateRepository(environmentId?: string): Promise<void> {
+    const preparation = ++this.createPreparation;
+    const registered = (id: string | null | undefined) => this.environmentEntries.some((entry) => entry.registration.environmentId === id) ? id : undefined;
+    this.createRepositoryEnvironmentId = environmentId ?? registered(this.connectionEnvironmentId) ?? registered(this.runtime.state.registry.selectedEnvironmentId)
+      ?? this.operationEnvironments.find((entry) => entry.primary)?.id ?? this.operationEnvironments[0]?.id ?? null;
+    this.createRepositoryParentPath = "";
     this.createRepositoryName = "";
     this.createRepositoryInitialBranch = "";
     this.createRepositoryInitializeLfs = false;
-    this.createRepositoryError = "";
+    this.createRepositoryError = this.externalTabs && !this.createRepositoryEnvironmentId ? "No environment is available. Add a connection before creating a repository." : "";
     this.createRepositoryPrepared = true;
+    this.createRepositoryPreparing = true;
+    try {
+      if (!this.externalTabs || this.canBrowseCreateLocation) {
+        const path = await resolveProjectsLocation();
+        if (preparation === this.createPreparation) this.createRepositoryParentPath = path;
+      }
+    } catch (error) {
+      if (preparation === this.createPreparation) this.createRepositoryError = formatError(error);
+    } finally {
+      if (preparation === this.createPreparation) this.createRepositoryPreparing = false;
+    }
   }
 
-  async beginCreateRepository(): Promise<void> {
-    await this.prepareCreateRepository();
+  async beginCreateRepository(environmentId?: string): Promise<void> {
+    this.cancelRepositorySwitch();
+    await this.prepareCreateRepository(environmentId);
     await this.showCreateRepositoryView();
   }
 
   async submitCreateRepository(): Promise<void> {
+    if (!this.createAvailability.allowed) { this.createRepositoryError = this.createAvailability.reason; return; }
     const name = this.createRepositoryName.trim();
     if (!name) {
       this.createRepositoryError = "Enter a repository name to continue.";
@@ -1025,6 +1443,35 @@ export class WorkspaceStore {
     }
 
     this.createRepositoryError = "";
+    if (this.runtime.tabOwnership === "external") {
+      const environmentId = this.createRepositoryEnvironmentId;
+      if (!environmentId || !this.environmentEntries.some((entry) => entry.registration.environmentId === environmentId)) {
+        this.createRepositoryError = "The selected environment is unavailable. Return to Repositories and choose a connection.";
+        return;
+      }
+      if (!this.applicationWorkspace || !this.applicationReady) {
+        this.createRepositoryError = "The workspace is still starting. Try again when it is ready.";
+        return;
+      }
+      if (this.createRepositoryPending) return;
+      this.pendingCreateEnvironments[environmentId] = true;
+      const request = this.beginRepositorySwitch();
+      try {
+        const opened = await this.applicationWorkspace.create(environmentId, this.createRepositoryParentPath.trim(), name, {
+          ...(this.createRepositoryInitialBranch.trim() ? { initialBranch: this.createRepositoryInitialBranch.trim() } : {}),
+          initializeLfs: this.createRepositoryInitializeLfs,
+        }, request.signal);
+        if (!opened || request.signal.aborted) { if (!opened) toast.success("Repository created", { description: "Open it from Repositories when you are ready." }); return; }
+        const state = this.applicationWorkspace.state;
+        const target = state.tabs.find((tab) => tab.tabId === state.activeTabId)?.target;
+        if (target) await this.navigate(scopedRepositoryPath(target.environmentId, target.repositoryId));
+      } catch (error) {
+        if (!request.signal.aborted) this.createRepositoryError = formatError(error);
+        else toast.warning("Could not confirm repository creation", { description: "Check Repositories on the selected environment before retrying." });
+      }
+      finally { delete this.pendingCreateEnvironments[environmentId]; if (this.pendingRepositorySwitch === request) this.pendingRepositorySwitch = null; }
+      return;
+    }
     const created = await this.runWorkspaceCommand(() =>
       this.requireWorkspace().createRepository(this.createRepositoryParentPath.trim(), name, {
         ...(this.createRepositoryInitialBranch.trim()
@@ -1032,6 +1479,7 @@ export class WorkspaceStore {
           : {}),
         initializeLfs: this.createRepositoryInitializeLfs,
       }),
+      { refreshCatalog: true },
     );
     if (created) {
       this.createRepositoryParentPath = "";
@@ -1044,7 +1492,8 @@ export class WorkspaceStore {
   }
 
   async browseCreateRepositoryLocation(): Promise<void> {
-    if (!this.isDesktop) {
+    if (!this.createAvailability.allowed) { this.createRepositoryError = this.createAvailability.reason; return; }
+    if (!this.isDesktop || (this.runtime.tabOwnership === "external" && !this.canBrowseCreateLocation)) {
       return;
     }
 
@@ -1060,11 +1509,18 @@ export class WorkspaceStore {
   }
 
   async closeCreateRepositoryView(): Promise<void> {
-    if (!this.operationPending) {
+    if (!(this.externalTabs ? this.createRepositoryPending : this.operationPending)) {
       this.createRepositoryError = "";
       this.createRepositoryPrepared = false;
       await this.showStartView();
     }
+  }
+
+  repositoryActionAvailability(environmentId: string | null, action: RepositoryManagementAction) {
+    const entry = this.environmentEntries.find((candidate) => candidate.registration.environmentId === environmentId);
+    if (!entry) return { allowed: false, reason: "The selected environment is unavailable. Return to Repositories and choose a connection." };
+    const view = environmentId ? this.environmentViews[environmentId] : undefined;
+    return repositoryManagementAvailability(action, entry?.connection.phase === "connected", view?.sessionScopes, view?.welcome?.capabilities);
   }
 
   /* ---------------------------------------------------------------------- */
@@ -1079,10 +1535,14 @@ export class WorkspaceStore {
     this.openRepos = this.openRepos.map((repo) =>
       repo.id === this.activeRepositoryId ? update(repo) : repo,
     );
+    if (this.runtime.tabOwnership === "external" && this.connectionEnvironmentId) {
+      const active = this.openRepos.find((repo) => repo.id === this.activeRepositoryId);
+      if (active) this.repositorySelections.set(scopedRepositoryKey({ environmentId: this.connectionEnvironmentId, repositoryId: active.id }), active);
+    }
   }
 
   selectCommit(commit: CommitInfo): void {
-    this.comparingCommitToWorkingTreeHash = null;
+    this.setComparisonHash(null);
     this.updateActiveRepository((repo) => ({
       ...repo,
       selectedGraphItem: { type: "commit", commit },
@@ -1094,16 +1554,22 @@ export class WorkspaceStore {
   }
 
   compareCommitToWorkingTree(commit: CommitInfo): void {
-    this.comparingCommitToWorkingTreeHash = commit.hash;
     this.selectCommit(commit);
-    this.comparingCommitToWorkingTreeHash = commit.hash;
+    this.setComparisonHash(commit.hash);
+  }
+
+  private setComparisonHash(hash: string | null): void {
+    if (!this.connectionEnvironmentId || !this.activeRepositoryId) return;
+    const key = scopedRepositoryKey({ environmentId: this.connectionEnvironmentId, repositoryId: this.activeRepositoryId });
+    if (hash === null) delete this.comparisonHashes[key];
+    else this.comparisonHashes[key] = hash;
   }
 
   /** Sidebar and graph share a real stash selection, never a fabricated commit. */
   selectStash(stash: StashInfo): void {
     const selected = reconcileSelectedStash(stash, this.snapshot?.stashes ?? []);
     if (!selected) return;
-    this.comparingCommitToWorkingTreeHash = null;
+    this.setComparisonHash(null);
     this.updateActiveRepository((repo) => ({
       ...repo,
       selectedGraphItem: { type: "stash", stash: selected },
@@ -1128,7 +1594,7 @@ export class WorkspaceStore {
   }
 
   selectChanges(): void {
-    this.comparingCommitToWorkingTreeHash = null;
+    this.setComparisonHash(null);
     this.updateActiveRepository((repo) => ({
       ...repo,
       selectedGraphItem: { type: "changes" },
@@ -1232,11 +1698,17 @@ export class WorkspaceStore {
   }
 
   rememberGraphScrollTop(repositoryId: string, scrollTop: number): void {
-    this.graphScrollPositions.set(repositoryId, scrollTop);
+    this.graphScrollPositions.set(this.repositoryStateKey(repositoryId), scrollTop);
   }
 
   graphScrollTopFor(repositoryId: string): number {
-    return this.graphScrollPositions.get(repositoryId) ?? 0;
+    return this.graphScrollPositions.get(this.repositoryStateKey(repositoryId)) ?? 0;
+  }
+
+  private repositoryStateKey(repositoryId: string): string {
+    return this.connectionEnvironmentId
+      ? scopedRepositoryKey({ environmentId: this.connectionEnvironmentId, repositoryId })
+      : repositoryId;
   }
 
   finishScrollToCommit(commandId: number): void {
@@ -1250,7 +1722,10 @@ export class WorkspaceStore {
   /* ---------------------------------------------------------------------- */
 
   private prunePrefetchState(repos: WorkspaceRepo[]): void {
-    const openRepoIds = new Set(repos.map((repo) => repo.id));
+    const openRepoIds = new Set(repos.map((repo) => this.repositoryStateKey(repo.id)));
+
+    // Other environments have their own open tabs and prefetch lifetimes.
+    if (this.runtime.tabOwnership === "external") return;
 
     for (const repoId of this.prefetchedInitialCommits.keys()) {
       if (!openRepoIds.has(repoId)) {
@@ -1276,13 +1751,14 @@ export class WorkspaceStore {
 
       const signature = commitHashes.join(":");
 
-      if (this.prefetchedInitialCommits.get(repo.id) === signature) {
+      const key = this.repositoryStateKey(repo.id);
+      if (this.prefetchedInitialCommits.get(key) === signature) {
         continue;
       }
 
-      this.prefetchedInitialCommits.set(repo.id, signature);
+      this.prefetchedInitialCommits.set(key, signature);
       void this.workspace.prefetchCommitFiles(repo.id, commitHashes).catch(() => {
-        this.prefetchedInitialCommits.delete(repo.id);
+        if (this.prefetchedInitialCommits.get(key) === signature) this.prefetchedInitialCommits.delete(key);
       });
     }
   }
@@ -1292,42 +1768,36 @@ export class WorkspaceStore {
   /* ---------------------------------------------------------------------- */
 
   private requestGitAction(request: GitActionRequest, queueWhenBusy = false): void {
+    if (this.repositoryDisconnected || !this.repositoryCanOperate) return;
     const repositoryId = this.activeRepositoryId;
-    if (!repositoryId || !this.client || !this.workspace) {
+    const client = this.client, workspace = this.workspace, environmentId = this.connectionEnvironmentId;
+    if (!repositoryId || !client || !workspace || !environmentId) {
       return;
     }
 
-    if (this.gitAction !== null) {
+    if (this.pendingGitActions[scopedRepositoryKey({ environmentId, repositoryId })]) {
       if (queueWhenBusy) {
-        this.queuedGitActions = [...this.queuedGitActions, { ...request, repositoryId }];
+        this.queuedGitActions = [...this.queuedGitActions, { ...request, repositoryId, environmentId, client, workspace }];
       }
       return;
     }
 
-    void this.runGitAction({ ...request, repositoryId });
+    void this.runGitAction({ ...request, repositoryId, environmentId, client, workspace });
   }
 
   private async runGitAction(request: PendingGitAction): Promise<void> {
-    const workspace = this.workspace;
-    if (!workspace) {
-      return;
-    }
-
-    this.gitAction = {
-      repositoryId: request.repositoryId,
-      kind: request.kind,
-      label: request.label,
-    };
+    const workspace = request.workspace;
+    const action = this.beginGitAction(request, request.kind, request.label);
 
     let applied = false;
     try {
-      const mutationResult = await request.action(request.repositoryId);
+      const mutationResult = await request.action(request.repositoryId, request.client);
       applied = true;
       if (request.affectedPaths?.length) workspace.invalidateFileContent(request.repositoryId, request.affectedPaths);
       await request.onApplied?.(mutationResult);
       const refreshedState = await this.refreshAfterMutation(workspace, request.repositoryId, request.kind, mutationResult);
       // End pending UI before publishing the result, including custom toasts.
-      this.gitAction = null;
+      this.releaseGitAction(action);
       if (request.kind === "switchBranch" && this.hasUnmergedFiles(request.repositoryId, refreshedState)) {
         toast.warning("Switched with conflicts", { description: "Resolve the highlighted conflicts." });
       } else if (request.onSucceeded) {
@@ -1347,7 +1817,7 @@ export class WorkspaceStore {
           if (request.affectedPaths?.length) workspace.invalidateFileContent(request.repositoryId, request.affectedPaths);
           await request.onApplied?.();
         }
-        this.gitAction = null;
+        this.releaseGitAction(action);
         toast.warning("Changes applied; refresh failed", {
           description: summarizeGitError(caught),
           action: {
@@ -1361,19 +1831,38 @@ export class WorkspaceStore {
         });
       } else {
         await workspace.refreshRepository(request.repositoryId).catch(() => undefined);
-        this.gitAction = null;
+        this.releaseGitAction(action);
         if (!request.onFailed?.(caught)) {
           toast.error(`${request.label} failed`, { description: summarizeGitError(caught) });
         }
       }
     } finally {
-      this.gitAction = null;
-      const nextAction = this.queuedGitActions[0];
-      this.queuedGitActions = this.queuedGitActions.slice(1);
-      if (nextAction) {
-        void this.runGitAction(nextAction);
-      }
+      this.releaseGitAction(action);
+      this.runNextGitAction(request);
     }
+  }
+
+  private beginGitAction(context: ScopedRepositoryRef, kind: string, label: string) {
+    const action = { environmentId: context.environmentId, repositoryId: context.repositoryId, kind, label };
+    this.pendingGitActions = { ...this.pendingGitActions, [scopedRepositoryKey(context)]: action };
+    return action;
+  }
+
+  private releaseGitAction(action: NonNullable<WorkspaceStore["gitAction"]>): void {
+    const key = scopedRepositoryKey(action);
+    if (this.pendingGitActions[key] !== action) return;
+    const next = { ...this.pendingGitActions };
+    delete next[key];
+    this.pendingGitActions = next;
+  }
+
+  private runNextGitAction(context: ScopedRepositoryRef): void {
+    if (this.pendingGitActions[scopedRepositoryKey(context)]) return;
+    const index = this.queuedGitActions.findIndex((action) => sameRepository(action, context));
+    if (index < 0) return;
+    const next = this.queuedGitActions[index];
+    this.queuedGitActions = this.queuedGitActions.filter((_, position) => position !== index);
+    if (this.externalTabs || this.workspace === next.workspace) void this.runGitAction(next);
   }
 
   private async refreshAfterMutation(
@@ -1434,8 +1923,8 @@ export class WorkspaceStore {
       kind: "switchBranch",
       label: `Switching to ${branchName}`,
       successMessage: `Switched to ${branchName}`,
-      action: (repositoryId) =>
-        this.client!.switchBranch({
+      action: (repositoryId, client) =>
+        client.switchBranch({
           repositoryId,
           name: branchName,
           merge: readBranchSwitchMergePreference(),
@@ -1467,7 +1956,7 @@ export class WorkspaceStore {
       kind: "pull",
       label: "Pulling",
       successMessage: "Pulled from remote",
-      action: (repositoryId) => this.client!.pull(repositoryId),
+      action: (repositoryId, client) => client.pull(repositoryId),
     });
   }
 
@@ -1476,7 +1965,7 @@ export class WorkspaceStore {
       kind: "push",
       label: "Pushing",
       successMessage: "Pushed to remote",
-      action: (repositoryId) => this.client!.push(repositoryId),
+      action: (repositoryId, client) => client.push(repositoryId),
       onSucceeded: (result) => {
         const receipt = result as GitPushResult;
         if (typeof receipt.tagError === "string" && receipt.tagError) toast.warning("Push completed with rejected refs", { description: receipt.tagError });
@@ -1542,7 +2031,7 @@ export class WorkspaceStore {
         label: "Staging",
         notifySuccess: false,
         affectedPaths: [file.path],
-        action: (repositoryId) => this.client!.stage(repositoryId, [file.path]),
+        action: (repositoryId, client) => client.stage(repositoryId, [file.path]),
       },
       true,
     );
@@ -1559,7 +2048,7 @@ export class WorkspaceStore {
         label: "Staging",
         notifySuccess: false,
         affectedPaths: paths,
-        action: (repositoryId) => this.client!.stage(repositoryId, paths),
+        action: (repositoryId, client) => client.stage(repositoryId, paths),
       },
       true,
     );
@@ -1572,7 +2061,7 @@ export class WorkspaceStore {
         label: "Unstaging",
         notifySuccess: false,
         affectedPaths: [file.path],
-        action: (repositoryId) => this.client!.unstage(repositoryId, [file.path]),
+        action: (repositoryId, client) => client.unstage(repositoryId, [file.path]),
       },
       true,
     );
@@ -1589,7 +2078,7 @@ export class WorkspaceStore {
         label: "Unstaging",
         notifySuccess: false,
         affectedPaths: paths,
-        action: (repositoryId) => this.client!.unstage(repositoryId, paths),
+        action: (repositoryId, client) => client.unstage(repositoryId, paths),
       },
       true,
     );
@@ -1601,7 +2090,7 @@ export class WorkspaceStore {
         kind: "stage",
         label: "Staging",
         notifySuccess: false,
-        action: (repositoryId) => this.client!.stage(repositoryId),
+        action: (repositoryId, client) => client.stage(repositoryId),
       },
       true,
     );
@@ -1613,7 +2102,7 @@ export class WorkspaceStore {
         kind: "unstage",
         label: "Unstaging",
         notifySuccess: false,
-        action: (repositoryId) => this.client!.unstage(repositoryId),
+        action: (repositoryId, client) => client.unstage(repositoryId),
       },
       true,
     );
@@ -1684,12 +2173,11 @@ export class WorkspaceStore {
   }
 
   private async runDiscard(dialog: NonNullable<WorkspaceStore["discardDialog"]>, files: GitDiscardFile[], deleteUntracked: boolean): Promise<void> {
-    const { workspace, client, repositoryId } = dialog;
+    const { workspace, client, environmentId, repositoryId } = dialog;
     const generation = ++this.discardActionGeneration;
     const checkpoint = workspace.beginDiscard(repositoryId);
     const paths = files.map((file) => file.path);
-    this.gitAction = { repositoryId, kind: "discard", label: "Discarding" };
-    const submittedAction = this.gitAction;
+    const submittedAction = this.beginGitAction({ environmentId, repositoryId }, "discard", "Discarding");
     const current = () => generation === this.discardActionGeneration && this.workspace === workspace;
     let outcome: GitDiscardResult | undefined;
     let failure: unknown;
@@ -1701,7 +2189,7 @@ export class WorkspaceStore {
     workspace.reconcileDiscard(checkpoint, paths, outcome?.completedPaths ?? []);
     // Selection can change while the original RPC is running. Release exactly
     // its pending action, even if another environment is now on screen.
-    if (this.gitAction === submittedAction) this.gitAction = null;
+    this.releaseGitAction(submittedAction);
     if (outcome) {
         if (outcome.error) {
           toast.error("Discard stopped", {
@@ -1723,11 +2211,7 @@ export class WorkspaceStore {
         action: { label: "Retry refresh", onClick: () => workspace.queueRepositoryStatusRefresh(repositoryId) },
       });
     });
-    if (current()) {
-      const next = this.queuedGitActions[0];
-      this.queuedGitActions = this.queuedGitActions.slice(1);
-      if (next) void this.runGitAction(next);
-    }
+    this.runNextGitAction({ environmentId, repositoryId });
   }
 
   applySelectedHunks(params: GitApplyHunksParams): void {
@@ -1945,7 +2429,13 @@ export class WorkspaceStore {
         for (const id of outcome.removedRepositoryIds) {
           delete this.commitDrafts[`${dialog.environmentId}:${id}`];
           if (this.workspace === workspace) this.repositoryCatalog = this.repositoryCatalog.filter((repo) => repo.id !== id);
-          await workspace.forgetRepository(id);
+          if (this.externalTabs && this.applicationWorkspace) {
+            const tab = this.applicationWorkspace.state.tabs.find((item) => item.target.environmentId === dialog.environmentId && item.target.repositoryId === id);
+            if (tab) await this.applicationWorkspace.closeIfMatches(tab.tabId, { environmentId: dialog.environmentId, repositoryId: id });
+            void this.runtime.refreshEnvironmentCatalog(dialog.environmentId);
+          } else {
+            await workspace.forgetRepository(id);
+          }
         }
       },
       onSucceeded: (result) => {
@@ -2046,11 +2536,11 @@ export class WorkspaceStore {
     // environment's client/workspace across every await. Never route late work
     // through this.client after an environment switch.
     const runtime = this.runtime.state;
-    const client = runtime.client;
-    const workspace = runtime.workspace;
+    const client = this.externalTabs ? this.client : runtime.client;
+    const workspace = this.externalTabs ? this.workspace : runtime.workspace;
     if (!client || !workspace || this.gitActionPending ||
       client.serverWelcome.environment_id !== context.environmentId ||
-      (runtime.registry.selectedEnvironmentId && runtime.registry.selectedEnvironmentId !== context.environmentId) ||
+      (!this.externalTabs && runtime.registry.selectedEnvironmentId && runtime.registry.selectedEnvironmentId !== context.environmentId) ||
       !stashContextIsCurrent(context, this.workspaceState?.environmentId, this.activeRepositoryId, this.snapshot?.stashes ?? [])) {
       toast.error("Stash review is no longer current", { description: "Open the action again in the original repository." });
       return;
@@ -2066,22 +2556,24 @@ export class WorkspaceStore {
     const stashRoots = new Set([sourceRepo?.root, ...(sourceRepo?.snapshot?.worktrees.map((entry) => entry.path) ?? [])]);
     const retryRefresh = async () => {
       const current = this.runtime.state;
-      if (!current.workspace || current.client?.serverWelcome.environment_id !== context.environmentId || current.registry.selectedEnvironmentId !== context.environmentId) {
+      const scoped = this.externalTabs ? this.runtime.getEnvironmentWorkspace(context.environmentId) : null;
+      const retryWorkspace = this.externalTabs ? scoped?.workspace : current.workspace;
+      if (!retryWorkspace || (!this.externalTabs && (current.client?.serverWelcome.environment_id !== context.environmentId || current.registry.selectedEnvironmentId !== context.environmentId))) {
         throw new Error("Select and reconnect to the original environment before refreshing this repository.");
       }
-      await this.refreshAfterMutation(current.workspace, context.repositoryId);
+      await this.refreshAfterMutation(retryWorkspace, context.repositoryId);
     };
-    this.gitAction = { repositoryId: context.repositoryId, kind: action === "pop" ? "stashPop" : "stash", label: action === "selected" ? "Stashing selected changes" : "Updating stash" };
+    const submittedAction = this.beginGitAction(context, action === "pop" ? "stashPop" : "stash", action === "selected" ? "Stashing selected changes" : "Updating stash");
     const request = action === "selected" ? { action, repositoryId: context.repositoryId } : action === "branch"
       ? { action, repositoryId: context.repositoryId, target: { ...context.target! }, name: branchName }
       : { action, repositoryId: context.repositoryId, target: { ...context.target! } };
     const result = await performStashOperation(request, () => mutate(client), refresh, (receipt) => {
-      if (action !== "selected" && "stashState" in receipt && receipt.stashState === "removed" && this.workspaceState?.environmentId === context.environmentId) {
+      if (action !== "selected" && "stashState" in receipt && receipt.stashState === "removed") {
         const removedIndex = stashSelectorIndex(receipt.target.selector);
-        this.openRepos = this.openRepos.map((repo) => {
+        const invalidate = (repo: WorkspaceRepo): WorkspaceRepo => {
           const selected = repo.selectedGraphItem;
-          const sharesStashes = repo.id === context.repositoryId || stashRoots.has(repo.root) ||
-            (sourceRepo && repo.snapshot?.worktrees.some((entry) => entry.path === sourceRepo.root));
+          const sharesStashes = repo.id === context.repositoryId || [...stashRoots].some((root) => root && sameHostPath(root, repo.root)) ||
+            (sourceRepo && repo.snapshot?.worktrees.some((entry) => sameHostPath(entry.path, sourceRepo.root)));
           if (!sharesStashes || selected?.type !== "stash") return repo;
           const selectedIndex = stashSelectorIndex(selected.stash.selector);
           // Removal shifts every older selector, even when its OID is unchanged
@@ -2091,12 +2583,18 @@ export class WorkspaceStore {
           return shifted || removed
             ? { ...repo, selectionInitialized: true, selectedGraphItem: null, selectedFile: null, selectedFileSource: null }
             : repo;
-        });
+        };
+        if (this.externalTabs) {
+          for (const [key, repo] of this.repositorySelections) {
+            if (key === scopedRepositoryKey({ environmentId: context.environmentId, repositoryId: repo.id })) this.repositorySelections.set(key, invalidate(repo));
+          }
+        }
+        if (this.workspaceState?.environmentId === context.environmentId) this.openRepos = this.openRepos.map(invalidate);
       }
     });
-    this.gitAction = null;
+    this.releaseGitAction(submittedAction);
     if (result.receipt && (result.notice.conflicts || this.hasUnmergedFiles(context.repositoryId, workspace.state)) &&
-      this.workspaceState?.environmentId === context.environmentId && this.activeRepositoryId === context.repositoryId && this.runtime.state.registry.selectedEnvironmentId === context.environmentId) this.selectChanges();
+      this.workspaceState?.environmentId === context.environmentId && this.activeRepositoryId === context.repositoryId && (this.externalTabs || this.runtime.state.registry.selectedEnvironmentId === context.environmentId)) this.selectChanges();
     const { tone, title, description } = result.notice;
     toast[tone](result.refreshError ? `${title}; refresh failed` : title, {
       description: result.refreshError ? `${description} ${summarizeGitError(result.refreshError)}` : description,
@@ -2107,9 +2605,7 @@ export class WorkspaceStore {
         },
       } : {}),
     });
-    const nextAction = this.queuedGitActions[0];
-    this.queuedGitActions = this.queuedGitActions.slice(1);
-    if (nextAction && this.workspace === workspace) void this.runGitAction(nextAction);
+    this.runNextGitAction(context);
   }
 
   /* ---------------------------------------------------------------------- */

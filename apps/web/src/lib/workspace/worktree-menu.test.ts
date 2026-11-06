@@ -8,6 +8,11 @@ const worktree: WorktreeInfo = { path: "/tmp/linked", branch: "issue/2", headOid
 const options = { canRename: true, canRemove: true, canDeleteBranch: true };
 
 describe("branch and worktree removal menus", () => {
+  it("offers navigation to a new tab independently of destructive permissions", () => {
+    const items = worktreeMenuItems(worktree, { canRename: false, canRemove: false, canDeleteBranch: false, canOpenInNewTab: true });
+    expect(items[0]).toMatchObject({ id: "open-in-new-tab", label: "Open in new tab" });
+    expect(items[0].disabled).not.toBe(true);
+  });
   it("offers the same three actions on a branch checked out in a linked worktree", () => {
     const fromWorktree = worktreeMenuItems(worktree, options);
     const fromBranch = branchMenuItems(branch, { canRename: true, canDelete: true, checkedOut: true, worktree, canRemoveWorktree: true });

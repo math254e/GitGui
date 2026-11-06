@@ -19,6 +19,49 @@ when a divergence changes. There are 30 vendored implementation files: eight
 verbatim bodies and 22 adapted files. “Verbatim” permits only the provenance
 header and the manifest's package-name replacements.
 
+The new GitGui-owned repository grouping helper in
+`packages/client-runtime/src/workspace/repository.ts` adapts the logical/physical
+grouping concept from `packages/client-runtime/src/state/projectGrouping.ts` in
+the separately inspected T3 checkout at `70cd258d8aac43ea57494527b00bf36de3efa6c0`.
+It uses environment-scoped server checkout IDs and worktree-family fallback,
+and omits T3's project settings, timestamps and conversation model. Its focused
+tests cover preservation of multiple physical clones and scoped fallback. This
+helper is not part of the existing vendored snapshot or a runtime resync.
+
+Environment naming additionally inspected that checkout's four internals docs,
+`connection/onboarding.ts`, `connection/registry.ts`, web `ConnectionsSettings`,
+desktop backend configuration/SSH service, and `packages/ssh/src/tunnel.ts`.
+GitGui's separately adapted (nonvendored) SSH onboarding now accepts T3's optional
+`label` and stores it in target/profile labels; direct onboarding follows the same
+pattern. The GitGui-owned `environment/names.ts` helper validates explicit names
+and normalizes historical product-prefixed defaults. Client-local name preferences
+support primary and multi-route renaming without replacing supervisors, rewriting
+registrations or introducing a server RPC. Electron persists these presentation
+preferences through its narrow bridge, alongside its existing catalog and protected
+credentials. See [connection-runtime.md](./connection-runtime.md#environment-names)
+for fallback, legacy-label handling and persistence limitations. No vendored body,
+manifest hash, upstream snapshot, Effect or @effect/vitest pin changes for naming.
+
+`crates/gitgui-core/src/git/repository_identity.rs` separately translates the
+same checkout's `apps/server/src/project/RepositoryIdentityResolver.ts` and
+`packages/shared/src/git.ts` remote selection and normalization rules to Rust.
+It returns only safe comparison keys and rejects unsupported URL forms instead
+of preserving their raw text. Its bounded Git reader is not yet connected to
+the server catalog; the runtime snapshot and Effect pins are unchanged.
+
+`apps/web/src/lib/connection/environment-workspace.ts` is a GitGui-owned
+Promise adapter informed by the same inspected checkout's
+`packages/client-runtime/src/connection/registry.ts` (`followStream`) and
+`rpc/client.ts` (current-session unary requests). It translates these lifecycle
+concepts to stable per-environment workspace data and the existing Promise UI.
+Its runtime tests cover two environments, equal checkout IDs, nonselected
+updates, offline placeholders, whole-supervisor replacement, stale welcomes and
+reads, uncertain mutation non-replay, removal and reader cleanup. The nonvendored
+`rpc/promise.ts` facade can replace its welcome/event/gap sources while retaining
+listeners and resetting event sequence state. GitGui's legacy tab projection and
+external-coordinator mode are domain integration, not copied T3 product behavior.
+No vendored implementation, manifest hash, snapshot or dependency pin changes.
+
 The check requires the checkout to be at the pinned commit, rejects dirty
 upstream file contents, compares verbatim bodies, and verifies SHA-256 hashes
 of both the upstream and GitGui versions of every adapted file. Updating a
@@ -308,6 +351,33 @@ supervisor learns routes from it.
 
 ### GitGui's Svelte and authentication adapters
 
+The session-scope availability adaptation preserves the pinned runtime snapshot
+and Effect versions. It translates T3's authenticated session-state reader and
+current-session command boundary to GitGui's repository-management scopes:
+
+- `authorization/service.ts` reads `/api/auth/session` with the current bearer
+  after identity verification on every preparation, validates the returned
+  environment ID, and retains an immutable copy of scopes only. Descriptor
+  caching never caches the grant; the scope fetch uses `cache: "no-store"`.
+- `connection/model.ts` adds optional secret-free `sessionScopes` to prepared
+  connections; `connection/resolver.ts` preserves it through bearer and SSH
+  brokers (the primary broker already spreads the authorization result).
+- `rpc/session.ts` copies the grant onto that session; replacement refreshes it.
+  Missing scopes explicitly mean unknown authorization, never permission.
+- `rpc/client.ts` checks `repository:manage` for catalog Open/Create/Remove
+  after resolving the current session, replacing the earlier omission of a
+  client permission guard. GitGui's Rust scope enforcement remains authoritative.
+
+The GitGui-owned Svelte environment workspace exposes only those scopes and clears
+them on session loss. Action-specific UI combines the grant with connection state
+and server capabilities. Registered repository and known worktree selection keep
+their existing read-only snapshot path. This divergence is needed because GitGui
+ordinary pairing lacks catalog management even when the server advertises it.
+The target hashes for the five changed vendored files are recorded separately
+under `sessionScopeAdaptationReview` in the vendoring manifest, retaining original
+upstream hashes. Full original-snapshot verification has the same unavailable
+checkout limitation described above.
+
 These adapters have no vendored counterpart. Browser primary discovery retains
 its fragment credential in the lifetime of the application layer after stripping
 history, so registration and authentication share it. Bearer inputs are
@@ -366,7 +436,36 @@ workspace and promise readers, and asynchronous callbacks are guarded by the
 selected environment and activation generation. Disposed workspaces cannot
 recreate removed metadata after a pending load completes.
 
+The GitGui-owned Svelte adapter also consumes the shared `ConnectionWakeups`
+stream to revalidate each live environment's repository catalog on healthy
+foregrounding, without requiring tabs or replacing sessions. Bursts and concurrent
+reads coalesce per environment/session; stop releases the stream subscription.
+The scoped workspace generation revalidates commit-file and file-diff readers
+with unchanged selections and invalidates session-owned hunk reviews. These
+translate T3's generation-aware query and foreground data revalidation concepts
+to GitGui's Promise presentation boundary; no vendored retry policy changes.
+
 ### TypeScript inference workarounds
+
+Removal recovery adds a deliberate `connection/registry.ts` divergence from
+the inspected local T3 registry: `recoverRemoval` checks authoritative durable
+targets and holds the registration lease through application tab persistence
+and journal acknowledgement. GitGui's separate catalog/credential/tab stores
+can commit catalog deletion before another cleanup fails, so in-memory presence
+cannot prove rollback. SSH release precedes fallible owned-data cleanup; rejected
+disconnects retain the old profiles for retry. `platform/persistence.ts` records
+this partial-commit contract. The GitGui-owned catalog keeps credential deletion
+inside the catalog writer lock, and its browser/desktop adapters reject corrupt
+catalogs instead of treating them as authoritative absence. Legacy records with
+empty route lists still supply their registration target.
+
+The application journal and tab cleanup stay GitGui-owned. Re-registration
+cancels stale intent without touching new data or credentials. SSH process
+ownership and host-loss reconciliation remain in Electron/the SSH manager's
+existing acquisition journal; no host-wide process stop is added. See
+[connection-runtime.md](connection-runtime.md) for transaction and recovery
+limitations. The inspected reference remains `70cd258d8aac43ea57494527b00bf36de3efa6c0`;
+the pinned runtime snapshot and Effect / `@effect/vitest` versions are unchanged.
 
 Two upstream constructs do not typecheck under plain `tsc`, so they are
 written differently here. The behavior is unchanged.

@@ -38,11 +38,19 @@ import {
   type ConnectionAttemptError,
 } from "@gitgui/client-runtime/connection/model";
 import { fetchRemoteEnvironmentDescriptor } from "@gitgui/client-runtime/environment/descriptor";
+import { environmentName, parseEnvironmentNames } from "@gitgui/client-runtime/environment/names";
 import { layerRemoteHttpClient } from "@gitgui/client-runtime/rpc/http";
 import * as ClientCapabilities from "@gitgui/client-runtime/platform/capabilities";
 import { layerConnectionPersistence } from "@gitgui/client-runtime/platform/catalog";
 import { EnvironmentOwnedDataCleanup } from "@gitgui/client-runtime/platform/persistence";
 import { LocalStorageWorkspaceMetadataAdapter } from "../client-runtime/metadata";
+import { RepositoryCatalogCache } from "./repository-catalog-cache";
+
+/** Idempotent cleanup shared by normal removal and journal recovery. */
+export async function clearEnvironmentOwnedData(storage: Storage, environmentId: string): Promise<void> {
+  await new LocalStorageWorkspaceMetadataAdapter(storage).remove({ environmentId });
+  new RepositoryCatalogCache(storage).remove(environmentId);
+}
 import type { EnvironmentCatalogBackend } from "@gitgui/client-runtime/platform/catalog";
 import {
   PERSISTED_ENVIRONMENT_SCHEMA_VERSION,
@@ -64,6 +72,38 @@ import * as Socket from "effect/socket/Socket";
 const CATALOG_KEY = "gitgui.connections.v3";
 const SELECTED_KEY = "gitgui.selectedEnvironment.v3";
 const CREDENTIAL_PREFIX = "gitgui.credential.v3.";
+const NAMES_KEY = "gitgui.environmentNames.v1";
+
+export async function readEnvironmentNames(options: WebConnectionOptions): Promise<Readonly<Record<string, string>>> {
+  if (options.desktop) return parseEnvironmentNames(await options.desktop.getEnvironmentNames());
+  try { return parseEnvironmentNames(JSON.parse(options.storage.getItem(NAMES_KEY) ?? "{}")); }
+  catch { return {}; }
+}
+
+export async function writeEnvironmentName(options: WebConnectionOptions, id: string, name: string | null): Promise<void> {
+  const value = name === null ? null : environmentName(name);
+  if (options.desktop) return await options.desktop.setEnvironmentName(id, value);
+  const raw = options.storage.getItem(NAMES_KEY);
+  let previous: Readonly<Record<string, string>>;
+  let invalid = false;
+  try {
+    const parsed: unknown = JSON.parse(raw ?? "{}");
+    previous = parseEnvironmentNames(parsed);
+    const validRecord = typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+      && Object.entries(parsed).every(([key, value]) => typeof value === "string" && previous[key] === value);
+    invalid = !validRecord;
+  }
+  catch {
+    invalid = true;
+    previous = {};
+  }
+  // Preserve unreadable or partially invalid user data before repairing it.
+  if (invalid && raw !== null) options.storage.setItem(`${NAMES_KEY}.invalid.${crypto.randomUUID()}`, raw);
+  options.storage.setItem(NAMES_KEY, JSON.stringify(Object.fromEntries([
+    ...Object.entries(previous).filter(([key]) => key !== id),
+    ...(value === null ? [] : [[id, value]]),
+  ])));
+}
 
 export interface WebConnectionOptions {
   readonly desktop: DesktopBridge | null;
@@ -87,22 +127,24 @@ interface StoredCatalog {
 }
 
 const parseStoredCatalog = (value: unknown): StoredCatalog => {
-  if (typeof value !== "object" || value === null) {
-    return { schemaVersion: PERSISTED_ENVIRONMENT_SCHEMA_VERSION, environments: [] };
+  if (value === null) return { schemaVersion: PERSISTED_ENVIRONMENT_SCHEMA_VERSION, environments: [] };
+  if (typeof value !== "object") {
+    throw new TypeError("Invalid connection catalog");
   }
   const record = value as Record<string, unknown>;
+  if (record["schemaVersion"] !== PERSISTED_ENVIRONMENT_SCHEMA_VERSION || !Array.isArray(record["environments"])) {
+    throw new TypeError("Invalid connection catalog");
+  }
   return {
-    schemaVersion:
-      typeof record["schemaVersion"] === "number"
-        ? record["schemaVersion"]
-        : PERSISTED_ENVIRONMENT_SCHEMA_VERSION,
-    environments: Array.isArray(record["environments"]) ? record["environments"] : [],
+    schemaVersion: PERSISTED_ENVIRONMENT_SCHEMA_VERSION,
+    environments: record["environments"],
   };
 };
 
 const readBrowserCatalog = (storage: Storage): StoredCatalog => {
-  try { return parseStoredCatalog(JSON.parse(storage.getItem(CATALOG_KEY) ?? "null")); }
-  catch { return { schemaVersion: PERSISTED_ENVIRONMENT_SCHEMA_VERSION, environments: [] }; }
+  // Removal recovery uses this catalog as authority. Unreadable/corrupt state
+  // must block cleanup rather than masquerade as an empty registration list.
+  return parseStoredCatalog(JSON.parse(storage.getItem(CATALOG_KEY) ?? "null"));
 };
 
 const selectedEnvironment = (storage: Storage) => {
@@ -131,7 +173,7 @@ const decodeRecord = (value: unknown) => {
 /** Move credentials from the early catalog format before rewriting it. */
 const migrateRecord = async (value: unknown, backend: EnvironmentCatalogBackend) => {
   const record = decodeRecord(value);
-  if (record === undefined) return undefined;
+  if (record === undefined) throw new TypeError("Invalid connection registration");
   const legacy = value as { registration?: { credential?: unknown } };
   const credential = Schema.decodeUnknownOption(ConnectionCredential)(legacy.registration?.credential);
   if (Option.isSome(credential)) {
@@ -201,8 +243,10 @@ class DesktopCatalogBackend implements EnvironmentCatalogBackend {
     const records = await this.desktop.listConnectionRegistrations();
     const decoded = await Promise.all(records.map(async (entry) => {
       let value: unknown;
-      try { value = JSON.parse(entry.record); } catch { return undefined; }
-      return migrateRecord(value, this);
+      value = JSON.parse(entry.record);
+      const migrated = await migrateRecord(value, this);
+      if (migrated.record.environmentId !== entry.environmentId) throw new TypeError("Connection registration identity mismatch");
+      return migrated;
     }));
     const catalog: PersistedEnvironmentCatalog = {
       schemaVersion: PERSISTED_ENVIRONMENT_SCHEMA_VERSION,
@@ -754,8 +798,10 @@ export const webConnectionLayer = (options: WebConnectionOptions) => {
     Layer.effect(ClientCapabilities.SshEnvironmentGateway, makeSshEnvironmentGateway(options)),
     layerSource,
     Layer.succeed(EnvironmentOwnedDataCleanup, {
-      clear: (environmentId) => Effect.promise(() =>
-        new LocalStorageWorkspaceMetadataAdapter(options.storage).remove({ environmentId })),
+      clear: (environmentId) => Effect.promise(async () => {
+        await writeEnvironmentName(options, environmentId, null);
+        await clearEnvironmentOwnedData(options.storage, environmentId);
+      }),
     }),
     layerSignals,
   ).pipe(Layer.provideMerge(layerPersistence), Layer.provideMerge(layerHttp));

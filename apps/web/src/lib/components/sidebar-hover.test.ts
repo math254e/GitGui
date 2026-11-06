@@ -32,6 +32,15 @@ async function openCard() { await tick(); await vi.advanceTimersByTimeAsync(300)
 function card() { return document.querySelector<HTMLElement>('[role="tooltip"]'); }
 
 describe("sidebar detail cards", () => {
+  it.each(["Enter", " "])("switches a focused worktree with %s", async (key) => {
+    const container = target(), onSwitchWorktree = vi.fn();
+    const worktree = { path: "/work/linked", branch: "linked", headOid: commit.hash, current: false, isMain: false };
+    component = mount(WorktreeTree, { target: container, props: { worktrees: [worktree], treeId: "keyboard-worktree", contextKey: "env:repo", onSwitchWorktree } });
+    flushSync(); await tick(); const { row } = rows(container);
+    row.focus();
+    row.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, composed: true, cancelable: true }));
+    expect(onSwitchWorktree).toHaveBeenCalledExactlyOnceWith(worktree.path);
+  });
   it("shows worktree snapshot details without switching repositories, preserving double-click navigation", async () => {
     const container = target(), onSwitchWorktree = vi.fn();
     const worktree = { path: "D:\\work\\sidebar", branch: branch.shortName, headOid: commit.hash, current: true, isMain: false };

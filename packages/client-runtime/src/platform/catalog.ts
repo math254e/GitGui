@@ -109,7 +109,10 @@ export const makeTargetStore = (backend: EnvironmentCatalogBackend) =>
     const list = read.pipe(
       Effect.map((catalog) =>
         catalog.environments.flatMap((environment) =>
-          environment.routes.map((route) => route as ConnectionTarget),
+          // Early records may have an empty route list but a saved registration.
+          // Its presence must still block removal recovery and hydrate the entry.
+          (environment.routes.length ? environment.routes : [environment.registration.target])
+            .map((route) => route as ConnectionTarget),
         ),
       ),
     );
@@ -189,7 +192,7 @@ export const makeRegistrationStore = (backend: EnvironmentCatalogBackend) =>
       }));
 
     const remove = (environmentId: EnvironmentId) =>
-      write((catalog) => {
+      updateCatalog(backend, (catalog) => {
         const { selectedEnvironmentId, ...rest } = catalog;
         return {
           ...rest,
@@ -197,10 +200,14 @@ export const makeRegistrationStore = (backend: EnvironmentCatalogBackend) =>
             ? {} : { selectedEnvironmentId }),
           environments: catalog.environments.filter((environment) => environment.environmentId !== environmentId),
         };
-      }).pipe(Effect.andThen(Effect.tryPromise({
-        try: () => backend.removeCredential(environmentId),
-        catch: (cause) => failure("remove-connection", cause),
-      })));
+      }, async (catalog) => {
+        // The catalog write commits removal. A secret deletion failure is a
+        // committed removal requiring recovery, never proof the record survived.
+        // Keep both operations under the writer lock so a new credential cannot
+        // be installed between them and then deleted by the old removal.
+        await backend.write(catalog);
+        await backend.removeCredential(environmentId);
+      }).pipe(Effect.mapError((cause) => failure("remove-connection", cause)));
 
     const setEnabled = (environmentId: EnvironmentId, enabled: boolean) =>
       write((catalog) => ({

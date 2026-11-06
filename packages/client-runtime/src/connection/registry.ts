@@ -15,6 +15,8 @@
  *   snapshots, so removing an environment only clears client-owned data.
  * - SSH onboarding stages new registrations disabled, then claims the host
  *   before activation. An interrupted claim leaves an explicit disabled record.
+ * - Removal recovery checks durable targets under the environment lease, releases
+ *   SSH before fallible data cleanup, and guards application cleanup against re-registration.
  */
 import { EnvironmentId } from "@gitgui/contracts/environment";
 import * as Context from "effect/Context";
@@ -134,6 +136,12 @@ export class EnvironmentRegistry extends Context.Service<
       | EnvironmentNotRegisteredError
       | PlatformEnvironmentRemovalError
     >;
+    /** Runs completion under the registration lease. `false` retires a stale
+     * removal intent without touching a surviving or replacement registration. */
+    readonly recoverRemoval: <E, R>(
+      environmentId: EnvironmentId,
+      complete: (removed: boolean) => Effect.Effect<void, E, R>,
+    ) => Effect.Effect<void, E | Persistence.ConnectionPersistenceError | ConnectionAttemptError, R>;
     /**
      * Removing an environment's last route removes the environment, the same as
      * `remove`.
@@ -771,27 +779,54 @@ export const make = Effect.gen(function* () {
     }
     const entry = yield* getEntry(environmentId);
 
-    yield* registrations.remove(environmentId);
+    const removal = yield* Effect.exit(registrations.remove(environmentId));
+    if (Exit.isFailure(removal)) {
+      // A catalog write may have committed before credential deletion failed.
+      // Only durable state can tell us whether the old transport still belongs here.
+      if (!(yield* storage.list).some((target) => target.environmentId === environmentId)) {
+        yield* releaseRemovedEnvironment(environmentId, entry);
+      }
+      return yield* Effect.failCause(removal.cause);
+    }
+    yield* releaseRemovedEnvironment(environmentId, entry);
+    yield* ownedDataCleanup.clear(environmentId);
+  });
+
+  const releaseRemovedEnvironment = Effect.fn("EnvironmentRegistry.releaseRemovedEnvironment")(function* (
+    environmentId: EnvironmentId,
+    entry: ConnectionCatalogEntry | undefined,
+  ) {
+    yield* closeServiceScope(environmentId);
+    // Keep the entry's profiles available for retry if the gateway rejects the
+    // disconnect. Electron retains exact acquisition ownership in its own journal.
+    for (const route of entry === undefined ? [] : connectionRoutes(entry)) {
+      const profile = Option.getOrNull(route.profile);
+      if (profile !== null && isSshConnectionProfile(profile)) yield* ssh.disconnect(profile.target);
+    }
     yield* Ref.update(persistedEnvironmentIds, (current) => {
       const next = new Set(current);
       next.delete(environmentId);
       return next;
     });
-    yield* closeServiceScope(environmentId);
     yield* SubscriptionRef.update(entries, (current) => {
       const next = new Map(current);
       next.delete(environmentId);
       return next;
     });
-    yield* ownedDataCleanup.clear(environmentId);
-
-    for (const route of connectionRoutes(entry)) {
-      const profile = Option.getOrNull(route.profile);
-      if (profile !== null && isSshConnectionProfile(profile)) {
-        yield* disconnectSsh(environmentId, profile);
-      }
-    }
   });
+
+  const recoverRemoval: EnvironmentRegistry["Service"]["recoverRemoval"] = (environmentId, complete) =>
+    withLeaseLock(environmentId, Effect.gen(function* () {
+      const registered = (yield* Ref.get(platformEnvironmentIds)).has(environmentId) ||
+        (yield* storage.list).some((target) => target.environmentId === environmentId);
+      if (registered) return yield* complete(false);
+      yield* releaseRemovedEnvironment(environmentId, (yield* SubscriptionRef.get(entries)).get(environmentId));
+      // The catalog removal is the commit point. Retrying secret deletion is
+      // safe only while no replacement registration can acquire this lease.
+      yield* credentials.remove(environmentId);
+      yield* ownedDataCleanup.clear(environmentId);
+      yield* complete(true);
+    }));
 
   const remove = Effect.fn("EnvironmentRegistry.remove")(function* (environmentId: EnvironmentId) {
     return yield* withLeaseLock(environmentId, removeLocked(environmentId));
@@ -1066,6 +1101,7 @@ export const make = Effect.gen(function* () {
     registerPlatform,
     reconcilePlatform,
     remove,
+    recoverRemoval,
     removeRoute,
     reorderRoutes,
     retryNow,

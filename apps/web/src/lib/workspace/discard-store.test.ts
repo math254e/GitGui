@@ -107,7 +107,7 @@ describe("responsive discard", () => {
     await a.store.openDiscard(["one", "two"]);
     a.store.confirmDiscard(files, false);
     const queued = vi.fn(async () => {});
-    a.store.queuedGitActions = [{ repositoryId: "repo", kind: "stage", label: "Staging", action: queued }];
+    a.store.queuedGitActions = [{ environmentId: "env", repositoryId: "repo", client: a.client as unknown as GitGuiClient, workspace: a.workspace, kind: "stage", label: "Staging", action: queued }];
     a.internals.applyApplicationRuntimeState(b.runtimeState as unknown as WebApplicationRuntimeState);
     mutation.resolve(receipt);
     await drain();

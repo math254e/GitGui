@@ -16,6 +16,31 @@ const registration = (id: string) => ({ environmentId: id, displayName: id, reco
 const credential = { kind: "bearer" as const, token: "test-fixture-session" };
 
 describe("desktop state persistence failures", () => {
+  it("persists primary and remote names independently of registrations, credentials and failed writes", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "gitgui-environment-names-"));
+    const path = join(directory, "state.json");
+    const temporary = `${path}.tmp-${process.pid}`;
+    try {
+      const store = new DesktopStateStore(path);
+      await store.saveRegistration(registration("remote"), credential);
+      const before = await store.listRegistrations();
+      await store.setEnvironmentName("primary", "  My workstation  ");
+      await store.setEnvironmentName("remote", "Build server");
+      await store.setEnvironmentName("__proto__", "Historical ID");
+      const names = { primary: "My workstation", remote: "Build server", ...JSON.parse('{"__proto__":"Historical ID"}') };
+      expect(await new DesktopStateStore(path).getEnvironmentNames()).toEqual(names);
+      expect(await store.listRegistrations()).toEqual(before);
+      expect(await store.getCredential("remote")).toEqual(credential);
+      await mkdir(temporary);
+      await expect(store.setEnvironmentName("remote", "Unsaved name")).rejects.toThrow();
+      expect(await store.getEnvironmentNames()).toEqual(names);
+      await rmdir(temporary);
+      await expect(store.setEnvironmentName("remote", "bad\nname")).rejects.toThrow();
+      await store.setEnvironmentName("remote", null);
+      expect(await store.getEnvironmentNames()).not.toHaveProperty("remote");
+      expect(await store.getCredential("remote")).toEqual(credential);
+    } finally { await rm(directory, { recursive: true, force: true }); }
+  });
   it("commits a registration with its credential, preserving both on failed replacement", async () => {
     const directory = await mkdtemp(join(tmpdir(), "gitgui-onboarding-state-"));
     const path = join(directory, "state.json");

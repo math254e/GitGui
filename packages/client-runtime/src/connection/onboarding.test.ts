@@ -13,6 +13,7 @@ import { ConnectionPersistenceError } from "../platform/persistence.ts";
 import { ConnectionTransientError } from "./model.ts";
 import { EnvironmentRegistry } from "./registry.ts";
 import { make } from "./onboarding.ts";
+import type { ConnectionRegistration } from "./catalog.ts";
 
 const id = EnvironmentId.make("environment");
 const descriptor = { schemaVersion: 1, environmentId: id, label: "Fixture", serverVersion: "1", protocolVersion: 2,
@@ -20,8 +21,9 @@ const descriptor = { schemaVersion: 1, environmentId: id, label: "Fixture", serv
   auth: { required: true, bootstrapMethods: ["pairing"], sessionMethods: ["bearer"] } };
 const input = { target: { alias: "fixture", hostname: "fixture", identityFile: "/key" } };
 
-const fixture = (options: { failSave?: boolean; failHandshake?: boolean; holdHandshake?: boolean } = {}) => Effect.gen(function* () {
+const fixture = (options: { failSave?: boolean; failHandshake?: boolean; holdHandshake?: boolean; label?: string } = {}) => Effect.gen(function* () {
   const events: string[] = [];
+  const saved: ConnectionRegistration[] = [];
   const expectedIdentities: (EnvironmentId | undefined)[] = [];
   const opened = yield* Deferred.make<void>();
   const cancelled = yield* Deferred.make<void>();
@@ -30,7 +32,7 @@ const fixture = (options: { failSave?: boolean; failHandshake?: boolean; holdHan
     provision: (_target, _credential, expectedIdentity) => {
       expectedIdentities.push(expectedIdentity);
       return Effect.succeed({ bootstrap: { environmentId: id, httpBaseUrl: "http://127.0.0.1:1", wsBaseUrl: "ws://127.0.0.1:1" },
-      bearerToken: "fixture-bearer", descriptor, target: { ...input.target, remoteDataDirectory: "/persistent/fixture" },
+      bearerToken: "fixture-bearer", descriptor: { ...descriptor, label: options.label ?? descriptor.label }, target: { ...input.target, remoteDataDirectory: "/persistent/fixture" },
       commit: Effect.sync(() => { events.push("claim"); }),
       cancel: Effect.sync(() => { events.push("cancel"); }).pipe(Effect.andThen(Deferred.succeed(cancelled, undefined))),
     }); },
@@ -56,6 +58,7 @@ const fixture = (options: { failSave?: boolean; failHandshake?: boolean; holdHan
   }) });
   const registry = Layer.succeed(EnvironmentRegistry, {
     register: (registration, settings) => Effect.gen(function* () {
+      saved.push(registration);
       expect(registration.profile._tag === "SshConnectionProfile" && registration.profile.target.remoteDataDirectory).toBe("/persistent/fixture");
       events.push("save");
       if (options.failSave) return yield* new ConnectionPersistenceError({ operation: "register-connection", message: "disk failed" });
@@ -66,10 +69,26 @@ const fixture = (options: { failSave?: boolean; failHandshake?: boolean; holdHan
     }),
   } as EnvironmentRegistry["Service"]);
   const onboarding = yield* make.pipe(Effect.provide(Layer.mergeAll(gateway, auth, sessions, registry)));
-  return { onboarding, events, opened, cancelled, expectedIdentities };
+  return { onboarding, events, opened, cancelled, expectedIdentities, saved };
 });
 
 describe("SSH onboarding acquisition transaction", () => {
+  it.effect("uses an explicit name or a plain host default while retaining the acquired identity and directory", () => Effect.gen(function* () {
+    const named = yield* fixture({ label: "GitGui on remote-machine" });
+    yield* named.onboarding.registerSsh({ ...input, label: "  Build server  " });
+    expect(named.saved[0]?.target.label).toBe("Build server");
+    expect(named.saved[0]?.profile.label).toBe("Build server");
+    expect(named.saved[0]?.target.environmentId).toBe(id);
+    const machine = yield* fixture({ label: "GitGui on remote-machine" });
+    yield* machine.onboarding.registerSsh(input);
+    expect(machine.saved[0]?.target.label).toBe("remote-machine");
+    const generic = yield* fixture({ label: "GitGui on This computer" });
+    yield* generic.onboarding.registerSsh({ ...input, label: "  " });
+    expect(generic.saved[0]?.target.label).toBe(input.target.alias);
+    const invalid = yield* fixture();
+    yield* invalid.onboarding.registerSsh({ ...input, label: "bad\nname" }).pipe(Effect.flip);
+    expect(invalid.expectedIdentities).toEqual([]);
+  }));
   it.effect("passes the saved recovery identity to acquisition before authentication", () => Effect.gen(function* () {
     const f = yield* fixture();
     yield* f.onboarding.registerSsh({ ...input, expectedEnvironmentId: id });

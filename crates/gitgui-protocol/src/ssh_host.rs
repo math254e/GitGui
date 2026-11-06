@@ -81,3 +81,22 @@ pub struct SshHostResponse {
     /// Only the separate pairing operation returns this secret; never lifecycle metadata.
     pub pairing: Option<crate::PairingCredentialResponse>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::SshEnvironmentLocator;
+
+    #[test]
+    fn locator_rejects_unknown_fields_for_directory_and_legacy() {
+        for input in [
+            r#"{"kind":"directory","path":"/repo","environmentId":"env","unexpected":true}"#,
+            r#"{"kind":"legacy","stateKey":"key","environmentId":"env","unexpected":true}"#,
+        ] {
+            assert!(serde_json::from_str::<SshEnvironmentLocator>(input).is_err(), "accepted {input}");
+        }
+        assert!(serde_json::from_str::<SshEnvironmentLocator>(
+            r#"{"kind":"directory","path":"/repo","environmentId":"env"}"#,
+        )
+        .is_ok());
+    }
+}

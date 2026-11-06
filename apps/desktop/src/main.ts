@@ -206,6 +206,8 @@ function registerIpc(): void {
   ipcMain.handle("desktop:registrations:list", trusted(() => stateStore.listRegistrations()));
   ipcMain.handle("desktop:registrations:save", trusted((_event, value: DesktopConnectionRegistration, credential?: DesktopCredential) => stateStore.saveRegistration(value, credential)));
   ipcMain.handle("desktop:registrations:remove", trusted((_event, id: string) => stateStore.removeRegistration(id)));
+  ipcMain.handle("desktop:environment-names:get", trusted(() => stateStore.getEnvironmentNames()));
+  ipcMain.handle("desktop:environment-names:set", trusted((_event, id: string, name: string | null) => stateStore.setEnvironmentName(id, name)));
   ipcMain.handle("desktop:credentials:get", trusted((_event, id: string) => stateStore.getCredential(id)));
   ipcMain.handle("desktop:credentials:set", trusted((_event, id: string, credential: DesktopCredential) => stateStore.setCredential(id, credential)));
   ipcMain.handle("desktop:credentials:remove", trusted((_event, id: string) => stateStore.removeCredential(id)));

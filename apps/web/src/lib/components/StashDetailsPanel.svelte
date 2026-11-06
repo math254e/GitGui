@@ -6,8 +6,9 @@
   import { StashRead } from "$lib/workspace/stash-read";
   import { stashFilesCache } from "$lib/workspace/stash-files-cache";
   import { formatError } from "$lib/workspace/errors";
-  let { client, repositoryId, stash, selectedFile, onSelectFile }: {
+  let { client, repositoryId, stash, selectedFile, onSelectFile, environmentGeneration = 0 }: {
     client: GitGuiClient; repositoryId: string; stash: StashInfo; selectedFile: CommitFile | null;
+    environmentGeneration?: number;
     onSelectFile: (file: CommitFile) => void;
   } = $props();
   let files = $state.raw<CommitFile[]>([]);
@@ -22,6 +23,7 @@
   let displayed: { client: GitGuiClient; repositoryId: string; oid: string; files: CommitFile[] } | undefined;
   $effect(() => {
     const currentClient = client;
+    void environmentGeneration;
     const id = repositoryId;
     const target = { selector: stashSelector, expectedOid: stashOid };
     void retry;

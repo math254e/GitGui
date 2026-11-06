@@ -1,13 +1,16 @@
 <script lang="ts">
   import { onDestroy, onMount } from "svelte";
+  import { browser } from "$app/environment";
   import { Toaster } from "svelte-sonner";
   import { provideWebApplicationRuntime } from "$lib/connection/runtime";
   import { provideWorkspaceStore } from "$lib/workspace";
   import {
     isSettingsRouteId,
     NEW_REPOSITORY_ROUTE_ID,
-    REPOSITORY_ROUTE_ID,
+    isRepositoryRouteId,
   } from "$lib/workspace/routes";
+  import { provideRepositoryRouteAdapter } from "$lib/workspace/repository-routing";
+  import { createApplicationRouteAdapter } from "$lib/workspace/application-route-adapter";
   import DiscardChangesDialog from "$lib/components/DiscardChangesDialog.svelte";
   import DeleteBranchDialog from "$lib/components/DeleteBranchDialog.svelte";
   import DeleteTagDialog from "$lib/components/DeleteTagDialog.svelte";
@@ -22,17 +25,24 @@
   import { provideDesktopUi } from "$lib/updates/context.svelte";
 
   let { children } = $props();
-  const runtime = provideWebApplicationRuntime();
+  const runtime = provideWebApplicationRuntime(undefined, { tabOwnership: "external" });
   const store = provideWorkspaceStore(runtime);
+  let legacyEnvironment: string | undefined;
+  if (browser) {
+    try { legacyEnvironment = localStorage.getItem("gitgui.selectedEnvironment.v3")?.trim() || undefined; } catch { /* Storage may be unavailable. */ }
+  }
+  provideRepositoryRouteAdapter(createApplicationRouteAdapter(store, legacyEnvironment));
   const desktopUi = provideDesktopUi(readDesktopBridge());
 
+  let mounted = false;
   onMount(() => {
+    mounted = true;
     desktopUi.updates?.start();
-    void runtime.start();
-    store.start();
+    void runtime.start().then(() => { if (mounted) store.start(); });
   });
 
   onDestroy(() => {
+    mounted = false;
     desktopUi.updates?.stop();
     void runtime.stop();
     store.dispose();
@@ -42,7 +52,7 @@
   // repository tabs and the current Git action. A repository route without a
   // repository is the repositories view, exactly as before.
   const activeView = $derived<"start" | "repo" | "settings" | "create">(
-    store.currentRouteId === REPOSITORY_ROUTE_ID
+    isRepositoryRouteId(store.currentRouteId)
       ? store.activeRepository
         ? "repo"
         : "start"
@@ -73,7 +83,7 @@
 <main class="grid h-screen min-h-0 grid-rows-[auto_minmax(0,1fr)_auto] bg-[var(--app-theme-canvas)] text-[var(--app-theme-text)]">
   <TopMenu
     {activeView}
-    activeRepoId={store.activeRepositoryId}
+    activeRepoId={store.usesApplicationTabs ? store.applicationTabs.activeTabId : store.activeRepositoryId}
     tabs={store.repoTabs}
     onShowStart={() => void store.showStartView()}
     onShowSettings={() => void store.showSettingsView()}
@@ -100,10 +110,14 @@
 />
 
 <RepositoryPathDialog
+  canOpen={store.pathOpenAvailability.allowed}
+  unavailableReason={store.pathOpenAvailability.reason}
   open={store.repositoryPathDialogOpen}
   value={store.repositoryPathValue}
   error={store.repositoryPathError}
-  loading={store.operationPending}
+  loading={store.usesApplicationTabs ? store.repositoryPathPending : store.operationPending}
+  allowCancelWhileLoading={store.usesApplicationTabs}
+  environmentLabel={store.environmentEntries.find((entry) => entry.registration.environmentId === store.repositoryPathEnvironmentId)?.registration.displayName ?? ""}
   onValueChange={(value) => {
     store.repositoryPathValue = value;
     store.repositoryPathError = "";

@@ -13,6 +13,7 @@ pub mod git {
     mod tag_workflows_tests;
     pub mod stash_actions;
     pub mod repository;
+    pub mod repository_identity;
     pub mod stash_selected;
     pub mod stash;
     pub mod stash_inspection;

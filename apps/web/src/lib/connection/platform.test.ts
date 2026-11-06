@@ -18,7 +18,7 @@ import { layerRemoteHttpClient } from "@gitgui/client-runtime/rpc/http";
 import { resolveRemoteWebSocketConnectionUrl } from "@gitgui/client-runtime/authorization/remote";
 import * as HttpClient from "effect/http/HttpClient";
 import { LocalStorageWorkspaceMetadataAdapter, createEmptyWorkspaceMetadata } from "../client-runtime/metadata";
-import { authorizeConnectionCredential, createCatalogBackend, webConnectionLayer, writeSelectedEnvironmentId, readSelectedEnvironmentId, type WebConnectionOptions } from "./platform";
+import { authorizeConnectionCredential, createCatalogBackend, webConnectionLayer, writeSelectedEnvironmentId, readSelectedEnvironmentId, readEnvironmentNames, writeEnvironmentName, type WebConnectionOptions } from "./platform";
 
 class MemoryStorage implements Storage {
   private values = new Map<string, string>();
@@ -78,6 +78,50 @@ function registration(id = environmentId) {
 }
 
 describe("web connection platform", () => {
+  it("recovers malformed browser names without discarding the original value", async () => {
+    options.storage.setItem("gitgui.environmentNames.v1", "{broken");
+    expect(await readEnvironmentNames(options)).toEqual({});
+    await writeEnvironmentName(options, environmentId, "Workstation");
+    expect(await readEnvironmentNames(options)).toEqual({ [environmentId]: "Workstation" });
+    const backup = Array.from({ length: options.storage.length }, (_, i) => options.storage.key(i))
+      .find((key) => key?.startsWith("gitgui.environmentNames.v1.invalid."));
+    expect(backup && options.storage.getItem(backup)).toBe("{broken");
+  });
+
+  it.each(['{"broken":42,"kept":"Existing"}', '[]', 'null'])("preserves invalid name data before repairing %s", async (raw) => {
+    options.storage.setItem("gitgui.environmentNames.v1", raw);
+    await writeEnvironmentName(options, environmentId, "Workstation");
+    const backup = Array.from({ length: options.storage.length }, (_, i) => options.storage.key(i))
+      .find((key) => key?.startsWith("gitgui.environmentNames.v1.invalid."));
+    expect(backup && options.storage.getItem(backup)).toBe(raw);
+    expect((await readEnvironmentNames(options))[environmentId]).toBe("Workstation");
+    if (raw.includes("Existing")) expect((await readEnvironmentNames(options)).kept).toBe("Existing");
+  });
+  it("persists explicit browser names independently of the catalog, selection and credentials", async () => {
+    options.storage.setItem("gitgui.selectedEnvironment.v3", environmentId);
+    await Promise.all([writeEnvironmentName(options, environmentId, "My workstation"), writeEnvironmentName(options, "other", "Build host")]);
+    expect(await readEnvironmentNames({ ...options })).toEqual({ [environmentId]: "My workstation", other: "Build host" });
+    await writeEnvironmentName(options, environmentId, "GitGui on purpose");
+    expect((await readEnvironmentNames(options))[environmentId]).toBe("GitGui on purpose");
+    await writeEnvironmentName(options, "other", null);
+    expect(await readEnvironmentNames(options)).toEqual({ [environmentId]: "GitGui on purpose" });
+    expect(options.storage.getItem("gitgui.selectedEnvironment.v3")).toBe(environmentId);
+    expect(options.storage.getItem("gitgui.connections.v3")).toBeNull();
+    expect(options.storage.getItem("gitgui.credential.v3." + environmentId)).toBeNull();
+  });
+
+  it("keeps desktop names behind the narrow native persistence bridge", async () => {
+    const getEnvironmentNames = vi.fn().mockResolvedValue({ [environmentId]: "Desktop name" });
+    const setEnvironmentName = vi.fn().mockResolvedValue(undefined);
+    options = { ...options, desktop: sshDesktop({ getEnvironmentNames, setEnvironmentName }) };
+    expect(await readEnvironmentNames(options)).toEqual({ [environmentId]: "Desktop name" });
+    await writeEnvironmentName(options, environmentId, "  New name  ");
+    expect(setEnvironmentName).toHaveBeenCalledWith(environmentId, "New name");
+    await writeEnvironmentName(options, environmentId, null);
+    expect(setEnvironmentName).toHaveBeenLastCalledWith(environmentId, null);
+    expect(options.storage.getItem("gitgui.environmentNames.v1")).toBeNull();
+  });
+
   it("pins explicit directory recovery to the saved identity before requesting credentials", async () => {
     const ensure = vi.fn(sshDesktop().ensureSshConnection);
     const pairing = vi.fn(sshDesktop().issueSshPairingCredential);
@@ -372,6 +416,18 @@ describe("web connection platform", () => {
     } finally { await managed.dispose(); }
   });
 
+  it.each(["unreadable", "invalid-json", "invalid-record"])("does not treat an %s browser catalog as authoritative absence", async (kind) => {
+    const backend = createCatalogBackend(options);
+    if (kind === "unreadable") {
+      vi.spyOn(options.storage, "getItem").mockImplementation(() => { throw new Error("storage denied"); });
+    } else {
+      options.storage.setItem("gitgui.connections.v3", kind === "invalid-json" ? "{" : JSON.stringify({
+        schemaVersion: 1, environments: [{}],
+      }));
+    }
+    await expect(backend.read()).rejects.toThrow();
+  });
+
   it("preserves browser selection across unrelated and stale catalog writes, clearing it only on selected removal", async () => {
     const backend = createCatalogBackend(options);
     const registrations = await Effect.runPromise(makeRegistrationStore(backend));
@@ -600,6 +656,8 @@ describe("web connection platform", () => {
 
   it("clears only the removed environment's workspace metadata", async () => {
     const metadata = new LocalStorageWorkspaceMetadataAdapter(options.storage);
+    await writeEnvironmentName(options, environmentId, "Removed name");
+    await writeEnvironmentName(options, "other", "Retained name");
     await metadata.save({ environmentId }, createEmptyWorkspaceMetadata());
     await metadata.save({ environmentId: "other" }, createEmptyWorkspaceMetadata());
     await Effect.runPromise(Effect.gen(function* () {
@@ -608,5 +666,6 @@ describe("web connection platform", () => {
     }).pipe(Effect.provide(webConnectionLayer(options)), Effect.scoped));
     expect(await metadata.load({ environmentId })).toBeNull();
     expect(await metadata.load({ environmentId: "other" })).not.toBeNull();
+    expect(await readEnvironmentNames(options)).toEqual({ other: "Retained name" });
   });
 });

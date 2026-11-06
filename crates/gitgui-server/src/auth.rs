@@ -81,6 +81,7 @@ impl AuthStore {
     }
 
     /// The OS-owner helper must read an existing server identity, never create one.
+    #[cfg(any(target_os = "linux", test))]
     pub(crate) async fn issue_owner_pairing(
         data_dir: &std::path::Path,
         expected_environment_id: &str,
@@ -261,6 +262,7 @@ impl AuthStore {
         }
     }
 
+    #[cfg(test)]
     pub(crate) async fn revoke_pairing_credential(&self, token: &str) -> Result<bool, AuthError> {
         if let Some(repo) = self.repository.clone() {
             let token = token.to_string();
@@ -276,6 +278,7 @@ impl AuthStore {
             .is_some())
     }
 
+    #[cfg(test)]
     pub(crate) async fn revoke_session(&self, token: &str) -> Result<bool, AuthError> {
         if let Some(repo) = self.repository.clone() {
             let token = token.to_string();

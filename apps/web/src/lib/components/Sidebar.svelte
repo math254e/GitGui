@@ -2,6 +2,9 @@
   import BranchTree from "$lib/components/BranchTree.svelte";
   import FileTreeChevron from "$lib/components/FileTreeChevron.svelte";
   import WorktreeTree from "$lib/components/WorktreeTree.svelte";
+  import RepositoryLocations from "$lib/components/RepositoryLocations.svelte";
+  import type { RepositoryLocationEnvironment } from "$lib/components/repository-locations";
+  import type { ScopedRepositoryRef } from "@gitgui/client-runtime/workspace";
   import TagTree from "$lib/components/TagTree.svelte";
   import { tagName } from "$lib/types/tags";
   import type { CommitInfo, CommitRef, RepositorySnapshot, StashInfo, WorktreeInfo } from "$lib/types/repository";
@@ -12,6 +15,10 @@
   import type { StashAction } from "$lib/workspace/stash-operations";
 
   type Props = {
+    repositoryEnvironments?: readonly RepositoryLocationEnvironment[];
+    locationContext?: { tabId: string; target: ScopedRepositoryRef } | null;
+    onSwitchLocation?: (target: ScopedRepositoryRef, source: { tabId: string; target: ScopedRepositoryRef }) => void;
+    onOpenLocationInNewTab?: (target: ScopedRepositoryRef, source: { tabId: string; target: ScopedRepositoryRef }) => void;
     stashContextKey?: string | null;
     selectedStash?: StashInfo | null;
     stashCapabilities?: StashCapabilities;
@@ -24,6 +31,7 @@
     onSelectRef?: (ref: CommitRef) => void;
     onSwitchBranch?: (branchName: string) => void;
     onSwitchWorktree?: (path: string) => void;
+    onOpenWorktreeInNewTab?: (path: string) => void;
     onToggleRefs?: (refs: CommitRef[], visible: boolean) => void;
     canRenameBranch?: boolean;
     canDeleteBranch?: boolean;
@@ -59,6 +67,7 @@
   };
 
   let {
+    repositoryEnvironments = [], locationContext = null, onSwitchLocation = () => {}, onOpenLocationInNewTab = () => {},
     stashContextKey = null, selectedStash = null, stashCapabilities = unsupportedStashActions, onSelectStash = () => {}, onStashAction = () => {},
     snapshot,
     selectedCommit,
@@ -67,6 +76,7 @@
     onSelectRef,
     onSwitchBranch,
     onSwitchWorktree,
+    onOpenWorktreeInNewTab,
     onToggleRefs,
     canRenameBranch = false,
     canDeleteBranch = false,
@@ -158,6 +168,10 @@
 
 <aside class="min-h-0 border-r border-[var(--app-theme-sidebar-border)] bg-[var(--app-theme-sidebar)]">
   <div class="flex h-full flex-col overflow-auto">
+    {#if locationContext && repositoryEnvironments.length}
+      <RepositoryLocations environments={repositoryEnvironments} current={locationContext.target} sourceTabId={locationContext.tabId}
+        onSwitch={onSwitchLocation} onOpenInNewTab={onOpenLocationInNewTab} />
+    {/if}
     <section class={`flex min-h-0 flex-col border-b border-[var(--app-theme-sidebar-border)] py-2 first:pt-2 last:border-b-0 ${open.LocalBranches ? 'flex-1' : 'flex-none'}`}>
       <button
         type="button"
@@ -260,7 +274,7 @@
       {#if open.Worktrees}
         <div class="min-h-0 flex-1 overflow-auto">
           {#if snapshot?.worktrees?.length}
-            <WorktreeTree worktrees={snapshot.worktrees} {commitsByHash} treeId="gitgui-worktrees" contextKey={stateKey} {onSwitchWorktree}
+            <WorktreeTree worktrees={snapshot.worktrees} {commitsByHash} treeId="gitgui-worktrees" contextKey={stateKey} {onSwitchWorktree} {onOpenWorktreeInNewTab}
               {canRenameBranch} {canDeleteBranch} {canRemoveWorktree} {onRenameWorktreeBranch} {onRemoveWorktree} />
           {:else}
             <p class="px-2 py-1 text-sm text-[var(--app-theme-text-subtle)]">No worktrees.</p>

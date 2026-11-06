@@ -9,9 +9,11 @@ export function worktreeMenuItems(worktree: WorktreeInfo, options: {
   canRename: boolean;
   canRemove: boolean;
   canDeleteBranch: boolean;
+  canOpenInNewTab?: boolean;
 }): ContextMenuItem[] {
   const removable = removableWorktree(worktree);
   const items: ContextMenuItem[] = [];
+  if (options.canOpenInNewTab) items.push({ id: "open-in-new-tab", label: "Open in new tab", icon: "copy" });
   if (worktree.branch) items.push({ id: "rename", label: `Rename ${worktree.branch}…`, icon: "pencil", disabled: !options.canRename });
   items.push({ id: "remove-worktree", label: "Remove this worktree…", icon: "trash", disabled: !options.canRemove || !removable });
   if (worktree.branch) items.push({ id: "remove-worktree-branch", label: "Remove worktree and delete branch…", icon: "trash", disabled: !options.canRemove || !options.canDeleteBranch || !removable });

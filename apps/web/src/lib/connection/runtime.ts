@@ -11,10 +11,16 @@ import {
 } from "@gitgui/client-runtime";
 import * as EnvironmentRegistry from "@gitgui/client-runtime/connection/registry";
 import * as EnvironmentSupervisor from "@gitgui/client-runtime/connection/supervisor";
+import { ConnectionWakeups, shouldResubscribeAfterWakeup } from "@gitgui/client-runtime/connection/wakeups";
 import { ConnectionOnboarding } from "@gitgui/client-runtime/connection/onboarding";
 import { fetchRemoteEnvironmentDescriptor } from "@gitgui/client-runtime/environment/descriptor";
+import { defaultEnvironmentName, environmentName } from "@gitgui/client-runtime/environment/names";
 import { mapRemoteEnvironmentError } from "@gitgui/client-runtime/connection/errors";
 import type { RpcSession } from "@gitgui/client-runtime/rpc/session";
+import { request as environmentRequest } from "@gitgui/client-runtime/rpc";
+import type { GitGuiRpcMethod, GitGuiRpcMethods } from "@gitgui/client-runtime/rpc";
+import { groupRepositoryCatalogs, type RepositoryGroup, type ScopedRepositorySummary } from "@gitgui/client-runtime/workspace";
+import type { RepositorySummary } from "@gitgui/contracts";
 import { ConnectionBlockedError } from "@gitgui/client-runtime/connection/model";
 import { EnvironmentId, type EnvironmentDescriptor } from "@gitgui/contracts/environment";
 import { ClientWorkspace, LocalStorageWorkspaceMetadataAdapter, type ClientWorkspaceState } from "../client-runtime";
@@ -25,10 +31,15 @@ import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
+import { RepositoryCatalogCache } from "./repository-catalog-cache";
+import { EnvironmentWorkspaceData, type EnvironmentWorkspaceView } from "./environment-workspace";
+import { EnvironmentWorkspaceRemovalJournal } from "../client-runtime/application-workspace-metadata";
 import {
   authorizeConnectionCredential,
   discoverSshHosts,
   readDesktopBridge,
+  readEnvironmentNames,
+  writeEnvironmentName,
   primaryConnectionRegistration,
   readSelectedEnvironmentId,
   validateDirectEndpoint,
@@ -51,13 +62,43 @@ export interface EnvironmentEntryView {
   readonly connection: SupervisorConnectionState;
 }
 
+/** A server's generic local label is relative to its own host, not this client. */
+export function connectionDisplayName(entry: ConnectionCatalogEntry): string {
+  let host: string | undefined;
+  if (Option.isSome(entry.profile)) {
+    const profile = entry.profile.value;
+    if (profile._tag === "SshConnectionProfile") host = profile.target.alias || profile.target.hostname;
+    else {
+      try { host = new URL(profile.httpBaseUrl).hostname; } catch { /* Retain a usable label for invalid saved endpoints. */ }
+    }
+  }
+  return defaultEnvironmentName(entry.target.label, host);
+}
+
 export interface EnvironmentRegistryView {
   readonly entries: ReadonlyArray<EnvironmentEntryView>;
   readonly selectedEnvironmentId?: string;
 }
 
+export interface EnvironmentRepositoryCatalogView {
+  readonly repositories: readonly RepositorySummary[];
+  readonly status: "empty" | "syncing" | "live" | "stale";
+  readonly hasSnapshot: boolean;
+  readonly error: string | null;
+}
+
+export interface WebWorkspaceOptions {
+  readonly tabOwnership?: "legacy" | "external";
+}
+
 export interface WebApplicationRuntimeState {
+  /** Explicit removals awaiting durable application-tab cleanup. */
+  removedEnvironmentIds?: readonly string[];
   registry: EnvironmentRegistryView;
+  catalogs: Readonly<Record<string, EnvironmentRepositoryCatalogView>>;
+  /** Always supplied by this runtime; optional for legacy state adapters. */
+  environmentWorkspaces?: Readonly<Record<string, EnvironmentWorkspaceView>>;
+  repositoryGroups: readonly RepositoryGroup<ScopedRepositorySummary>[];
   connection: SupervisorConnectionState | null;
   client: GitGuiClient | null;
   workspace: ClientWorkspace | null;
@@ -93,6 +134,9 @@ export class WebApplicationRuntime {
   >;
   private stateValue: WebApplicationRuntimeState = {
     registry: { entries: [] },
+    catalogs: {},
+    environmentWorkspaces: {},
+    repositoryGroups: [],
     connection: null,
     client: null,
     workspace: null,
@@ -102,19 +146,21 @@ export class WebApplicationRuntime {
     sshCleanupNotice: "",
   };
   private readonly listeners = new Set<(state: WebApplicationRuntimeState) => void>();
-  private workspaceListener?: () => void;
+  private readonly workspaces = new Map<string, EnvironmentWorkspaceData>();
   private readonly connectionStates = new Map<string, SupervisorConnectionState>();
   private readonly environmentWatchers = new Map<string, Fiber.Fiber<void, unknown>>();
-  private sessionWatcher?: Fiber.Fiber<void, unknown>;
-  private watchedEnvironmentId: string | null = null;
+  private readonly catalogWatchers = new Map<string, Fiber.Fiber<void, unknown>>();
+  private readonly catalogSessions = new Map<string, RpcSession>();
+  private readonly catalogRequests = new Map<string, AbortController>();
+  private readonly catalogRefreshes = new Map<string, { session: RpcSession; promise: Promise<void> }>();
+  private catalogWakeupWatcher?: Fiber.Fiber<void, unknown>;
   private selectedEnvironmentId: string | null = null;
-  private activeSession: RpcSession | null = null;
-  private activationGeneration = 0;
-  private pendingWorkspace?: ClientWorkspace;
-  private pendingClient?: GitGuiClient;
   private started = false;
+  private startupError = "";
+  private readonly workspaceSummaryVersions = new Map<string, Map<string, string>>();
+  private environmentNames: Readonly<Record<string, string>> = {};
 
-  constructor(options?: WebConnectionOptions) {
+  constructor(options?: WebConnectionOptions, private readonly workspaceOptions: WebWorkspaceOptions = {}) {
     const desktop = readDesktopBridge();
     const supplied = options ?? {
       desktop,
@@ -136,6 +182,14 @@ export class WebApplicationRuntime {
     return this.snapshot();
   }
 
+  get tabOwnership(): "legacy" | "external" {
+    return this.workspaceOptions.tabOwnership ?? "legacy";
+  }
+
+  get environmentWorkspaces(): Readonly<Record<string, EnvironmentWorkspaceView>> {
+    return Object.fromEntries([...this.workspaces].map(([id, data]) => [id, data.state]));
+  }
+
   subscribe(listener: (state: WebApplicationRuntimeState) => void): () => void {
     this.listeners.add(listener);
     listener(this.snapshot());
@@ -145,25 +199,44 @@ export class WebApplicationRuntime {
   async start(): Promise<void> {
     if (this.started) return;
     this.started = true;
+    this.startupError = "";
     const selected = await readSelectedEnvironmentId(this.options);
     if (selected !== undefined) {
       this.selectedEnvironmentId = selected;
       this.stateValue.registry = { ...this.stateValue.registry, selectedEnvironmentId: selected };
     }
     try {
+      this.environmentNames = await readEnvironmentNames(this.options);
       await this.runtime.runPromise(
         Effect.gen(function* () {
           const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
           yield* registry.start;
         }),
       );
+      const journal = new EnvironmentWorkspaceRemovalJournal(this.options.storage);
+      // Hydrated memory is not a commit record. Recovery resolves each intent
+      // against durable targets under the same lease as registration and removal.
+      this.stateValue.removedEnvironmentIds = journal.load();
     } catch (error) {
       this.stateValue.loading = false;
-      this.stateValue.error = formatError(error);
+      this.startupError = formatError(error);
       this.notify();
       return;
     }
     const runtime = this;
+    this.catalogWakeupWatcher = this.runtime.runFork(Effect.gen(function* () {
+      const wakeups = yield* ConnectionWakeups;
+      yield* wakeups.changes.pipe(
+        Stream.filter(shouldResubscribeAfterWakeup),
+        // Focus, visibility and desktop resume can describe the same wakeup.
+        Stream.debounce("50 millis"),
+        Stream.runForEach(() => Effect.sync(() => {
+          for (const environmentId of runtime.catalogSessions.keys()) {
+            void runtime.refreshEnvironmentCatalog(environmentId, { coalesce: true });
+          }
+        })),
+      );
+    }));
     this.runtime.runFork(
       Effect.gen(function* () {
         const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
@@ -180,13 +253,23 @@ export class WebApplicationRuntime {
 
   async stop(): Promise<void> {
     this.started = false;
-    if (this.sessionWatcher) Effect.runFork(Fiber.interrupt(this.sessionWatcher));
-    this.sessionWatcher = undefined;
-    this.watchedEnvironmentId = null;
+    if (this.catalogWakeupWatcher) await Effect.runPromise(Fiber.interrupt(this.catalogWakeupWatcher));
+    this.catalogWakeupWatcher = undefined;
     for (const watcher of this.environmentWatchers.values()) Effect.runFork(Fiber.interrupt(watcher));
     this.environmentWatchers.clear();
-    this.clearActiveWorkspace();
+    for (const watcher of this.catalogWatchers.values()) Effect.runFork(Fiber.interrupt(watcher));
+    this.catalogWatchers.clear();
+    this.catalogSessions.clear();
+    for (const request of this.catalogRequests.values()) request.abort();
+    this.catalogRequests.clear();
+    this.catalogRefreshes.clear();
+    for (const workspace of this.workspaces.values()) workspace.dispose();
+    this.workspaces.clear();
+    this.connectionStates.clear();
+    this.workspaceSummaryVersions.clear();
+    this.stateValue.catalogs = {};
     await this.runtime.dispose();
+    this.notify();
   }
 
   /** The registry the settings view uses to retry one environment. */
@@ -206,6 +289,21 @@ export class WebApplicationRuntime {
         }),
       )
       .catch(() => undefined);
+  }
+
+  /** Capture the environment and payload at invocation; resolve its current session once.
+   * A failed mutation is never replayed after a session replacement. */
+  async requestEnvironment<K extends GitGuiRpcMethod>(
+    environmentId: string, method: K, input: GitGuiRpcMethods[K]["input"], signal?: AbortSignal,
+  ): Promise<GitGuiRpcMethods[K]["output"]> {
+    if (!this.started || !this.stateValue.registry.entries.some((entry) => entry.registration.environmentId === environmentId)) {
+      throw new Error("Environment is not registered.");
+    }
+    const capturedInput = structuredClone(input);
+    return await this.runtime.runPromise(Effect.gen(function* () {
+      const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+      return yield* registry.run(EnvironmentId.make(environmentId), environmentRequest(method, capturedInput));
+    }), signal ? { signal } : undefined);
   }
 
   async retrySelected(restartPrimary = false): Promise<void> {
@@ -239,24 +337,57 @@ export class WebApplicationRuntime {
 
   async removeEnvironment(environmentId: string): Promise<void> {
     const entry = this.stateValue.registry.entries.find((entry) => entry.registration.environmentId === environmentId);
-    if (environmentId === this.selectedEnvironmentId && entry?.registration.target.kind !== "primary") {
-      this.clearActiveWorkspace();
-    }
+    if (!entry) throw new Error("Environment is not registered.");
+    // Platform primary registrations can arrive late and cannot be removed by
+    // this flow. Never journal their temporary absence as an explicit removal.
+    if (entry.registration.target.kind === "primary") throw new Error("The primary environment cannot be removed.");
+    const journal = new EnvironmentWorkspaceRemovalJournal(this.options.storage);
+    journal.begin(environmentId);
     try {
       await this.runtime.runPromise(Effect.gen(function* () {
         const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
         yield* registry.remove(EnvironmentId.make(environmentId));
       }));
+      this.forgetEnvironmentName(environmentId);
+      this.recordWorkspaceRemoval(environmentId);
     } catch (error) {
-      // Persistence can fail while the registration and session remain usable.
-      // Reattach even when selection did not change, rebuilding the workspace
-      // disposed before cleanup could remove its metadata.
-      if (this.selectedEnvironmentId === environmentId) {
-        this.watchedEnvironmentId = null;
-        this.applySelection();
-      }
+      // Persistence can reject after deleting the catalog record. Preserve the
+      // intent even if the registry still has its old in-memory entry.
+      this.recordWorkspaceRemoval(environmentId);
       throw error;
     }
+  }
+
+  private recordWorkspaceRemoval(environmentId: string): void {
+    // A mounted tab owner may already have acknowledged cleanup while registry
+    // removal was finishing. Otherwise a later mount must receive the intent.
+    if (!new EnvironmentWorkspaceRemovalJournal(this.options.storage).load().includes(environmentId)) return;
+    this.stateValue.removedEnvironmentIds = [...new Set([...(this.stateValue.removedEnvironmentIds ?? []), environmentId])];
+    this.notify();
+  }
+
+  async acknowledgeEnvironmentWorkspaceRemoval(environmentId: string, removeTabs: () => Promise<void>): Promise<void> {
+    const journal = new EnvironmentWorkspaceRemovalJournal(this.options.storage);
+    if (!journal.load().includes(environmentId)) return;
+    const runtime = this;
+    await this.runtime.runPromise(Effect.gen(function* () {
+      const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+      yield* registry.recoverRemoval(EnvironmentId.make(environmentId), (removed) => Effect.promise(async () => {
+        if (removed) {
+          runtime.forgetEnvironmentName(environmentId);
+          await removeTabs();
+        }
+        // A surviving/new registration cancels the old intent. In both cases
+        // completion and tab persistence stay inside the registration lease.
+        journal.acknowledge(environmentId);
+        runtime.stateValue.removedEnvironmentIds = runtime.stateValue.removedEnvironmentIds?.filter((id) => id !== environmentId);
+      }));
+    }));
+  }
+
+  /** Stable environment data, available even when another environment is displayed. */
+  getEnvironmentWorkspace(environmentId: string): EnvironmentWorkspaceData | undefined {
+    return this.workspaces.get(environmentId);
   }
 
   async pickFolder(): Promise<string | null> {
@@ -268,27 +399,30 @@ export class WebApplicationRuntime {
   }
 
   /** Adds a saved environment that speaks the GitGui protocol over HTTP. */
-  async addDirect(httpUrl: string, credential?: { readonly kind: string; readonly token: string }): Promise<string> {
+  async addDirect(httpUrl: string, credential?: { readonly kind: string; readonly token: string }, name?: string): Promise<string> {
+    const chosenName = name?.trim() ? environmentName(name) : undefined;
     validateDirectEndpoint(httpUrl, this.isDesktop);
     const descriptor = await this.fetchDescriptor(httpUrl);
+    const label = chosenName ?? defaultEnvironmentName(descriptor.label, new URL(httpUrl).hostname);
     const bearerCredential = await this.runtime.runPromise(authorizeConnectionCredential(httpUrl, descriptor.environmentId, credential));
     const connectionId = `bearer:${crypto.randomUUID()}`;
     const registration = new BearerConnectionRegistration({
       target: new BearerConnectionTarget({
         environmentId: descriptor.environmentId,
-        label: descriptor.label,
+        label,
         connectionId,
       }),
       profile: new BearerConnectionProfile({
         connectionId,
         environmentId: descriptor.environmentId,
-        label: descriptor.label,
+        label,
         httpBaseUrl: httpUrl,
         wsBaseUrl: toWebSocketBaseUrl(httpUrl),
       }),
       credential: bearerCredential,
     });
     await this.register(registration);
+    if (chosenName !== undefined) await this.saveConfiguredName(descriptor.environmentId, chosenName);
     return descriptor.environmentId;
   }
 
@@ -305,7 +439,9 @@ export class WebApplicationRuntime {
     },
     credential?: { readonly kind: string; readonly token: string },
     signal?: AbortSignal,
+    name?: string,
   ): Promise<string> {
+    const chosenName = name?.trim() ? environmentName(name) : undefined;
     const desktop = this.options.desktop;
     if (!desktop) {
       throw new ConnectionBlockedError({
@@ -317,16 +453,39 @@ export class WebApplicationRuntime {
         (target.expectedEnvironmentId !== undefined && !isValidEnvironmentId(target.expectedEnvironmentId))) {
       throw new ConnectionBlockedError({ reason: "configuration", detail: "Recovering an existing SSH environment requires its saved environment ID." });
     }
-    return await this.runtime.runPromise(Effect.flatMap(ConnectionOnboarding, (onboarding) =>
+    const id = await this.runtime.runPromise(Effect.flatMap(ConnectionOnboarding, (onboarding) =>
       onboarding.registerSsh({ target: {
         alias: target.host, hostname: target.host,
         ...(target.user === undefined ? {} : { username: target.user }),
         ...(target.port === undefined ? {} : { port: target.port }),
         ...(target.identityFile === undefined ? {} : { identityFile: target.identityFile }),
         ...(target.remoteDataDirectory === undefined ? {} : { remoteDataDirectory: target.remoteDataDirectory }),
-      }, ...(credential === undefined ? {} : { credential }),
+      }, ...(chosenName === undefined ? {} : { label: chosenName }), ...(credential === undefined ? {} : { credential }),
       ...(target.expectedEnvironmentId === undefined ? {} : { expectedEnvironmentId: EnvironmentId.make(target.expectedEnvironmentId) }) }),
     ), signal === undefined ? undefined : { signal });
+    if (chosenName !== undefined) await this.saveConfiguredName(id, chosenName);
+    return id;
+  }
+
+  /** Naming changes presentation only, including while offline or blocked. */
+  async renameEnvironment(environmentId: string, name: string): Promise<void> {
+    const label = environmentName(name);
+    const readEntries = Effect.flatMap(EnvironmentRegistry.EnvironmentRegistry,
+      (registry) => SubscriptionRef.get(registry.entries));
+    const entries = await this.runtime.runPromise(readEntries);
+    if (!entries.has(EnvironmentId.make(environmentId))) throw new Error("The environment is no longer registered.");
+    await writeEnvironmentName(this.options, environmentId, label);
+    this.environmentNames = { ...this.environmentNames, [environmentId]: label };
+    this.applyEntries(await this.runtime.runPromise(readEntries));
+  }
+
+  private forgetEnvironmentName(environmentId: string): void {
+    this.environmentNames = Object.fromEntries(Object.entries(this.environmentNames).filter(([id]) => id !== environmentId));
+  }
+
+  private async saveConfiguredName(environmentId: string, name: string): Promise<void> {
+    try { await this.renameEnvironment(environmentId, name); }
+    catch { throw new Error("The environment connected, but its name could not be saved. Edit its name in Environments to try again."); }
   }
 
   private async register(registration: ConnectionRegistration): Promise<void> {
@@ -344,10 +503,12 @@ export class WebApplicationRuntime {
   }
 
   private applyEntries(entries: ReadonlyMap<EnvironmentId, ConnectionCatalogEntry>): void {
+    if (!this.started) return;
     const views: EnvironmentEntryView[] = [...entries.values()].map((entry) => ({
       registration: {
         environmentId: entry.target.environmentId,
-        displayName: entry.target.label,
+        displayName: Object.hasOwn(this.environmentNames, entry.target.environmentId)
+          ? this.environmentNames[entry.target.environmentId]! : connectionDisplayName(entry),
         target: { kind: entry.target._tag === "PrimaryConnectionTarget" ? "primary" : entry.target._tag === "BearerConnectionTarget" ? "bearer" : "ssh" },
       },
       connection: this.connectionStates.get(entry.target.environmentId) ?? emptyConnection,
@@ -356,14 +517,9 @@ export class WebApplicationRuntime {
       ...this.stateValue.registry,
       entries: views,
     };
-    const removedSelection = this.watchedEnvironmentId !== null &&
-      !views.some((entry) => entry.registration.environmentId === this.watchedEnvironmentId);
-    if (removedSelection) {
-      if (this.sessionWatcher) Effect.runFork(Fiber.interrupt(this.sessionWatcher));
-      this.sessionWatcher = undefined;
-      this.watchedEnvironmentId = null;
+    if (this.selectedEnvironmentId !== null && this.workspaces.has(this.selectedEnvironmentId) &&
+        !views.some((entry) => entry.registration.environmentId === this.selectedEnvironmentId)) {
       this.selectedEnvironmentId = null;
-      this.clearActiveWorkspace();
       this.stateValue.registry = { entries: views };
     }
     this.watchEnvironments(views);
@@ -382,9 +538,36 @@ export class WebApplicationRuntime {
       Effect.runFork(Fiber.interrupt(watcher));
       this.environmentWatchers.delete(environmentId);
       this.connectionStates.delete(environmentId);
+      this.workspaces.get(environmentId)?.dispose();
+      this.workspaces.delete(environmentId);
+      this.workspaceSummaryVersions.delete(environmentId);
+      const catalogWatcher = this.catalogWatchers.get(environmentId);
+      if (catalogWatcher) Effect.runFork(Fiber.interrupt(catalogWatcher));
+      this.catalogWatchers.delete(environmentId);
+      this.catalogSessions.delete(environmentId);
+      this.catalogRequests.get(environmentId)?.abort();
+      this.catalogRequests.delete(environmentId);
+      this.catalogRefreshes.delete(environmentId);
+      const catalogs = { ...this.stateValue.catalogs };
+      delete catalogs[environmentId];
+      this.stateValue.catalogs = catalogs;
     }
     for (const environmentId of wanted) {
       if (this.environmentWatchers.has(environmentId)) continue;
+      const cached = new RepositoryCatalogCache(this.options.storage).load(environmentId);
+      if (cached !== null) this.stateValue.catalogs = {
+        ...this.stateValue.catalogs,
+        [environmentId]: { repositories: cached, status: "stale", hasSnapshot: true, error: null },
+      };
+      this.workspaces.set(environmentId, new EnvironmentWorkspaceData({
+        environmentId,
+        metadataAdapter: new LocalStorageWorkspaceMetadataAdapter(this.options.storage),
+        cachedCatalog: cached ?? [],
+        tabOwnership: this.workspaceOptions.tabOwnership,
+        request: (method, input, signal) => this.requestEnvironment(environmentId, method, input, signal),
+        welcome: (session, signal) => this.runtime.runPromise(session.welcome, { signal }),
+        onChange: () => this.onWorkspaceChange(environmentId),
+      }));
       const runtime = this;
       const id = EnvironmentId.make(environmentId);
       this.environmentWatchers.set(
@@ -401,10 +584,133 @@ export class WebApplicationRuntime {
           }).pipe(Effect.catch(() => Effect.void)),
         ),
       );
+      this.catalogWatchers.set(environmentId, this.runtime.runFork(
+        Effect.gen(function* () {
+          const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+          yield* registry.followStream(id, Stream.unwrap(Effect.map(
+            EnvironmentSupervisor.EnvironmentSupervisor,
+            (supervisor) => SubscriptionRef.changes(supervisor.session),
+          ))).pipe(Stream.runForEach((session) =>
+            Effect.sync(() => runtime.onCatalogSession(environmentId, session)),
+          ));
+        }).pipe(Effect.catch(() => Effect.void)),
+      ));
     }
   }
 
+  private onCatalogSession(environmentId: string, session: Option.Option<RpcSession>): void {
+    if (!this.started || !this.stateValue.registry.entries.some((entry) => entry.registration.environmentId === environmentId)) return;
+    this.workspaces.get(environmentId)?.setSession(Option.getOrNull(session));
+    if (Option.isNone(session)) {
+      this.catalogSessions.delete(environmentId);
+      this.catalogRequests.get(environmentId)?.abort();
+      this.catalogRequests.delete(environmentId);
+      this.catalogRefreshes.delete(environmentId);
+      const previous = this.stateValue.catalogs[environmentId];
+      if (previous) this.setCatalog(environmentId, {
+        ...previous, status: previous.hasSnapshot ? "stale" : "empty",
+      });
+      return;
+    }
+    if (this.catalogSessions.get(environmentId) === session.value) return;
+    this.catalogSessions.set(environmentId, session.value);
+    void this.refreshEnvironmentCatalog(environmentId);
+  }
+
+  /** Wakeups join reads; explicit post-mutation refreshes must supersede older data. */
+  refreshEnvironmentCatalog(environmentId: string, options: { readonly coalesce?: boolean } = {}): Promise<void> {
+    const session = this.catalogSessions.get(environmentId);
+    if (!this.started || !session) return Promise.resolve();
+    const pending = this.catalogRefreshes.get(environmentId);
+    if (options.coalesce && pending?.session === session) return pending.promise;
+    const promise = this.readEnvironmentCatalog(environmentId).finally(() => {
+      if (this.catalogRefreshes.get(environmentId)?.promise === promise) this.catalogRefreshes.delete(environmentId);
+    });
+    this.catalogRefreshes.set(environmentId, { session, promise });
+    return promise;
+  }
+
+  /** Reads one catalog through that environment's current supervisor session. */
+  private async readEnvironmentCatalog(environmentId: string): Promise<void> {
+    if (!this.started || !this.catalogSessions.has(environmentId)) return;
+    this.catalogRequests.get(environmentId)?.abort();
+    const requestToken = new AbortController();
+    this.catalogRequests.set(environmentId, requestToken);
+    const previous = this.stateValue.catalogs[environmentId];
+    const summaryVersions = new Map(this.workspaceSummaryVersions.get(environmentId));
+    this.setCatalog(environmentId, {
+      repositories: previous?.repositories ?? [], status: "syncing", hasSnapshot: previous?.hasSnapshot ?? false, error: null,
+    });
+    try {
+      const result = await this.runtime.runPromise(Effect.gen(function* () {
+        const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+        return yield* registry.run(EnvironmentId.make(environmentId), environmentRequest("repositories.list", {}));
+      }), { signal: requestToken.signal });
+      if (this.catalogRequests.get(environmentId) !== requestToken) return;
+      // A watcher refresh may finish while this catalog request is in flight.
+      // Preserve only those newer live summaries, not an arbitrary old snapshot.
+      const changed = new Map<string, RepositorySummary>();
+      const currentVersions = this.workspaceSummaryVersions.get(environmentId);
+      const repositoriesState = this.workspaces.get(environmentId)?.state.workspaceState.repositories ?? {};
+      for (const { repository, snapshot } of Object.values(repositoriesState)) {
+        if (snapshot && currentVersions?.get(repository.id) !== summaryVersions.get(repository.id)) changed.set(repository.id, repository);
+      }
+      const repositories = result.repositories.map((repository) => {
+        const newer = changed.get(repository.id);
+        changed.delete(repository.id);
+        return newer ?? repository;
+      });
+      repositories.push(...changed.values());
+      new RepositoryCatalogCache(this.options.storage).save(environmentId, repositories);
+      this.setCatalog(environmentId, { repositories, status: "live", hasSnapshot: true, error: null });
+    } catch (error) {
+      if (this.catalogRequests.get(environmentId) !== requestToken) return;
+      const latest = this.stateValue.catalogs[environmentId] ?? previous;
+      this.setCatalog(environmentId, {
+        repositories: latest?.repositories ?? [], status: latest?.hasSnapshot ? "stale" : "empty",
+        hasSnapshot: latest?.hasSnapshot ?? false, error: formatError(error),
+      });
+    } finally {
+      if (this.catalogRequests.get(environmentId) === requestToken) this.catalogRequests.delete(environmentId);
+    }
+  }
+
+  private setCatalog(environmentId: string, catalog: EnvironmentRepositoryCatalogView): void {
+    this.stateValue.catalogs = { ...this.stateValue.catalogs, [environmentId]: catalog };
+    this.notify();
+  }
+
+  /** Live repository refreshes own identity changes; grouping must not wait for reconnect. */
+  private onWorkspaceChange(environmentId: string): void {
+    const workspace = this.workspaces.get(environmentId);
+    const catalog = this.stateValue.catalogs[environmentId];
+    if (workspace && catalog) {
+      const versions = this.workspaceSummaryVersions.get(environmentId) ?? new Map<string, string>();
+      this.workspaceSummaryVersions.set(environmentId, versions);
+      const changed = new Map<string, RepositorySummary>();
+      for (const { repository, snapshot } of Object.values(workspace.state.workspaceState.repositories)) {
+        if (!snapshot) continue;
+        const version = JSON.stringify(repository);
+        if (versions.get(repository.id) === version) continue;
+        versions.set(repository.id, version);
+        changed.set(repository.id, repository);
+      }
+      if (changed.size) {
+        const repositories = catalog.repositories.map((repository) => {
+          const updated = changed.get(repository.id);
+          changed.delete(repository.id);
+          return updated ?? repository;
+        });
+        repositories.push(...changed.values());
+        new RepositoryCatalogCache(this.options.storage).save(environmentId, repositories);
+        this.stateValue.catalogs = { ...this.stateValue.catalogs, [environmentId]: { ...catalog, repositories } };
+      }
+    }
+    this.notify();
+  }
+
   private onEnvironmentState(environmentId: string, state: SupervisorConnectionState): void {
+    if (!this.started || !this.workspaces.has(environmentId)) return;
     this.connectionStates.set(environmentId, state);
     this.stateValue.registry = {
       ...this.stateValue.registry,
@@ -412,9 +718,6 @@ export class WebApplicationRuntime {
         entry.registration.environmentId === environmentId ? { ...entry, connection: state } : entry,
       ),
     };
-    if (environmentId === this.selectedEnvironmentId) {
-      this.onState(state);
-    }
     this.notify();
   }
 
@@ -432,137 +735,36 @@ export class WebApplicationRuntime {
     }
     if (this.selectedEnvironmentId === null ||
         !entries.some((entry) => entry.registration.environmentId === this.selectedEnvironmentId)) return;
-    // One watcher per selected environment: the entries change on every
-    // registration, and a watcher per change would leak fibers.
-    if (this.watchedEnvironmentId === this.selectedEnvironmentId) return;
-    this.clearActiveWorkspace();
-    this.stateValue.connection = this.connectionStates.get(this.selectedEnvironmentId) ?? emptyConnection;
-    this.stateValue.loading = true;
-    this.stateValue.error = "";
-    this.watchedEnvironmentId = this.selectedEnvironmentId;
-    if (this.sessionWatcher) Effect.runFork(Fiber.interrupt(this.sessionWatcher));
-    const runtime = this;
-    const environmentId = EnvironmentId.make(this.selectedEnvironmentId);
-    this.sessionWatcher = this.runtime.runFork(
-      Effect.gen(function* () {
-        const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
-        yield* registry.followStream(environmentId, Stream.unwrap(Effect.map(
-          EnvironmentSupervisor.EnvironmentSupervisor,
-          (supervisor) => SubscriptionRef.changes(supervisor.session),
-        ))).pipe(Stream.runForEach((session) => Effect.sync(() => {
-          if (runtime.watchedEnvironmentId === environmentId && runtime.selectedEnvironmentId === environmentId) {
-            runtime.onSession(session);
-          }
-        })));
-      }),
-    );
-  }
-
-  private onState(state: SupervisorConnectionState): void {
-    this.stateValue.connection = state;
-    this.stateValue.loading = state.phase !== "connected";
-    this.stateValue.error = state.lastFailure?.detail ?? "";
     this.notify();
   }
 
-  private onSession(session: Option.Option<RpcSession>): void {
-    if (Option.isNone(session)) {
-      this.clearActiveWorkspace();
-      return;
-    }
-    if (session.value === this.activeSession) return;
-    this.clearActiveWorkspace();
-    this.activeSession = session.value;
-    const generation = ++this.activationGeneration;
-    void this.runtime
-      .runPromise(session.value.welcome)
-      .then((welcome) => {
-        if (generation !== this.activationGeneration) return;
-        const client = new GitGuiClient({
-          client: session.value.client,
-          welcome,
-          // The transport watches the server's event sequence, so the gap
-          // detection lives with the transport.
-          sequenceGaps: session.value.sequenceGaps,
-        });
-        this.pendingClient = client;
-        const environmentId = this.selectedEnvironmentId;
-        if (environmentId === null) return;
-        const workspace = new ClientWorkspace({
-          client,
-          identity: { environmentId },
-          metadataAdapter: new LocalStorageWorkspaceMetadataAdapter(this.options.storage),
-        });
-        this.pendingWorkspace = workspace;
-        workspace.startUpdates();
-        void workspace
-          .restore()
-          .then(() => {
-            if (generation !== this.activationGeneration) {
-              workspace.dispose();
-              client.dispose();
-              return;
-            }
-            this.pendingWorkspace = undefined;
-            this.pendingClient = undefined;
-            this.stateValue.workspace?.dispose();
-            this.stateValue.client?.dispose();
-            this.workspaceListener?.();
-            this.stateValue.client = client;
-            this.stateValue.workspace = workspace;
-            this.stateValue.workspaceState = workspace.state;
-            this.stateValue.loading = false;
-            this.stateValue.error = "";
-            this.workspaceListener = workspace.subscribe((workspaceState) => {
-              if (generation !== this.activationGeneration) return;
-              this.stateValue.workspaceState = workspaceState;
-              this.notify();
-            });
-            this.notify();
-          })
-          .catch((error) => {
-            workspace.dispose();
-            client.dispose();
-            if (generation !== this.activationGeneration) return;
-            this.activeSession = null;
-            this.stateValue.loading = false;
-            this.stateValue.error = formatError(error);
-            this.notify();
-          });
-      })
-      .catch((error) => {
-        if (generation !== this.activationGeneration) return;
-        this.stateValue.loading = false;
-        this.stateValue.error = formatError(error);
-        this.notify();
-      });
-  }
-
-  private clearActiveWorkspace(): void {
-    this.activationGeneration += 1;
-    this.workspaceListener?.();
-    this.workspaceListener = undefined;
-    this.pendingWorkspace?.dispose();
-    this.pendingWorkspace = undefined;
-    this.pendingClient?.dispose();
-    this.pendingClient = undefined;
-    this.stateValue.workspace?.dispose();
-    this.stateValue.client?.dispose();
-    this.activeSession = null;
-    this.stateValue.client = null;
-    this.stateValue.workspace = null;
-    this.stateValue.workspaceState = null;
+  /** Legacy selected fields are projections of the stable environment services. */
+  private projectSelection(): void {
+    const id = this.selectedEnvironmentId;
+    const view = id === null ? undefined : this.workspaces.get(id)?.state;
+    this.stateValue.connection = !this.started || id === null ? null : this.connectionStates.get(id) ?? emptyConnection;
+    this.stateValue.client = view?.ready ? view.client : null;
+    this.stateValue.workspace = view?.ready ? view.workspace : null;
+    this.stateValue.workspaceState = view?.ready ? view.workspaceState : null;
+    this.stateValue.loading = this.started && !this.startupError && (!view || view.loading || this.stateValue.connection?.phase !== "connected");
+    this.stateValue.error = this.startupError || view?.error || this.stateValue.connection?.lastFailure?.detail || "";
   }
 
   private snapshot(): WebApplicationRuntimeState {
     return {
       ...this.stateValue,
       registry: { ...this.stateValue.registry, entries: [...this.stateValue.registry.entries] },
+      catalogs: { ...this.stateValue.catalogs },
+      environmentWorkspaces: this.environmentWorkspaces,
+      repositoryGroups: groupRepositoryCatalogs(Object.fromEntries(
+        Object.entries(this.stateValue.catalogs).map(([environmentId, catalog]) => [environmentId, catalog.repositories]),
+      )),
       connection: this.stateValue.connection ? { ...this.stateValue.connection } : null,
     };
   }
 
   private notify(): void {
+    this.projectSelection();
     const state = this.snapshot();
     for (const listener of this.listeners) listener(state);
   }
@@ -577,8 +779,8 @@ const toWebSocketBaseUrl = (httpUrl: string): string => {
   return url.toString();
 };
 
-export function provideWebApplicationRuntime(): WebApplicationRuntime {
-  const runtime = new WebApplicationRuntime();
+export function provideWebApplicationRuntime(options?: WebConnectionOptions, workspaceOptions?: WebWorkspaceOptions): WebApplicationRuntime {
+  const runtime = new WebApplicationRuntime(options, workspaceOptions);
   setContext(CONTEXT_KEY, runtime);
   return runtime;
 }

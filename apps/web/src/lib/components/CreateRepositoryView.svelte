@@ -12,6 +12,9 @@
     error?: string;
     loading?: boolean;
     canBrowse?: boolean;
+    canCreate?: boolean;
+    unavailableReason?: string;
+    environmentLabel?: string;
     onProviderChange: (value: CreateRepositoryProvider) => void;
     onParentPathChange: (value: string) => void;
     onNameChange: (value: string) => void;
@@ -31,6 +34,9 @@
     error = "",
     loading = false,
     canBrowse = false,
+    canCreate = false,
+    unavailableReason = "Session authorization is unavailable.",
+    environmentLabel = "",
     onProviderChange,
     onParentPathChange,
     onNameChange,
@@ -61,7 +67,7 @@
 
   function submit(event: SubmitEvent) {
     event.preventDefault();
-    if (!loading && !isRemoteProvider && parentPath.trim() && name.trim()) {
+    if (canCreate && !loading && !isRemoteProvider && parentPath.trim() && name.trim()) {
       void onSubmit();
     }
   }
@@ -127,6 +133,8 @@
     <div class="min-h-0 overflow-auto">
       <form class="mx-auto max-w-[680px] px-5 py-4" onsubmit={submit}>
         <h2 class="mb-4 text-lg font-medium">{provider === "local" ? "Initialize a Repo" : `Create on ${providerTitle}`}</h2>
+        {#if environmentLabel}<p class="mb-3 text-sm text-[var(--app-theme-text-secondary)]">On {environmentLabel}</p>{/if}
+        {#if !canCreate}<p class="mb-3 text-sm text-[var(--app-theme-text-muted)]" role="status">{unavailableReason}</p>{/if}
 
         <div class="grid grid-cols-[135px_minmax(0,1fr)] items-center gap-x-4 gap-y-2">
           <label class="text-right text-sm text-[var(--app-theme-text-secondary)]" for="create-repository-name">Name</label>
@@ -159,7 +167,7 @@
             <button
               class="inline-flex h-8 shrink-0 items-center gap-2 rounded-[2px] border border-[var(--app-theme-accent)] bg-[var(--app-theme-accent-surface)] px-3 text-sm font-medium text-[var(--app-theme-accent-surface-foreground)] transition-colors hover:bg-[var(--app-theme-sidebar-row-hover)] disabled:cursor-not-allowed disabled:opacity-45"
               type="button"
-              disabled={loading || !canBrowse || isRemoteProvider}
+              disabled={loading || !canCreate || !canBrowse || isRemoteProvider}
               title={isRemoteProvider ? "Remote repository creation is not connected" : canBrowse ? "Browse for a folder" : "Folder browsing is available in the desktop app"}
               onclick={() => void onBrowse()}
             >
@@ -221,7 +229,7 @@
           <button
             class="inline-flex h-8 items-center justify-center gap-2 rounded-[2px] border border-[var(--app-theme-accent)] bg-[var(--app-theme-accent-surface)] px-4 text-sm font-medium text-[var(--app-theme-accent-surface-foreground)] transition-colors hover:bg-[var(--app-theme-sidebar-row-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus)] disabled:cursor-not-allowed disabled:opacity-45"
             type="submit"
-            disabled={loading || isRemoteProvider || !parentPath.trim() || !name.trim()}
+            disabled={loading || !canCreate || isRemoteProvider || !parentPath.trim() || !name.trim()}
           >
             <FolderPlus aria-hidden="true" size={16} />
             {loading ? "Creating…" : "Create Repository"}

@@ -11,6 +11,7 @@
  * - `ConnectionFailureCause` keeps only the causes GitGui can name.
  * - Prepared connections can finalize a provisional SSH acquisition after
  *   RPC readiness, or cancel it if establishment fails.
+ * - Prepared connections carry the authenticated session's secret-free scopes.
  */
 import { EnvironmentId, type EnvironmentDescriptor } from "@gitgui/contracts/environment";
 import * as Schema from "effect/Schema";
@@ -142,6 +143,8 @@ export type PreparedHttpAuthorization = {
 };
 
 export interface PreparedConnection {
+  /** Missing authorization is unknown, never an implicit grant. */
+  readonly sessionScopes?: readonly string[];
   /** GitGui's provisional SSH acquisition is claimed only after live RPC. */
   readonly onReady?: Effect.Effect<void, ConnectionAttemptError>;
   readonly onFailure?: Effect.Effect<void>;

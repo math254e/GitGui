@@ -7,6 +7,7 @@
 
   type Props = {
     client: GitGuiClient;
+    environmentGeneration?: number;
     repositoryId: string;
     snapshot: RepositorySnapshot;
     selectedCommit: CommitInfo;
@@ -15,7 +16,7 @@
     onSelectFile: (file: CommitFile) => void;
   };
 
-  let { client, repositoryId, snapshot, selectedCommit, comparisonWithWorkingTree = false, selectedFile, onSelectFile }: Props = $props();
+  let { client, environmentGeneration = 0, repositoryId, snapshot, selectedCommit, comparisonWithWorkingTree = false, selectedFile, onSelectFile }: Props = $props();
   let commitFiles = $state<CommitFile[]>([]);
   let filesLoading = $state(false);
   let filesError = $state("");
@@ -25,17 +26,19 @@
   let resizeStartHeight = 0;
   let activeFilesRequest = 0;
   let lastFilesRequestKey = "";
+  let lastFilesClient: GitGuiClient | null = null;
   let destroyed = false;
 
   let fileStatusCounts = $derived(getFileStatusCounts(commitFiles));
 
   $effect(() => {
-    const requestKey = `${repositoryId}\0${selectedCommit.hash}\0${comparisonWithWorkingTree}`;
-    if (requestKey === lastFilesRequestKey) {
+    const requestKey = `${environmentGeneration}\0${repositoryId}\0${selectedCommit.hash}\0${comparisonWithWorkingTree}`;
+    if (client === lastFilesClient && requestKey === lastFilesRequestKey) {
       return;
     }
 
     lastFilesRequestKey = requestKey;
+    lastFilesClient = client;
     void loadFiles(repositoryId, selectedCommit.hash, comparisonWithWorkingTree);
   });
 

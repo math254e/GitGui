@@ -281,6 +281,7 @@ impl AuthRepository {
         tx.commit().map_err(|_| AuthError::Storage)?;
         Ok(session)
     }
+    #[cfg(test)]
     pub(super) fn revoke_grant(&self, token: &str) -> Result<bool, AuthError> {
         let mut db = connect(&self.path)?;
         let tx = db
@@ -297,6 +298,7 @@ impl AuthRepository {
         tx.commit().map_err(|_| AuthError::Storage)?;
         Ok(changed)
     }
+    #[cfg(test)]
     pub(super) fn revoke(&self, token: &str) -> Result<bool, AuthError> {
         let mut db = connect(&self.path)?;
         let tx = db

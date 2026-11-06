@@ -465,6 +465,7 @@ mod tests {
         let preparation = Arc::new(Preparation::default());
         let repository = ConfiguredRepository {
             operation_path: "repo".into(),
+            metadata: Arc::default(),
             summary: RepositorySummary {
                 id: "repo".into(),
                 name: "repo".into(),
@@ -472,6 +473,9 @@ mod tests {
                 root: "repo".into(),
                 is_worktree: false,
                 missing: None,
+                repository_identity: None,
+                worktree_family: None,
+                metadata_stale: None,
             },
         };
         let target = StashTarget {

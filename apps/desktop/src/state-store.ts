@@ -10,6 +10,7 @@ interface PersistedState {
   schemaVersion: 1;
   registrations: DesktopConnectionRegistration[];
   credentials: Record<string, string>;
+  environmentNames: Record<string, string>;
 }
 
 export class DesktopStateStore {
@@ -20,6 +21,23 @@ export class DesktopStateStore {
 
   async listRegistrations() {
     return structuredClone((await this.load()).registrations);
+  }
+
+  async getEnvironmentNames(): Promise<Record<string, string>> {
+    return structuredClone((await this.load()).environmentNames);
+  }
+
+  async setEnvironmentName(environmentId: string, name: string | null) {
+    const id = assertSafeString(environmentId, "environmentId");
+    const value = name === null ? null : assertSafeString(name, "environment name");
+    if (value !== null && value.length > 512) throw new TypeError("Environment names cannot exceed 512 characters");
+    await this.mutate((state) => {
+      // Object.fromEntries also handles opaque historical IDs such as __proto__.
+      state.environmentNames = Object.fromEntries([
+        ...Object.entries(state.environmentNames).filter(([key]) => key !== id),
+        ...(value === null ? [] : [[id, value]]),
+      ]);
+    });
   }
 
   async saveRegistration(registration: DesktopConnectionRegistration, credential?: DesktopCredential) {
@@ -80,6 +98,13 @@ export class DesktopStateStore {
           credentials: Object.fromEntries(Object.entries(parsed.credentials).filter((entry): entry is [string, string] =>
             typeof entry[0] === "string" && typeof entry[1] === "string",
           )),
+          environmentNames: isRecord(parsed.environmentNames)
+            ? Object.fromEntries(Object.entries(parsed.environmentNames).flatMap(([id, name]) => {
+                try {
+                  const value = assertSafeString(name, "environment name");
+                  return value.length <= 512 ? [[assertSafeString(id, "environmentId"), value]] : [];
+                } catch { return []; }
+              })) : {},
         }
         : emptyState();
     } catch {
@@ -110,7 +135,7 @@ export class DesktopStateStore {
 }
 
 function emptyState(): PersistedState {
-  return { schemaVersion: 1, registrations: [], credentials: {} };
+  return { schemaVersion: 1, registrations: [], credentials: {}, environmentNames: {} };
 }
 
 function parseRegistration(value: unknown): DesktopConnectionRegistration {

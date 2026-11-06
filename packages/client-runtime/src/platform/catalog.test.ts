@@ -1,6 +1,8 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
 import { EnvironmentId } from "@gitgui/contracts/environment";
 import { BearerConnectionTarget, SshConnectionTarget } from "../connection/model.ts";
 import { BearerConnectionCredential, BearerConnectionProfile, BearerConnectionRegistration, SshConnectionProfile, SshConnectionRegistration } from "../connection/catalog.ts";
@@ -26,6 +28,29 @@ class Backend implements EnvironmentCatalogBackend {
 }
 
 describe("platform connection persistence", () => {
+  it.effect("keeps credential deletion inside the catalog transaction before accepting re-registration", () => Effect.gen(function* () {
+    const backend = new Backend(), store = yield* makeRegistrationStore(backend);
+    yield* store.register(direct, [direct.target]);
+    const entered = yield* Deferred.make<void>(), release = yield* Deferred.make<void>();
+    backend.removeCredential = async (id) => {
+      await Effect.runPromise(Deferred.succeed(entered, undefined));
+      await Effect.runPromise(Deferred.await(release));
+      backend.credentials.delete(id);
+    };
+    const removing = yield* Effect.forkChild(store.remove(environmentId));
+    yield* Deferred.await(entered);
+    const replacement = new BearerConnectionRegistration({ ...direct,
+      credential: new BearerConnectionCredential({ token: "new-secret" }),
+    });
+    const registering = yield* Effect.forkChild(store.register(replacement, [direct.target]));
+    yield* Effect.yieldNow;
+    expect(backend.credentials.get(environmentId)?.token).toBe("test-bearer");
+    yield* Deferred.succeed(release, undefined);
+    yield* Fiber.join(removing);
+    yield* Fiber.join(registering);
+    expect(backend.credentials.get(environmentId)?.token).toBe("new-secret");
+    expect(backend.catalog.environments).toHaveLength(1);
+  }));
   it.effect("uses the atomic desktop save and leaves no credential after failed browser registration", () => Effect.gen(function* () {
     const atomic = new Backend();
     const writes: string[] = [];
@@ -64,6 +89,12 @@ describe("platform connection persistence", () => {
     expect(yield* (yield* makeTargetStore(backend)).list).toEqual([direct.target]);
     const profiles = yield* makeProfileStore(backend);
     expect(Option.getOrUndefined(yield* profiles.get("direct"))).toEqual(direct.profile);
+  }));
+
+  it.effect("retains legacy registrations with empty routes as durable targets", () => Effect.gen(function* () {
+    const backend = new Backend(), store = yield* makeRegistrationStore(backend);
+    yield* store.register(direct, []);
+    expect(yield* (yield* makeTargetStore(backend)).list).toEqual([direct.target]);
   }));
 
   it.effect("retains direct, SSH and learned profiles across reload, and prunes removed routes", () => Effect.gen(function* () {

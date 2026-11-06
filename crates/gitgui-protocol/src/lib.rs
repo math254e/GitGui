@@ -723,6 +723,26 @@ pub struct ServerStatus {
     pub uptime_seconds: u64,
 }
 
+/// Best-effort logical grouping hint. It is never an RPC target.
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RepositoryIdentity {
+    /// Credential-free canonical Git remote comparison key.
+    pub canonical_key: String,
+}
+
+/// An environment-local clone shared by a main checkout and linked worktrees.
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RepositoryWorktreeFamily {
+    /// Opaque host-local family key, not a path or cross-host identity.
+    pub id: String,
+    /// Canonical main worktree path on this host, if known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub main_root: Option<String>,
+}
+
 /// A configured repository as exposed to a client.
 #[derive(Clone, Debug, Deserialize, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -741,6 +761,18 @@ pub struct RepositorySummary {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub missing: Option<bool>,
+    /// Best-effort matching identity; older servers omit this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub repository_identity: Option<RepositoryIdentity>,
+    /// Host-local relationship to linked worktrees, when available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub worktree_family: Option<RepositoryWorktreeFamily>,
+    /// Metadata could not be refreshed; any grouping hints are last-known only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub metadata_stale: Option<bool>,
 }
 
 /// Result of listing the repositories explicitly configured on a host.
@@ -1826,4 +1858,24 @@ fn empty_object() -> Value {
 
 fn default_true() -> bool {
     true
+}
+
+#[cfg(test)]
+mod repository_identity_tests {
+    use super::RepositorySummary;
+    use serde_json::json;
+
+    #[test]
+    fn old_summaries_remain_compatible_and_new_fields_are_optional() {
+        let legacy = json!({ "id": "r", "name": "repo", "root": "/repo", "path": "/repo", "isWorktree": false });
+        let summary: RepositorySummary = serde_json::from_value(legacy.clone()).unwrap();
+        assert!(summary.repository_identity.is_none());
+        assert!(summary.worktree_family.is_none());
+        assert!(summary.metadata_stale.is_none());
+        assert_eq!(serde_json::to_value(summary).unwrap(), legacy);
+        let extended = json!({ "id": "r", "name": "repo", "root": "/repo", "path": "/repo", "isWorktree": false,
+            "repositoryIdentity": { "canonicalKey": "host/team/repo" }, "worktreeFamily": { "id": "family", "mainRoot": "/repo" }, "metadataStale": true });
+        let summary: RepositorySummary = serde_json::from_value(extended.clone()).unwrap();
+        assert_eq!(serde_json::to_value(summary).unwrap(), extended);
+    }
 }

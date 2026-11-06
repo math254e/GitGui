@@ -90,6 +90,9 @@ export interface DesktopBridge {
   listConnectionRegistrations(): Promise<DesktopConnectionRegistration[]>;
   saveConnectionRegistration(registration: DesktopConnectionRegistration, credential?: DesktopCredential): Promise<void>;
   removeConnectionRegistration(environmentId: string): Promise<void>;
+  /** Presentation preferences, keyed by stable identity, including the primary. */
+  getEnvironmentNames(): Promise<Record<string, string>>;
+  setEnvironmentName(environmentId: string, name: string | null): Promise<void>;
   getCredential(environmentId: string): Promise<DesktopCredential | undefined>;
   setCredential(environmentId: string, credential: DesktopCredential): Promise<void>;
   removeCredential(environmentId: string): Promise<void>;
