@@ -162,7 +162,7 @@
                   <span class="mb-2 block text-xs font-medium text-[var(--app-theme-text-subtle)]">Executable path</span>
                   <div class="flex gap-2">
                     <input id="git-executable" bind:value={gitExecutable} class="h-9 min-w-0 flex-1 rounded-md border border-[var(--app-theme-border)] bg-[var(--app-theme-surface)] px-3 text-sm text-[var(--app-theme-text-secondary)] outline-none transition focus:border-[var(--app-theme-focus)] focus:ring-2 focus:ring-[var(--app-theme-focus-ring)]" />
-                    <button type="button" class="inline-flex h-9 items-center gap-2 rounded-md border border-[var(--app-theme-border)] bg-[var(--app-theme-surface-raised)] px-3 text-sm font-semibold text-[var(--app-theme-text-muted)] transition hover:bg-[var(--app-theme-control-hover)]">Detect</button>
+                    <button type="button" class="inline-flex h-9 items-center gap-2 rounded-sm border border-[var(--app-theme-border)] bg-[var(--app-theme-surface-raised)] px-3 text-sm font-semibold text-[var(--app-theme-text-muted)] transition hover:bg-[var(--app-theme-control-hover)]">Detect</button>
                   </div>
                 </label>
               </section>
@@ -191,7 +191,7 @@
                                 <span class="sr-only">Environment name</span>
                                 <input bind:value={editedName} required maxlength="512" disabled={connectionBusy} class="h-8 rounded-md border border-[var(--app-theme-border)] bg-[var(--app-theme-surface)] px-2 text-sm outline-none" />
                               </label>
-                              <button type="submit" disabled={connectionBusy || !editedName.trim()} class="h-8 rounded-md border border-[var(--app-theme-border)] px-3 text-xs disabled:opacity-50">Save name</button>
+                              <button type="submit" disabled={connectionBusy || !editedName.trim()} class="h-8 rounded-sm border border-[var(--app-theme-border)] px-3 text-xs disabled:opacity-50">Save name</button>
                               <button type="button" disabled={connectionBusy} onclick={() => editingEnvironmentId = null} class="h-8 px-2 text-xs">Cancel</button>
                             </form>
                           {:else}
@@ -257,7 +257,7 @@
                       <option value="bearer">Bearer token</option>
                     </select>
                   </label>
-                  <button type="button" disabled={connectionBusy} onclick={addDirectEnvironment} class="h-9 w-fit rounded-md bg-[var(--app-theme-accent)] px-4 text-sm font-semibold text-[var(--app-theme-accent-foreground)] transition-colors hover:bg-[var(--app-theme-accent-hover)] disabled:opacity-50">Connect server</button>
+                  <button type="button" disabled={connectionBusy} onclick={addDirectEnvironment} class="h-9 w-fit rounded-sm bg-[var(--app-theme-accent)] px-4 text-sm font-semibold text-[var(--app-theme-accent-foreground)] transition-colors hover:bg-[var(--app-theme-accent-hover)] disabled:opacity-50">Connect server</button>
                 </div>
               </section>
 
@@ -291,7 +291,7 @@
                         <label class="block"><span class="mb-1 block text-xs font-semibold text-[var(--app-theme-text-subtle)]">Expected environment ID</span><input bind:value={sshExpectedEnvironmentId} placeholder="Saved environment ID" class="h-9 w-full rounded-md border border-[var(--app-theme-border)] bg-[var(--app-theme-surface)] px-3 text-sm outline-none" /></label>
                       </div>
                     </details>
-                    <button type="button" disabled={connectionBusy} onclick={addSshEnvironment} class="h-9 w-fit rounded-md bg-[var(--app-theme-accent)] px-4 text-sm font-semibold text-[var(--app-theme-accent-foreground)] disabled:opacity-50">Connect over SSH</button>
+                    <button type="button" disabled={connectionBusy} onclick={addSshEnvironment} class="h-9 w-fit rounded-sm bg-[var(--app-theme-accent)] px-4 text-sm font-semibold text-[var(--app-theme-accent-foreground)] disabled:opacity-50">Connect over SSH</button>
                     {#if sshAcquisition}
                       <button type="button" onclick={() => sshAcquisition?.abort()} class="h-9 w-fit rounded-md border border-[var(--app-theme-border)] px-4 text-sm">Cancel SSH connection</button>
                     {/if}

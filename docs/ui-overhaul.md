@@ -8,6 +8,15 @@ read on 2026-11-06. The local reference checkout remains at
 `70cd258d8aac43ea57494527b00bf36de3efa6c0`. It was read, never updated.
 GitGui's vendored client runtime and Effect versions were not resynced.
 
+The follow-up comparison used current upstream
+[`b90e554e0a942605c4de2d4ff5d4654caf998e27`](https://github.com/pingdotgg/t3code/tree/b90e554e0a942605c4de2d4ff5d4654caf998e27).
+All seven exported palette definitions in
+[`packages/shared/src/themePalettes.ts`](https://github.com/pingdotgg/t3code/blob/b90e554e0a942605c4de2d4ff5d4654caf998e27/packages/shared/src/themePalettes.ts)
+are identical to the recorded snapshot. The current web
+[`themePalette.ts`](https://github.com/pingdotgg/t3code/blob/b90e554e0a942605c4de2d4ff5d4654caf998e27/apps/web/src/themePalette.ts)
+and [`index.css`](https://github.com/pingdotgg/t3code/blob/b90e554e0a942605c4de2d4ff5d4654caf998e27/apps/web/src/index.css)
+were also inspected. No palette or preference migration was needed.
+
 Design references:
 
 - [Merged overhaul #24865](https://github.com/pingdotgg/t3code/pull/24865)
@@ -157,3 +166,28 @@ tests (558 passed; seven opt-in live tests skipped), and `git diff --check`.
 The existing WorkingTreeFileList accessibility
 warning and Rollup annotation/chunk-size warnings remain. Native Electron
 window chrome and live remote/SSH workflows were not visually exercised.
+
+## Follow-up restraint and interaction fixes
+
+Preserve the existing circular light/dark swatches and their interaction. Use
+neutral selection outlines on swatches and theme cards; scheme controls also
+have checkmarks. Accent focus indicators remain available to keyboard users.
+Small action buttons use the existing 4px workspace radius, with 6px preview
+containers and the existing 8px modal shells. General and Connections headers
+share Appearance's heading and spacing hierarchy.
+
+Scheme previews now resolve light and dark selections independently, rather than
+showing the base theme when a different half is selected. Conditional theme
+dialogs restore focus to their opener after removal; they yield to a replacement
+dialog or an explicitly focused control. Both behaviors have regression tests.
+
+This follow-up reused the existing development server and UI. Shared preview
+snapshots timed out twice, so isolated Edge contexts captured real before/after
+Appearance (Grove dark and T3 light), General settings, and home at 1440×900.
+The replacement rectangular swatches were rejected and reverted to circles;
+the final corrected dark screen was captured again. Browser checks confirmed
+keyboard focus and Escape returning focus to Create theme. Nine focused tests
+passed after that correction. The full frontend suite before the modal focus
+fix passed 560 tests, with seven opt-in live tests skipped. The follow-up visual
+pass was stopped before another narrow-screen or live remote/SSH walkthrough;
+the earlier validation above records the broader baseline coverage.

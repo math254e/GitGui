@@ -221,7 +221,7 @@
         </div>
         <button
           type="button"
-          class="flex h-8 w-8 shrink-0 items-center justify-center rounded-md transition hover:bg-[var(--app-theme-sidebar-row-hover,#1a1a1d)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus,#4c8dff)]"
+          class="flex h-8 w-8 shrink-0 items-center justify-center rounded-sm transition hover:bg-[var(--app-theme-sidebar-row-hover,#1a1a1d)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus,#4c8dff)]"
           style="color: var(--app-theme-text-muted, #92939b)"
           aria-label="Close theme editor"
           onclick={() => onCancel?.()}
@@ -271,18 +271,19 @@
             ] as option (option.value)}
               <button
                 type="button"
-                class="flex items-center gap-3 rounded-md border px-3 py-3 text-left transition hover:bg-[var(--app-theme-sidebar-row-hover,#1a1a1d)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus,#4c8dff)]"
-                style={`background: ${activeAppearance === option.value ? "var(--app-theme-accent-surface, #1e2030)" : "var(--app-theme-surface, #0b0b0d)"}; border-color: ${activeAppearance === option.value ? "var(--app-theme-focus, #4c8dff)" : "var(--app-theme-border, #27272c)"}`}
+                class="flex items-center gap-3 rounded-sm border px-3 py-3 text-left transition hover:bg-[var(--app-theme-sidebar-row-hover,#1a1a1d)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus,#4c8dff)]"
+                style={`background: var(--app-theme-surface); border-color: ${activeAppearance === option.value ? "var(--app-theme-text-muted)" : "var(--app-theme-border-subtle)"}`}
                 aria-pressed={activeAppearance === option.value}
                 onclick={() => setAppearance(option.value)}
               >
-                <span class="flex h-8 w-8 items-center justify-center rounded-full" style={`background: ${option.palette.accent}; color: ${option.palette.accentForeground}`}>
+                <span class="flex h-8 w-8 shrink-0 items-center justify-center rounded-sm bg-[var(--app-theme-muted)] text-[var(--app-theme-text-muted)]">
                   <option.icon aria-hidden="true" size={15} />
                 </span>
-                <span class="min-w-0">
+                <span class="min-w-0 flex-1">
                   <span class="block text-sm font-semibold">{option.label}</span>
                   <span class="mt-0.5 block truncate text-xs" style="color: var(--app-theme-text-muted, #92939b)">{option.palette.canvas}</span>
                 </span>
+                {#if activeAppearance === option.value}<Check aria-hidden="true" size={15} class="shrink-0" />{/if}
               </button>
             {/each}
           </div>
@@ -399,7 +400,7 @@
       <footer class="flex flex-col-reverse gap-2 border-t px-5 py-4 sm:flex-row sm:justify-end" style="border-color: var(--app-theme-border, #27272c)">
         <button
           type="button"
-          class="h-9 rounded-md px-3 text-sm font-semibold transition hover:bg-[var(--app-theme-sidebar-row-hover,#1a1a1d)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus,#4c8dff)]"
+          class="h-9 rounded-sm px-3 text-sm font-semibold transition hover:bg-[var(--app-theme-sidebar-row-hover,#1a1a1d)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus,#4c8dff)]"
           style="color: var(--app-theme-text-muted, #92939b)"
           onclick={() => onCancel?.()}
         >
@@ -407,7 +408,7 @@
         </button>
         <button
           type="button"
-          class="h-9 rounded-md px-4 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus,#4c8dff)]"
+          class="h-9 rounded-sm px-4 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus,#4c8dff)]"
           style="background: var(--app-theme-accent, #8d9cff); color: var(--app-theme-accent-foreground, #101116)"
           onclick={save}
         >

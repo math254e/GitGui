@@ -56,7 +56,7 @@
 </div>
 
 <style>
-  .preview-panes { display: flex; height: 100%; overflow: hidden; border-radius: 6px; }
+  .preview-panes { display: flex; height: 100%; overflow: hidden; border-radius: 3px; }
   .workspace-preview {
     display: grid; min-width: 0; flex: 1; overflow: hidden;
     grid-template-columns: 24% minmax(0, 1fr) 24%; grid-template-rows: 18px minmax(0, 1fr);
@@ -68,7 +68,7 @@
     border-bottom: 1px solid var(--preview-border); padding: 0 6px;
   }
   i { display: block; height: 3px; border-radius: 2px; background: var(--preview-muted); opacity: 0.55; }
-  .preview-tab { display: flex; align-items: center; width: 34%; height: 100%; border-bottom: 2px solid var(--preview-accent); }
+  .preview-tab { display: flex; align-items: center; width: 34%; height: 100%; padding: 0 3px; background: var(--preview-sidebar); }
   .preview-tab i { width: 70%; background: var(--preview-text); }
   .preview-action { width: 12%; height: 3px; border-radius: 2px; background: var(--preview-muted); opacity: 0.4; }
   .preview-sidebar { overflow: hidden; padding: 6px; background: var(--preview-sidebar); border-right: 1px solid var(--preview-border); }
