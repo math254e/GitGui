@@ -42,7 +42,10 @@ describe("create tag from the graph", () => {
     const { store, client, repository, snapshot } = setup();
     const conflicts = [1, 2].map((i) => ({ name: `v${i}`, localObjectId: "a".repeat(40), remoteObjectId: "c".repeat(40) }));
     client.fetch.mockResolvedValue({ repository, snapshot, remote: "origin", tagConflicts: conflicts });
-    client.applyFetchedTags.mockResolvedValue({ repository, snapshot });
+    client.applyFetchedTags.mockImplementation(async (input) => {
+      structuredClone(input);
+      return { repository, snapshot };
+    });
     store.fetchRepository();
     await vi.waitFor(() => expect(store.tagFetchReview?.conflicts).toHaveLength(2));
     expect(client.applyFetchedTags).not.toHaveBeenCalled();

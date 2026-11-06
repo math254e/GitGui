@@ -2015,7 +2015,8 @@ export class WorkspaceStore {
     const review = this.tagFetchReview, client = this.client;
     if (!review || !client || this.gitActionPending || review.repositoryId !== this.activeRepositoryId || review.environmentId !== this.workspaceState?.environmentId) return;
     if (!client.serverWelcome.capabilities.includes("git.tag.apply_fetch")) { review.error = "This server cannot apply reviewed tag replacements."; return; }
-    const conflicts = review.conflicts.filter((conflict) => review.selectedNames.has(conflict.name));
+    const conflicts = review.conflicts.filter((conflict) => review.selectedNames.has(conflict.name))
+      .map(({ name, localObjectId, remoteObjectId }) => ({ name, localObjectId, remoteObjectId }));
     if (!conflicts.length) return;
     this.requestGitAction({ kind: "replaceFetchedTags", label: "Updating fetched tags", successMessage: `Updated ${conflicts.length} local tags`,
       action: (repositoryId) => client.applyFetchedTags({ repositoryId, conflicts }),
