@@ -1143,6 +1143,9 @@ impl Drop for HostGuard {
             Ok(())
         });
         let _ = fs::remove_file(&self.socket);
+        // A concurrent fork can briefly retain the open file description even
+        // with close-on-exec. Explicitly unlock before returning from shutdown.
+        let _ = FileExt::unlock(&self._process_lock);
     }
 }
 
@@ -1473,6 +1476,21 @@ mod tests {
         assert!(!guard.reconcile(&state).await.unwrap());
         assert!(!other_guard.reconcile(&other_state).await.unwrap());
         assert_ne!(guard.instance, other_guard.instance);
+    }
+
+    #[tokio::test]
+    async fn shutdown_unlocks_even_when_a_duplicate_file_description_is_open() {
+        let (_dir, store) = store();
+        let config = ServerConfig {
+            data_dir: Some(store.data_dir.clone()),
+            ..ServerConfig::default()
+        };
+        let guard = HostGuard::begin(&config, None).unwrap().unwrap();
+        let inherited = guard._process_lock.try_clone().unwrap();
+        assert!(store.running().unwrap());
+        drop(guard);
+        assert!(!store.running().unwrap());
+        drop(inherited);
     }
 
     #[tokio::test]

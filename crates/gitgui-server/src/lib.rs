@@ -477,6 +477,10 @@ pub async fn start(config: ServerConfig) -> Result<ServerHandle, ServerError> {
                         std::future::pending::<()>().await;
                     } => {},
                 }
+                // Axum signals completion before its signal task is dropped.
+                // Release this clone before the server task can release its own.
+                #[cfg(target_os = "linux")]
+                drop(shutdown_host);
                 shutdown_state
                     .set_lifecycle(ServerLifecycle::Stopping)
                     .await;
@@ -567,6 +571,9 @@ async fn run_internal(
                     }
                 } => {},
             }
+            // Axum may wake the server before dropping its signal task.
+            #[cfg(target_os = "linux")]
+            drop(shutdown_host);
             state.set_lifecycle(ServerLifecycle::Stopping).await;
         })
         .await
@@ -4758,6 +4765,25 @@ async fn shutdown_signal(state: Arc<ServerState>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn shutdown_releases_host_lock_before_immediate_restart() {
+        let root = tempfile::tempdir().unwrap();
+        let config = ServerConfig {
+            data_dir: Some(root.path().into()),
+            ..ServerConfig::default()
+        };
+        for _ in 0..20 {
+            let server = start(config.clone()).await.unwrap();
+            assert!(matches!(
+                start(config.clone()).await.err(),
+                Some(ServerError::Io(error)) if error.kind() == std::io::ErrorKind::WouldBlock
+            ));
+            server.shutdown().await.unwrap();
+        }
+        start(config).await.unwrap().shutdown().await.unwrap();
+    }
 
     #[tokio::test]
     async fn missing_auth_database_never_restarts_the_same_environment_anonymously() {
