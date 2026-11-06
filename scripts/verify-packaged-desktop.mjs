@@ -28,13 +28,13 @@ export async function verifyPackagedDesktop(directory, version, platform) {
       const workspace = JSON.parse(await readFile(join(isolated, `node_modules/@gitgui/${name}/package.json`), "utf8"));
       assert.equal(workspace.version, version, `Packaged ${name} version must match the app`);
     }
-    assert((await stat(join(isolated, "node_modules/@gitgui/contracts/src/desktop.ts"))).size > 0);
+    assert((await stat(join(isolated, "node_modules/@gitgui/contracts/dist/environment.js"))).size > 0);
     await writeFile(join(isolated, "smoke.mjs"), `
       import assert from 'node:assert/strict';
       import { createRequire } from 'node:module';
-      import { SshEnvironmentManager } from '@gitgui/ssh';
+      import { makeSshEnvironmentManager } from '@gitgui/ssh';
       const require = createRequire(import.meta.url);
-      assert.equal(typeof SshEnvironmentManager, 'function');
+      assert.equal(typeof makeSshEnvironmentManager, 'function');
       assert.equal(typeof require('electron-updater').NsisUpdater, 'function');
     `);
     execFileSync(process.execPath, [join(isolated, "smoke.mjs")], {

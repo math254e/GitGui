@@ -13,7 +13,7 @@
     "dev:desktop": "node scripts/dev-electron.mjs",
     "ui:dev": "npm run dev -w @gitgui/web",
     "build": "npm run protocol:generate && npm run build -w @gitgui/web",
-    "desktop:build": "npm run build -w @gitgui/ssh && npm run build -w @gitgui/desktop",
+    "desktop:build": "npm run build -w @gitgui/contracts && npm run build -w @gitgui/ssh && npm run build -w @gitgui/desktop",
     "server:dev": "cargo run -p gitgui-server -- --port 3774 --repository .",
     "server:prepare": "node scripts/prepare-gitgui-server.mjs",
     "web:serve": "npm run build && cargo run -p gitgui-server -- --bind 127.0.0.1 --port 3774 --repository . --web-dir apps/web/build",

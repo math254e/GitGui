@@ -48,7 +48,7 @@ export async function stageDesktop(root, stage) {
       if (key.startsWith("../") || !lock.packages[key]) throw new Error(`Dependency is outside the npm lock: ${dependency}`);
       const dependencyManifest = await json(join(dependency, "package.json"));
       if (dependencyManifest.version !== lock.packages[key].version) throw new Error(`Installed dependency disagrees with npm lock: ${key}`);
-      const child = { source: dependency, destination: join(destination, "node_modules", name) };
+      const child = { name, source: dependency, destination: join(destination, "node_modules", name) };
       children.push(child);
       scope.set(name, child);
     }
@@ -65,6 +65,16 @@ export async function stageDesktop(root, stage) {
           return ["package.json", "src", "dist"].includes(segments[0]) && !/\.(test|spec)\.[cm]?[jt]s$/.test(basename(file));
         },
       });
+      if (workspace && child.name === "@gitgui/contracts") {
+        // The workspace consumes TypeScript directly; packaged Node must load JavaScript.
+        const stagedManifest = await json(join(child.destination, "package.json"));
+        stagedManifest.exports = {
+          ".": "./dist/protocol.js",
+          "./desktop": "./dist/desktop.js",
+          "./environment": "./dist/environment.js",
+        };
+        await writeFile(join(child.destination, "package.json"), `${JSON.stringify(stagedManifest, null, 2)}\n`);
+      }
       await copyDependencies(child.source, child.destination, scope);
     }
   }

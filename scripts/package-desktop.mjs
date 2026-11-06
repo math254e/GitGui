@@ -38,7 +38,7 @@ async function main() {
   const output = resolve(root, values["output-dir"] ?? `release/${version}/${platform}-${target}-x64`);
   await mkdir(dirname(output), { recursive: true });
   await mkdir(output);
-  for (const directory of ["apps/desktop/dist", "packages/ssh/dist"]) {
+  for (const directory of ["apps/desktop/dist", "packages/ssh/dist", "packages/contracts/dist"]) {
     const path = resolve(root, directory);
     if (path !== join(root, ...directory.split("/"))) throw new Error("Invalid build output path");
     await rm(path, { recursive: true, force: true });
