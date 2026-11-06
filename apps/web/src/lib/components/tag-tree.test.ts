@@ -127,7 +127,7 @@ describe("tag navigation", () => {
     const props = { snapshot, selectedCommit: null, stateKey: "env:repo", onSelectRef };
     component = mount(Sidebar, { target, props }); flushSync(); await tick();
     const headings = [...target.querySelectorAll("section > button")];
-    expect(headings.map((el) => el.textContent?.trim())).toEqual(["Local branches (0)", "Remote branches (0)", "Tags (2)", "Worktrees (0)", "Stashes (0)"]);
+    expect(headings.map((el) => el.textContent?.trim())).toEqual(["Local branches 0", "Remote branches 0", "Tags 2", "Worktrees 0", "Stashes 0"]);
     const rows = [...target.querySelectorAll<HTMLButtonElement>("[data-tag-index]")];
     expect(rows.map((el) => el.getAttribute("aria-label"))).toEqual(["releases/v2", "releases/v10"]);
     expect(rows[0].getAttribute("aria-disabled")).toBe("true");

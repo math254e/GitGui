@@ -22,13 +22,13 @@
 
 <section class="h-full min-h-0 overflow-auto bg-[var(--app-theme-canvas)] text-[var(--app-theme-text)]">
   <div class="flex min-h-full w-full flex-col lg:flex-row">
-    <aside class="w-full shrink-0 border-b border-[var(--app-theme-sidebar-border)] bg-[var(--app-theme-sidebar)] lg:w-[258px] lg:border-r lg:border-b-0">
+    <aside class="w-full shrink-0 border-b border-[var(--app-theme-sidebar-border-subtle)] bg-[var(--app-theme-sidebar)] lg:w-[258px] lg:border-r lg:border-b-0">
       <div class="lg:sticky lg:top-0">
-        <nav aria-label="Settings categories">
+        <nav class="flex gap-1 p-2 lg:flex-col" aria-label="Settings categories">
           {#each sections as section (section.id)}
             <button
               type="button"
-              class={`flex h-12 w-full items-center gap-3 border-b border-[var(--app-theme-sidebar-border)] px-4 text-left transition-colors ${
+              class={`flex h-9 min-w-0 flex-1 items-center gap-2 rounded-md px-3 lg:w-full lg:flex-none text-left transition-colors ${
                 activeSection === section.id
                   ? "bg-[var(--app-theme-sidebar-row-active)] text-[var(--app-theme-sidebar-foreground)]"
                   : "bg-[var(--app-theme-sidebar)] text-[var(--app-theme-sidebar-muted-foreground)] hover:bg-[var(--app-theme-sidebar-row-hover)] hover:text-[var(--app-theme-sidebar-foreground)]"
@@ -43,7 +43,7 @@
               {:else}
                 <Link2 aria-hidden="true" class="mt-0.5 shrink-0" size={17} />
               {/if}
-              <span class="text-sm font-semibold">{section.label}</span>
+              <span class="text-sm font-medium">{section.label}</span>
             </button>
           {/each}
         </nav>

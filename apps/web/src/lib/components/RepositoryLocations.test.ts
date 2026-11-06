@@ -12,6 +12,39 @@ let component: ReturnType<typeof mount> | undefined;
 afterEach(async () => { if (component) await unmount(component); component = undefined; dismissContextMenu(); document.body.replaceChildren(); });
 
 describe("repository locations", () => {
+  it("shows the host path for a local checkout and preserves the remote label and missing state", () => {
+    const container = document.createElement("div"); document.body.append(container);
+    const current = { environmentId: "local", repositoryId: "one" };
+    component = mount(RepositoryLocations, { target: container, props: {
+      current, sourceTabId: "tab", onSwitch: vi.fn(), onOpenInNewTab: vi.fn(),
+      environments: [
+        { environmentId: "local", label: "GitGui on DESKTOP", local: true, status: "connected", locations: [{ target: current, path: "D:/work/gitgui", missing: false, current: true }] },
+        { environmentId: "remote", label: "Build host", status: "offline", locations: [{ target: { environmentId: "remote", repositoryId: "two" }, path: "/srv/gitgui", missing: true, current: false }] },
+      ],
+    } }); flushSync();
+    expect(container.textContent).toContain("D:/work/gitgui");
+    expect(container.textContent).not.toContain("GitGui on DESKTOP");
+    expect(container.textContent).toContain("Build host");
+    expect(container.textContent).toContain("/srv/gitgui");
+    expect(container.textContent).toContain("Missing");
+    expect(container.textContent).toContain("Offline");
+    expect(container.querySelector('[aria-label="Local, D:/work/gitgui"]')).not.toBeNull();
+  });
+
+  it("shows a saved disconnected location as not connected and retains its scoped action", () => {
+    const container = document.createElement("div"); document.body.append(container);
+    const current = { environmentId: "local", repositoryId: "one" };
+    const target = { environmentId: "remote", repositoryId: "two" };
+    const onSwitch = vi.fn();
+    component = mount(RepositoryLocations, { target: container, props: {
+      current, sourceTabId: "tab", onSwitch, onOpenInNewTab: vi.fn(),
+      environments: [{ environmentId: "remote", label: "Build host", status: "available", locations: [{ target, path: "/srv/gitgui", missing: false, current: false }] }],
+    } }); flushSync();
+    expect(container.textContent).toContain("Not connected");
+    expect(container.textContent).not.toContain("Connecting");
+    container.querySelector<HTMLButtonElement>('[aria-label="Build host, /srv/gitgui, available"]')!.click();
+    expect(onSwitch).toHaveBeenCalledWith(target, { tabId: "tab", target: current });
+  });
   it("opens the keyboard context menu with the originating tab and checkout", async () => {
     const container = document.createElement("div"); document.body.append(container);
     const current = { environmentId: "a", repositoryId: "one" };
@@ -52,6 +85,6 @@ describe("repository locations", () => {
     container.querySelector<HTMLButtonElement>('button[aria-label="Agentbox, /two"]')!.click();
     expect(switchTarget).toHaveBeenCalledWith(remote, { tabId: "tab-a", target: current });
     expect(container.textContent).toContain("Missing");
-    expect(container.textContent).toContain("offline");
+    expect(container.textContent).toContain("Offline");
   });
 });

@@ -166,20 +166,20 @@
   }
 </script>
 
-<aside class="min-h-0 border-r border-[var(--app-theme-sidebar-border)] bg-[var(--app-theme-sidebar)]">
+<aside class="repository-sidebar min-h-0 border-r border-[var(--app-theme-sidebar-border-subtle)] bg-[var(--app-theme-sidebar)]">
   <div class="flex h-full flex-col overflow-auto">
     {#if locationContext && repositoryEnvironments.length}
       <RepositoryLocations environments={repositoryEnvironments} current={locationContext.target} sourceTabId={locationContext.tabId}
         onSwitch={onSwitchLocation} onOpenInNewTab={onOpenLocationInNewTab} />
     {/if}
-    <section class={`flex min-h-0 flex-col border-b border-[var(--app-theme-sidebar-border)] py-2 first:pt-2 last:border-b-0 ${open.LocalBranches ? 'flex-1' : 'flex-none'}`}>
+    <section class={`flex min-h-0 flex-col border-b border-[var(--app-theme-sidebar-border-subtle)] py-2 first:pt-2 last:border-b-0 ${open.LocalBranches ? 'flex-1' : 'flex-none'}`}>
       <button
         type="button"
         onclick={() => toggle("LocalBranches")}
-        class="group mb-1 inline-flex items-center gap-1 pl-1.5 text-xs font-bold uppercase text-[var(--app-theme-sidebar-muted-foreground)] transition-colors hover:text-[var(--app-theme-accent-surface-foreground)]"
+        class="group mb-1 inline-flex items-center gap-1 pl-1.5 text-xs font-semibold text-[var(--app-theme-sidebar-muted-foreground)] transition-colors hover:text-[var(--app-theme-accent-surface-foreground)]"
       >
         <FileTreeChevron expanded={open.LocalBranches} />
-        <span>Local branches {snapshot ? `(${localBranches.length})` : ""}</span>
+        <span>Local branches {snapshot ? `${localBranches.length}` : ""}</span>
       </button>
       {#if open.LocalBranches}
         <div class="min-h-0 flex-1 overflow-auto">
@@ -213,14 +213,14 @@
       {/if}
     </section>
 
-    <section class={`flex min-h-0 flex-col border-b border-[var(--app-theme-sidebar-border)] py-2 last:border-b-0 ${open.RemoteBranches ? 'flex-1' : 'flex-none'}`}>
+    <section class={`flex min-h-0 flex-col border-b border-[var(--app-theme-sidebar-border-subtle)] py-2 last:border-b-0 ${open.RemoteBranches ? 'flex-1' : 'flex-none'}`}>
       <button
         type="button"
         onclick={() => toggle("RemoteBranches")}
-        class="group mb-1 inline-flex items-center gap-1 pl-1.5 text-xs font-bold uppercase text-[var(--app-theme-sidebar-muted-foreground)] transition-colors hover:text-[var(--app-theme-accent-surface-foreground)]"
+        class="group mb-1 inline-flex items-center gap-1 pl-1.5 text-xs font-semibold text-[var(--app-theme-sidebar-muted-foreground)] transition-colors hover:text-[var(--app-theme-accent-surface-foreground)]"
       >
         <FileTreeChevron expanded={open.RemoteBranches} />
-        <span>Remote branches {snapshot ? `(${remoteBranches.length})` : ""}</span>
+        <span>Remote branches {snapshot ? `${remoteBranches.length}` : ""}</span>
       </button>
       {#if open.RemoteBranches}
         <div class="min-h-0 flex-1 overflow-auto">
@@ -243,11 +243,11 @@
       {/if}
     </section>
 
-    <section class={`flex min-h-0 flex-col border-b border-[var(--app-theme-sidebar-border)] py-2 last:border-b-0 ${open.Tags ? 'flex-1' : 'flex-none'}`}>
+    <section class={`flex min-h-0 flex-col border-b border-[var(--app-theme-sidebar-border-subtle)] py-2 last:border-b-0 ${open.Tags ? 'flex-1' : 'flex-none'}`}>
       <button type="button" onclick={() => toggle("Tags")} aria-expanded={open.Tags} aria-controls="gitgui-tags"
-        class="group mb-1 inline-flex items-center gap-1 pl-1.5 text-xs font-bold uppercase text-[var(--app-theme-sidebar-muted-foreground)] transition-colors hover:text-[var(--app-theme-accent-surface-foreground)]">
+        class="group mb-1 inline-flex items-center gap-1 pl-1.5 text-xs font-semibold text-[var(--app-theme-sidebar-muted-foreground)] transition-colors hover:text-[var(--app-theme-accent-surface-foreground)]">
         <FileTreeChevron expanded={open.Tags} />
-        <span>Tags {snapshot ? `(${tags.length})` : ""}</span>
+        <span>Tags {snapshot ? `${tags.length}` : ""}</span>
       </button>
       {#if open.Tags}
         <div id="gitgui-tags" class="min-h-0 flex-1 overflow-hidden">
@@ -262,14 +262,14 @@
       {/if}
     </section>
 
-    <section class={`flex min-h-0 flex-col border-b border-[var(--app-theme-sidebar-border)] py-2 last:border-b-0 ${open.Worktrees ? 'flex-1' : 'flex-none'}`}>
+    <section class={`flex min-h-0 flex-col border-b border-[var(--app-theme-sidebar-border-subtle)] py-2 last:border-b-0 ${open.Worktrees ? 'flex-1' : 'flex-none'}`}>
       <button
         type="button"
         onclick={() => toggle("Worktrees")}
-        class="group mb-1 inline-flex items-center gap-1 pl-1.5 text-xs font-bold uppercase text-[var(--app-theme-sidebar-muted-foreground)] transition-colors hover:text-[var(--app-theme-accent-surface-foreground)]"
+        class="group mb-1 inline-flex items-center gap-1 pl-1.5 text-xs font-semibold text-[var(--app-theme-sidebar-muted-foreground)] transition-colors hover:text-[var(--app-theme-accent-surface-foreground)]"
       >
         <FileTreeChevron expanded={open.Worktrees} />
-        <span>Worktrees {snapshot ? `(${(snapshot.worktrees ?? []).length})` : ""}</span>
+        <span>Worktrees {snapshot ? `${(snapshot.worktrees ?? []).length}` : ""}</span>
       </button>
       {#if open.Worktrees}
         <div class="min-h-0 flex-1 overflow-auto">
@@ -283,14 +283,14 @@
       {/if}
     </section>
 
-    <section class={`flex min-h-0 flex-col border-b border-[var(--app-theme-sidebar-border)] py-2 last:border-b-0 ${open.Stashes ? 'flex-1' : 'flex-none'}`}>
+    <section class={`flex min-h-0 flex-col border-b border-[var(--app-theme-sidebar-border-subtle)] py-2 last:border-b-0 ${open.Stashes ? 'flex-1' : 'flex-none'}`}>
       <button
         type="button"
         onclick={() => toggle("Stashes")}
-        class="group mb-1 inline-flex items-center gap-1 pl-1.5 text-xs font-bold uppercase text-[var(--app-theme-sidebar-muted-foreground)] transition-colors hover:text-[var(--app-theme-accent-surface-foreground)]"
+        class="group mb-1 inline-flex items-center gap-1 pl-1.5 text-xs font-semibold text-[var(--app-theme-sidebar-muted-foreground)] transition-colors hover:text-[var(--app-theme-accent-surface-foreground)]"
       >
         <FileTreeChevron expanded={open.Stashes} />
-        <span>Stashes {snapshot ? `(${(snapshot.stashes ?? []).length})` : ""}</span>
+        <span>Stashes {snapshot ? `${(snapshot.stashes ?? []).length}` : ""}</span>
       </button>
       {#if open.Stashes}
         <div class="min-h-0 flex-1 overflow-auto">
@@ -306,3 +306,12 @@
     </section>
   </div>
 </aside>
+
+<style>
+  .repository-sidebar {
+    --app-theme-sidebar-row-hover: var(--app-theme-panel-row-hover);
+    --app-theme-sidebar-row-active: var(--app-theme-panel-row-selected);
+    --app-theme-sidebar-row-selected: var(--app-theme-sidebar-row-active);
+    --trees-bg-muted-override: var(--app-theme-sidebar-row-hover);
+  }
+</style>

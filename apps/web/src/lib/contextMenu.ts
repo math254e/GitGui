@@ -352,9 +352,9 @@ export function showContextMenu<T extends string>(
 
       const menu = document.createElement("div");
       menu.className =
-        "gitgui-context-menu fixed z-[10000] w-52 min-w-52 max-w-52 overflow-hidden rounded-[2px] bg-clip-padding outline-none";
+        "gitgui-context-menu fixed z-[10000] w-60 min-w-60 max-w-60 overflow-hidden rounded-lg bg-clip-padding outline-none";
       menu.style.cssText =
-        "position:fixed;z-index:10000;width:13rem;min-width:13rem;max-width:13rem;overflow:hidden;border-radius:2px;background-clip:padding-box;background:color-mix(in srgb,var(--app-theme-surface-raised) 18%,color-mix(in srgb,var(--app-theme-surface-raised) 80%,transparent));-webkit-backdrop-filter:blur(var(--app-theme-glass-blur,16px)) saturate(var(--app-theme-glass-saturation,1.08));backdrop-filter:blur(var(--app-theme-glass-blur,16px)) saturate(var(--app-theme-glass-saturation,1.08));border:1px solid color-mix(in srgb,var(--app-theme-text) 10%,transparent);color:var(--app-theme-text);outline:none;pointer-events:auto;";
+        "position:fixed;z-index:10000;width:15rem;min-width:15rem;max-width:15rem;overflow:hidden;border-radius:8px;background-clip:padding-box;background:var(--app-theme-surface-overlay);border:1px solid var(--app-theme-border);box-shadow:var(--app-theme-dialog-shadow);color:var(--app-theme-text);outline:none;pointer-events:auto;";
       menu.style.left = `${preferredLeft}px`;
       menu.style.top = `${preferredTop}px`;
       if (options) {
@@ -371,7 +371,7 @@ export function showContextMenu<T extends string>(
       inner.className =
         "max-h-[min(24rem,70vh)] min-w-0 max-w-sm overflow-y-auto overflow-x-hidden p-1";
       inner.style.cssText =
-        "max-height:min(24rem,70vh);min-width:0;max-width:13rem;overflow-x:hidden;overflow-y:auto;padding:0.25rem;";
+        "max-height:min(24rem,70vh);min-width:0;max-width:15rem;overflow-x:hidden;overflow-y:auto;padding:0.25rem;";
       if (options) inner.style.maxWidth = "100%";
 
       for (const item of entries) {
@@ -413,7 +413,7 @@ export function showContextMenu<T extends string>(
             ? `${rowBase} text-[var(--app-theme-error)] hover:bg-destructive/10 hover:text-[var(--app-theme-error)]`
             : `${rowBase} text-foreground hover:bg-accent hover:text-accent-foreground`;
         button.style.cssText =
-          "display:flex;width:100%;min-height:1.75rem;align-items:center;gap:0.5rem;border:0;border-radius:2px;background:transparent;padding:0.25rem 0.5rem;color:var(--app-theme-text);font-family:inherit;font-size:0.875rem;line-height:1.25rem;text-align:left;cursor:default;";
+          "display:flex;width:100%;min-height:1.75rem;align-items:center;gap:0.5rem;border:0;border-radius:4px;background:transparent;padding:0.25rem 0.5rem;color:var(--app-theme-text);font-family:inherit;font-size:0.875rem;line-height:1.25rem;text-align:left;cursor:default;";
         if (isLeafDestructive) {
           // Error foreground is text on a filled error surface, not on the menu.
           button.style.color = "var(--app-theme-error)";

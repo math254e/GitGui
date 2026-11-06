@@ -170,13 +170,13 @@
   }
 </script>
 
-<aside class="min-h-0 border-l border-[var(--app-theme-sidebar-border)] bg-[var(--app-theme-sidebar)]">
+<aside class="min-h-0 border-l border-[var(--app-theme-sidebar-border-subtle)] bg-[var(--app-theme-sidebar)]">
   <div class="flex h-full min-h-0 flex-col overflow-hidden">
-    <header class="shrink-0 border-b border-[var(--app-theme-sidebar-border)] px-5 py-2.5">
-      <div class="flex items-center justify-between gap-2">
+    <header class="flex h-[var(--app-repository-header-height)] shrink-0 items-center border-b border-[var(--app-theme-sidebar-border-subtle)] px-5">
+      <div class="flex w-full min-w-0 items-center justify-between gap-2">
         <div class="flex min-w-0 items-center gap-2">
           <span class="grid h-6 w-6 shrink-0 place-items-center bg-[var(--app-theme-accent)]/12 text-[var(--app-theme-accent)]">
-            <GitCommitHorizontal aria-hidden="true" size={14} strokeWidth={2.25} />
+            <GitCommitHorizontal aria-hidden="true" size={14} strokeWidth={1.75} />
           </span>
           <p class="truncate text-xs font-semibold text-[var(--app-theme-sidebar-foreground)]">
             {comparisonWithWorkingTree ? "Compare with working directory:" : "Commit:"}
@@ -189,11 +189,11 @@
     <div class="flex min-h-0 flex-1 flex-col gap-5 overflow-auto px-5 py-5">
       <div class="-mx-2 shrink-0">
         <section
-          class="flex min-h-0 flex-col overflow-hidden rounded-[2px] border border-[var(--app-theme-border)] bg-[var(--app-theme-surface-raised)]"
+          class="flex min-h-0 flex-col overflow-hidden bg-[var(--app-theme-surface-raised)]"
           style={`height: ${messageCardHeight}px`}
         >
           <div class="min-h-0 flex-1 overflow-auto p-4 pb-0">
-            <h2 class="text-[15px] font-normal leading-6 text-[var(--app-theme-text)]">{selectedCommit.message}</h2>
+            <h2 class="text-sm font-medium leading-6 text-[var(--app-theme-text)]">{selectedCommit.message}</h2>
           </div>
         </section>
       </div>
@@ -215,14 +215,14 @@
         </div>
         <dl class="grid grid-cols-2 gap-x-4 gap-y-4 border-y border-[var(--app-theme-border)] py-4">
         <div class="min-w-0">
-          <dt class="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-[0.08em] text-[var(--app-theme-text-subtle)]">
+          <dt class="flex items-center gap-1.5 text-xs font-medium text-[var(--app-theme-text-subtle)]">
             <UserRound aria-hidden="true" size={13} />
             Author
           </dt>
           <dd class="mt-1 truncate text-sm text-[var(--app-theme-sidebar-foreground)]" title={selectedCommit.author}>{selectedCommit.author}</dd>
         </div>
         <div class="min-w-0">
-          <dt class="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-[0.08em] text-[var(--app-theme-text-subtle)]">
+          <dt class="flex items-center gap-1.5 text-xs font-medium text-[var(--app-theme-text-subtle)]">
             <GitBranch aria-hidden="true" size={13} />
             Parents
           </dt>
@@ -235,7 +235,7 @@
           </dd>
         </div>
         <div class="col-span-2 min-w-0">
-          <dt class="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-[0.08em] text-[var(--app-theme-text-subtle)]">
+          <dt class="flex items-center gap-1.5 text-xs font-medium text-[var(--app-theme-text-subtle)]">
             <CalendarDays aria-hidden="true" size={13} />
             Date
           </dt>
@@ -249,25 +249,25 @@
           <div class="mb-3 flex shrink-0 flex-wrap items-center gap-x-4 gap-y-1 text-xs text-[var(--app-theme-sidebar-foreground)]" aria-label="Changed files summary">
             {#if fileStatusCounts.modified}
               <span class="inline-flex items-center gap-1.5 whitespace-nowrap" title={`${fileStatusCounts.modified} modified files`}>
-                <Pencil aria-hidden="true" size={13} strokeWidth={2.25} class="text-[#d09a2e]" />
+                <Pencil aria-hidden="true" size={13} strokeWidth={1.75} class="text-[var(--app-theme-status-modified)]" />
                 {fileStatusCounts.modified} modified
               </span>
             {/if}
             {#if fileStatusCounts.added}
               <span class="inline-flex items-center gap-1.5 whitespace-nowrap" title={`${fileStatusCounts.added} added files`}>
-                <Plus aria-hidden="true" size={15} strokeWidth={2.25} class="text-[#2f9e6f]" />
+                <Plus aria-hidden="true" size={15} strokeWidth={1.75} class="text-[var(--app-theme-diff-addition)]" />
                 {fileStatusCounts.added} added
               </span>
             {/if}
             {#if fileStatusCounts.deleted}
               <span class="inline-flex items-center gap-1.5 whitespace-nowrap" title={`${fileStatusCounts.deleted} deleted files`}>
-                <Minus aria-hidden="true" size={15} strokeWidth={2.25} class="text-[#e5484d]" />
+                <Minus aria-hidden="true" size={15} strokeWidth={1.75} class="text-[var(--app-theme-diff-deletion)]" />
                 {fileStatusCounts.deleted} deleted
               </span>
             {/if}
             {#if fileStatusCounts.renamed}
               <span class="inline-flex items-center gap-1.5 whitespace-nowrap" title={`${fileStatusCounts.renamed} renamed files`}>
-                <FilePenLine aria-hidden="true" size={14} strokeWidth={2.25} class="text-[#8b5cf6]" />
+                <FilePenLine aria-hidden="true" size={14} strokeWidth={1.75} class="text-[var(--app-theme-status-renamed)]" />
                 {fileStatusCounts.renamed} renamed
               </span>
             {/if}
@@ -287,7 +287,7 @@
             <CommitFilesTree files={commitFiles} {selectedFile} {onSelectFile} />
           </div>
         {:else}
-          <div class="rounded-[2px] border border-[var(--app-theme-border)] bg-[var(--app-theme-surface-raised)] px-3 py-3 text-sm text-[var(--app-theme-text-subtle)]">
+          <div class="rounded-lg bg-[var(--app-theme-surface-raised)] px-3 py-3 text-sm text-[var(--app-theme-text-subtle)]">
             This commit does not list file changes.
           </div>
         {/if}

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Cloud, FolderPlus, GitBranch, HardDriveDownload, Monitor, X } from "@lucide/svelte";
+  import { Cloud, FolderPlus, GitBranch, HardDriveDownload, X } from "@lucide/svelte";
 
   export type CreateRepositoryProvider = "local" | "github" | "bitbucket";
 
@@ -51,7 +51,7 @@
   const fullPath = $derived(joinPath(parentPath.trim(), name.trim()));
   const isRemoteProvider = $derived(provider !== "local");
   const providerTitle = $derived(
-    provider === "local" ? "Local" : provider === "github" ? "Github" : "Bitbucket",
+    provider === "local" ? "Folder" : provider === "github" ? "GitHub" : "Bitbucket",
   );
 
   $effect(() => {
@@ -84,9 +84,9 @@
 
 <section class="flex h-full min-h-0 flex-col overflow-hidden bg-[var(--app-theme-canvas)] text-[var(--app-theme-text)]">
   <header class="flex h-11 shrink-0 items-center justify-between border-b border-[var(--app-theme-border)] px-4">
-    <h1 class="text-base font-medium">Initialize a Repository</h1>
+    <h1 class="text-base font-semibold">Create repository</h1>
     <button
-      class="inline-flex h-7 w-7 items-center justify-center rounded-[2px] text-[var(--app-theme-text-muted)] transition hover:bg-[var(--app-theme-sidebar-row-hover)] hover:text-[var(--app-theme-text)]"
+      class="inline-flex h-7 w-7 items-center justify-center rounded-sm text-[var(--app-theme-text-muted)] transition hover:bg-[var(--app-theme-sidebar-row-hover)] hover:text-[var(--app-theme-text)]"
       type="button"
       aria-label="Close"
       disabled={loading}
@@ -105,8 +105,8 @@
         aria-current={provider === "local" ? "page" : undefined}
         onclick={() => onProviderChange("local")}
       >
-        <Monitor aria-hidden="true" size={16} />
-        Local
+        <FolderPlus aria-hidden="true" size={16} />
+        Folder
       </button>
       <button
         class:provider-selected={provider === "github"}
@@ -116,7 +116,7 @@
         onclick={() => onProviderChange("github")}
       >
         <GitBranch aria-hidden="true" size={16} />
-        Github
+        GitHub
       </button>
       <button
         class:provider-selected={provider === "bitbucket"}
@@ -132,7 +132,7 @@
 
     <div class="min-h-0 overflow-auto">
       <form class="mx-auto max-w-[680px] px-5 py-4" onsubmit={submit}>
-        <h2 class="mb-4 text-lg font-medium">{provider === "local" ? "Initialize a Repo" : `Create on ${providerTitle}`}</h2>
+        <h2 class="mb-4 text-base font-semibold">{provider === "local" ? "Repository details" : `Create on ${providerTitle}`}</h2>
         {#if environmentLabel}<p class="mb-3 text-sm text-[var(--app-theme-text-secondary)]">On {environmentLabel}</p>{/if}
         {#if !canCreate}<p class="mb-3 text-sm text-[var(--app-theme-text-muted)]" role="status">{unavailableReason}</p>{/if}
 
@@ -141,7 +141,7 @@
           <input
             bind:this={nameInput}
             id="create-repository-name"
-              class="h-8 min-w-0 rounded-[2px] border border-[var(--app-theme-input)] bg-[var(--app-theme-canvas)] px-2.5 text-sm text-[var(--app-theme-text)] outline-none transition placeholder:text-[var(--app-theme-placeholder)] focus:border-[var(--app-theme-focus)] focus:ring-2 focus:ring-[var(--app-theme-focus-ring)]"
+              class="h-8 min-w-0 rounded-sm border border-[var(--app-theme-input)] bg-[var(--app-theme-canvas)] px-2.5 text-sm text-[var(--app-theme-text)] outline-none transition placeholder:text-[var(--app-theme-placeholder)] focus:border-[var(--app-theme-focus)] focus:ring-2 focus:ring-[var(--app-theme-focus-ring)]"
             type="text"
             autocomplete="off"
             spellcheck="false"
@@ -155,7 +155,7 @@
           <div class="flex min-w-0 gap-2">
             <input
               id="create-repository-location"
-              class="h-8 min-w-0 flex-1 rounded-[2px] border border-[var(--app-theme-input)] bg-[var(--app-theme-canvas)] px-2.5 font-mono text-sm text-[var(--app-theme-text)] outline-none transition placeholder:text-[var(--app-theme-placeholder)] focus:border-[var(--app-theme-focus)] focus:ring-2 focus:ring-[var(--app-theme-focus-ring)]"
+              class="h-8 min-w-0 flex-1 rounded-sm border border-[var(--app-theme-input)] bg-[var(--app-theme-canvas)] px-2.5 font-mono text-sm text-[var(--app-theme-text)] outline-none transition placeholder:text-[var(--app-theme-placeholder)] focus:border-[var(--app-theme-focus)] focus:ring-2 focus:ring-[var(--app-theme-focus-ring)]"
               type="text"
               autocomplete="off"
               spellcheck="false"
@@ -165,10 +165,10 @@
               oninput={(event) => onParentPathChange(event.currentTarget.value)}
             />
             <button
-              class="inline-flex h-8 shrink-0 items-center gap-2 rounded-[2px] border border-[var(--app-theme-accent)] bg-[var(--app-theme-accent-surface)] px-3 text-sm font-medium text-[var(--app-theme-accent-surface-foreground)] transition-colors hover:bg-[var(--app-theme-sidebar-row-hover)] disabled:cursor-not-allowed disabled:opacity-45"
+              class="inline-flex h-8 shrink-0 items-center gap-2 rounded-sm border border-[var(--app-theme-accent)] bg-[var(--app-theme-accent-surface)] px-3 text-sm font-medium text-[var(--app-theme-accent-surface-foreground)] transition-colors hover:bg-[var(--app-theme-sidebar-row-hover)] disabled:cursor-not-allowed disabled:opacity-45"
               type="button"
               disabled={loading || !canCreate || !canBrowse || isRemoteProvider}
-              title={isRemoteProvider ? "Remote repository creation is not connected" : canBrowse ? "Browse for a folder" : "Folder browsing is available in the desktop app"}
+              title={isRemoteProvider ? "Remote repository creation is not connected" : canBrowse ? "Browse for a local folder" : "Enter a path on the selected host. Folder browsing is only available for local folders in the desktop app."}
               onclick={() => void onBrowse()}
             >
               Browse
@@ -183,7 +183,7 @@
           <label class="text-right text-sm text-[var(--app-theme-text-secondary)]" for="create-repository-branch">Default branch name</label>
           <input
             id="create-repository-branch"
-            class="h-8 min-w-0 rounded-[2px] border border-[var(--app-theme-input)] bg-[var(--app-theme-canvas)] px-2.5 font-mono text-sm text-[var(--app-theme-text)] outline-none transition placeholder:text-[var(--app-theme-placeholder)] focus:border-[var(--app-theme-focus)] focus:ring-2 focus:ring-[var(--app-theme-focus-ring)]"
+            class="h-8 min-w-0 rounded-sm border border-[var(--app-theme-input)] bg-[var(--app-theme-canvas)] px-2.5 font-mono text-sm text-[var(--app-theme-text)] outline-none transition placeholder:text-[var(--app-theme-placeholder)] focus:border-[var(--app-theme-focus)] focus:ring-2 focus:ring-[var(--app-theme-focus-ring)]"
             type="text"
             autocomplete="off"
             spellcheck="false"
@@ -219,7 +219,7 @@
 
         <footer class="mt-5 flex justify-end gap-2">
           <button
-            class="h-8 rounded-[2px] px-3 text-sm font-medium text-[var(--app-theme-text-muted)] transition hover:bg-[var(--app-theme-sidebar-row-hover)] disabled:cursor-not-allowed disabled:opacity-45"
+            class="h-8 rounded-sm px-3 text-sm font-medium text-[var(--app-theme-text-muted)] transition hover:bg-[var(--app-theme-sidebar-row-hover)] disabled:cursor-not-allowed disabled:opacity-45"
             type="button"
             disabled={loading}
             onclick={onCancel}
@@ -227,7 +227,7 @@
             Cancel
           </button>
           <button
-            class="inline-flex h-8 items-center justify-center gap-2 rounded-[2px] border border-[var(--app-theme-accent)] bg-[var(--app-theme-accent-surface)] px-4 text-sm font-medium text-[var(--app-theme-accent-surface-foreground)] transition-colors hover:bg-[var(--app-theme-sidebar-row-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus)] disabled:cursor-not-allowed disabled:opacity-45"
+            class="inline-flex h-8 items-center justify-center gap-2 rounded-sm border border-[var(--app-theme-accent)] bg-[var(--app-theme-accent-surface)] px-4 text-sm font-medium text-[var(--app-theme-accent-surface-foreground)] transition-colors hover:bg-[var(--app-theme-sidebar-row-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus)] disabled:cursor-not-allowed disabled:opacity-45"
             type="submit"
             disabled={loading || !canCreate || isRemoteProvider || !parentPath.trim() || !name.trim()}
           >

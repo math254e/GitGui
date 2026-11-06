@@ -47,7 +47,7 @@
     unsubscribeTheme();
   });
 
-  const allThemes = $derived([...BUILT_IN_THEMES, ...customThemes]);
+  const allThemes = $derived([...BUILT_IN_THEMES.filter((theme) => !customThemes.some((custom) => custom.id === theme.id)), ...customThemes]);
   const previewThemes = $derived(allThemes.map(toPreviewTheme));
   const selectedThemeIds = $derived({
     light: themeSnapshot.themeHalves?.light ?? themeSnapshot.theme,

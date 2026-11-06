@@ -1,3 +1,4 @@
+@import "@fontsource-variable/inter/wght.css";
 @import "tailwindcss";
 @import "./lib/theme/theme.css";
 
@@ -46,4 +47,42 @@
     background: transparent;
   }
 
+}
+
+/* Separate structural lines from controls so busy Git views stay quiet. */
+:root {
+  --app-repository-header-height: 44px;
+  --app-theme-row-selected-subtle: color-mix(in srgb, var(--app-theme-accent-surface) 55%, var(--app-theme-surface));
+  --app-theme-row-hover-subtle: color-mix(in srgb, var(--app-theme-accent-surface) 25%, var(--app-theme-surface));
+  --app-theme-panel-row-hover: color-mix(in srgb, var(--app-theme-sidebar-foreground) 5%, var(--app-theme-sidebar));
+  --app-theme-panel-row-selected: color-mix(in srgb, var(--app-theme-sidebar-foreground) 10%, var(--app-theme-sidebar));
+  --app-theme-sidebar-border-subtle: color-mix(in srgb, oklch(from var(--app-theme-sidebar-border) l 0 h) 55%, transparent);
+  --app-theme-toolbar-border-subtle: color-mix(in srgb, oklch(from var(--app-theme-toolbar-border) l 0 h) 65%, transparent);
+}
+
+/* Shared scale follows T3's current primitives; density stays GitGui-owned. */
+@theme {
+  --font-sans: -apple-system, BlinkMacSystemFont, "Inter Variable", "Segoe UI", sans-serif;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+  --radius-2xl: 16px;
+}
+
+@layer base {
+  body { font-size: 13px; line-height: 1.5; -webkit-font-smoothing: antialiased; }
+  :where(.lucide) { stroke-width: 1.75; }
+  :where(button, a, input, select, textarea, summary, [role="tab"]):focus-visible {
+    outline: 2px solid var(--app-theme-focus);
+    outline-offset: -2px;
+  }
+  :where(input, textarea)::placeholder { color: var(--app-theme-placeholder); }
+  :where(button, a, summary) { -webkit-tap-highlight-color: transparent; }
+  :where(button:disabled, [aria-disabled="true"]) { cursor: not-allowed; }
+  ::selection { background: var(--app-theme-terminal-selection-background); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
 }

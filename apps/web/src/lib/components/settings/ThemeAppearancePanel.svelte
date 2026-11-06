@@ -66,30 +66,30 @@
 </script>
 
 <section
-  class={`min-h-full w-full px-5 py-8 text-[var(--app-theme-text,#f4f4f5)] sm:px-8 sm:py-10 lg:px-12 lg:py-12 ${className}`}
+  class={`min-h-full w-full px-5 py-6 text-[var(--app-theme-text,#f4f4f5)] sm:px-8 sm:py-8 lg:px-12 lg:py-8 ${className}`}
   style="background: var(--app-theme-canvas, #0a0a0b)"
 >
   <div class="mx-auto max-w-[1080px]">
     <header class="max-w-[760px]">
-      <h1 class="text-[26px] font-semibold tracking-[-0.035em] sm:text-[28px]">{heading}</h1>
-      <p class="mt-3 text-sm leading-6 text-[var(--app-theme-text-muted,#92939b)] sm:text-[15px]">{description}</p>
+      <h1 class="text-xl font-semibold tracking-tight">{heading}</h1>
+      <p class="mt-3 text-sm leading-6 text-[var(--app-theme-text-muted,#92939b)] ">{description}</p>
     </header>
 
-    <section class="mt-8" aria-labelledby="theme-color-scheme-heading">
-      <h2 id="theme-color-scheme-heading" class="text-[17px] font-semibold tracking-[-0.02em]">Color scheme</h2>
+    <section class="mt-6" aria-labelledby="theme-color-scheme-heading">
+      <h2 id="theme-color-scheme-heading" class="text-base font-semibold">Color scheme</h2>
 
-      <div class="mt-4 grid gap-4 md:grid-cols-3">
+      <div class="mt-4 grid gap-3 grid-cols-3">
         {#each schemeOptions as option (option.id)}
           {@const isSelected = appearanceMode === option.id}
           <button
             type="button"
-            class="group min-w-0 rounded-2xl border p-2.5 text-left transition duration-200 hover:-translate-y-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus,#4c8dff)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--app-theme-canvas,#0a0a0b)]"
+            class="group min-w-0 rounded-lg border p-2.5 text-left transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus,#4c8dff)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--app-theme-canvas,#0a0a0b)]"
             aria-pressed={isSelected}
             aria-label={`${option.label}: ${option.description}`}
             style={`background: var(--app-theme-surface, #101012); border-color: ${isSelected ? "var(--app-theme-focus, #4c8dff)" : "var(--app-theme-border, #27272c)"}; box-shadow: ${isSelected ? "0 0 0 1px color-mix(in srgb, var(--app-theme-focus, #4c8dff) 34%, transparent)" : "none"}`}
             onclick={() => selectAppearance(option.id)}
           >
-            <div class="h-[174px] sm:h-[182px]">
+            <div class="h-[86px] sm:h-[112px]">
               <ThemeWireframe
                 mode={option.id}
                 lightPalette={previewTheme.colors.light}
@@ -106,9 +106,9 @@
       </div>
     </section>
 
-    <section class="mt-8" aria-labelledby="themes-heading">
+    <section class="mt-6" aria-labelledby="themes-heading">
       <div class="flex flex-wrap items-center justify-between gap-3">
-        <h2 id="themes-heading" class="text-[17px] font-semibold tracking-[-0.02em]">Themes</h2>
+        <h2 id="themes-heading" class="text-base font-semibold">Themes</h2>
 
         <div class="flex flex-wrap items-center gap-2">
           <button

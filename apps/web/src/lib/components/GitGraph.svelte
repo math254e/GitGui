@@ -1073,11 +1073,11 @@
   {#if snapshot}
     <div class="flex h-full min-h-0 flex-col">
       <div
-        class="grid border-b border-[var(--app-theme-toolbar-border)] bg-[var(--app-theme-toolbar)] text-[11px] font-bold uppercase text-[var(--app-theme-toolbar-foreground)]"
+        class="grid border-b border-[var(--app-theme-sidebar-border-subtle)] bg-[var(--app-theme-sidebar)] text-xs font-medium text-[var(--app-theme-sidebar-foreground)]"
         style={`grid-template-columns: ${gridTemplate}; min-width: ${totalGridWidth}px; height: ${headerHeight}px;`}
       >
         {#each visibleColumns as column, index (column.id)}
-          <div class="relative flex items-center border-r border-[var(--app-theme-toolbar-border)] px-1 last:border-r-0">
+          <div class="relative flex items-center border-r border-[var(--app-theme-sidebar-border-subtle)] px-1 last:border-r-0">
             <span class="truncate">{column.label}</span>
             {#if index < visibleColumns.length - 1}
               <button
@@ -1108,8 +1108,8 @@
               <button
                 data-working-tree
                 onkeydown={(event) => navigateHistory(event, null)}
-                class={`grid w-full items-center border-b border-[var(--app-theme-border)] text-left transition hover:bg-[var(--app-theme-sidebar-row-hover)] focus-visible:outline-2 focus-visible:outline-[var(--app-theme-focus)] ${
-                  changesSelected ? "bg-[var(--app-theme-accent-surface)]" : "bg-[var(--app-theme-surface)]"
+                class={`grid w-full items-center border-b border-[var(--app-theme-border-subtle)] text-left transition focus-visible:outline-2 focus-visible:outline-[var(--app-theme-focus)] ${
+                  changesSelected ? "bg-[var(--app-theme-row-selected-subtle)]" : "bg-[var(--app-theme-surface)] hover:bg-[var(--app-theme-row-hover-subtle)]"
                 }`}
                 style={`grid-template-columns: ${gridTemplate}; height: ${rowHeight}px;`}
                 type="button"
@@ -1117,16 +1117,16 @@
               >
                 <span class="relative z-30 flex min-w-0 items-center gap-0.5 overflow-visible px-0.5">
                   {#if snapshot.status.currentBranch}
-                    <span class="max-w-full truncate rounded-[2px] border border-[var(--app-theme-accent)]/30 bg-[var(--app-theme-accent-surface)] px-0.5 py-0 text-[10px] font-semibold leading-3.5 text-[var(--app-theme-accent-surface-foreground)]">
+                    <span class="max-w-full truncate rounded-sm border border-[var(--app-theme-accent)]/30 bg-[var(--app-theme-accent-surface)] px-0.5 py-0 text-[11px] font-semibold leading-4 text-[var(--app-theme-accent-surface-foreground)]">
                       {snapshot.status.currentBranch}
                     </span>
                   {/if}
                 </span>
                 <span class="relative h-full" aria-hidden="true"></span>
                 <span class="relative z-30 flex h-full min-w-0 items-center pl-2 pr-1" style="background-color: inherit;">
-                  <span class="block truncate text-xs font-semibold text-[var(--app-theme-text)]">
+                  <span class="block truncate text-[13px] font-semibold text-[var(--app-theme-text)]">
                     Changed files
-                    <span class="ml-0.5 text-[10px] font-medium text-[var(--app-theme-text-muted)]">{snapshot.status.changedFiles.length} files</span>
+                    <span class="ml-0.5 text-[11px] font-medium text-[var(--app-theme-text-muted)]">{snapshot.status.changedFiles.length} files</span>
                   </span>
                 </span>
               </button>
@@ -1143,12 +1143,12 @@
             {@const ghostRef = branchRefByLineCommit.get(commit.hash) ?? nearestDescendantRefs.get(commit.hash) ?? branchRefByMergeTargetCommit.get(commit.hash) ?? branchRefByLaneCommit.get(commit.hash) ?? branchRefByFirstParentCommit.get(commit.hash)}
             <li aria-setsize={graphRows.length + Number(hasChanges)} aria-posinset={rowRange.start + index + Number(hasChanges) + 1}>
               <button
-                class={`grid w-full items-center border-b border-[var(--app-theme-border)] text-left transition focus-visible:outline-2 focus-visible:outline-[var(--app-theme-focus)] ${
+                class={`grid w-full items-center border-b border-[var(--app-theme-border-subtle)] text-left transition focus-visible:outline-2 focus-visible:outline-[var(--app-theme-focus)] ${
                   contextMenuTarget?.hash === commit.hash
-                    ? "bg-[var(--app-theme-sidebar-row-hover)]"
+                    ? "bg-[var(--app-theme-row-hover-subtle)]"
                     : (selectedCommit?.hash === commit.hash || (selectedStash?.hash === commit.hash && selectedStash?.selector === stash?.selector))
-                      ? "bg-[var(--app-theme-accent-surface)]"
-                      : "bg-[var(--app-theme-surface)] hover:bg-[var(--app-theme-sidebar-row-hover)]"
+                      ? "bg-[var(--app-theme-row-selected-subtle)]"
+                      : "bg-[var(--app-theme-surface)] hover:bg-[var(--app-theme-row-hover-subtle)]"
                 }`}
                 data-commit-hash={commit.hash}
                 aria-pressed={stash ? selectedStash?.hash === stash.hash && selectedStash?.selector === stash.selector : selectedCommit?.hash === commit.hash}
@@ -1171,34 +1171,34 @@
                           data-local-branch={ref.refType === "localBranch" ? ref.name : undefined}
                           data-tag={ref.refType === "tag" ? ref.name : undefined}
                           title={ref.refType === "tag" ? `Tag: ${displayRefName(ref)}` : ref.name}
-                          class="relative z-30 flex max-w-full items-center gap-0.5 rounded-[2px] border px-0.5 py-0 text-[10px] font-semibold leading-3.5 hover:z-[100] hover:max-w-none hover:whitespace-nowrap"
+                          class="relative z-30 flex max-w-full items-center gap-0.5 rounded-sm border px-0.5 py-0 text-[11px] font-semibold leading-4 hover:z-[100] hover:max-w-none hover:whitespace-nowrap"
                           style={refBadgeStyle(ref.refType, graphCommit)}
                         >
                           {#if ref.refType === "remoteBranch"}
-                            <Cloud class="h-2.5 w-2.5 shrink-0" size={10} strokeWidth={2.4} />
+                            <Cloud class="h-3 w-3 shrink-0" size={12} strokeWidth={1.75} />
                           {:else if ref.refType === "localBranch"}
-                            <Monitor class="h-2.5 w-2.5 shrink-0" size={10} strokeWidth={2.4} />
+                            <Monitor class="h-3 w-3 shrink-0" size={12} strokeWidth={1.75} />
                           {:else}
-                            <Tag class="h-2.5 w-2.5 shrink-0" size={10} strokeWidth={2.4} />
+                            <Tag class="h-3 w-3 shrink-0" size={12} strokeWidth={1.75} />
                           {/if}
                           <span class="truncate">{displayRefName(ref)}</span>
                         </span>
                       {/each}
                       {#if refBadges?.additionalTags}
-                        <span class="shrink-0 rounded-[2px] border border-[var(--app-theme-border)] px-0.5 text-[10px] text-[var(--app-theme-text-muted)]"
+                        <span class="shrink-0 rounded-sm border border-[var(--app-theme-border)] px-0.5 text-[11px] text-[var(--app-theme-text-muted)]"
                           title={`${refBadges.additionalTags} more tags. Browse them in the Tags sidebar.`}>+{refBadges.additionalTags} tags</span>
                       {/if}
                     {/if}
                     {#if !stash && !commitRefs.length && (hoveredRowHash === commit.hash || contextMenuTarget?.hash === commit.hash || selectedCommit?.hash === commit.hash)}
                       {#if ghostRef}
                         <span
-                          class="relative z-30 flex max-w-full items-center gap-0.5 rounded-[2px] border border-dashed px-0.5 py-0 text-[10px] font-semibold leading-3.5 opacity-50 hover:z-[100] hover:max-w-none hover:whitespace-nowrap"
+                          class="relative z-30 flex max-w-full items-center gap-0.5 rounded-sm border border-dashed px-0.5 py-0 text-[11px] font-semibold leading-4 opacity-50 hover:z-[100] hover:max-w-none hover:whitespace-nowrap"
                           style={refBadgeStyle(ghostRef.refType, graphCommit)}
                         >
                           {#if ghostRef.refType === "remoteBranch"}
-                            <Cloud class="h-2.5 w-2.5 shrink-0" size={10} strokeWidth={2.4} />
+                            <Cloud class="h-3 w-3 shrink-0" size={12} strokeWidth={1.75} />
                           {:else if ghostRef.refType === "localBranch"}
-                            <Monitor class="h-2.5 w-2.5 shrink-0" size={10} strokeWidth={2.4} />
+                            <Monitor class="h-3 w-3 shrink-0" size={12} strokeWidth={1.75} />
                           {/if}
                           <span class="truncate">{displayRefName(ghostRef)}</span>
                         </span>
@@ -1207,11 +1207,11 @@
                 </span>
                 <span class="relative h-full" aria-hidden="true"></span>
                 <span class="relative z-30 flex h-full min-w-0 items-center pl-2 pr-1" style="background-color: inherit;">
-                  <span class="block truncate text-xs font-medium text-[var(--app-theme-text)]">
+                  <span class="block truncate text-[13px] font-medium text-[var(--app-theme-text)]">
                     {#if stash}
                       {stash.message}
                       {#if stash.branch}
-                        <span class="ml-1 text-[10px] font-medium text-[var(--app-theme-text-muted)]">on {stash.branch}</span>
+                        <span class="ml-1 text-[11px] font-medium text-[var(--app-theme-text-muted)]">on {stash.branch}</span>
                       {/if}
                     {:else}
                       {commit.message}
@@ -1228,7 +1228,7 @@
   {:else}
     <div class="grid h-full place-items-center p-8 text-center">
       <div>
-        <p class="text-sm font-bold uppercase text-[var(--app-theme-text-muted)]">Git Graph</p>
+        <p class="text-sm font-semibold text-[var(--app-theme-text-muted)]">Git Graph</p>
         <h2 class="mt-2 text-2xl font-semibold text-[var(--app-theme-text)]">Open a repository to view history.</h2>
       </div>
     </div>

@@ -225,7 +225,7 @@
 <aside class="min-h-0 border-l border-[var(--app-theme-sidebar-border)] bg-[var(--app-theme-sidebar)]">
   <div class="flex h-full min-h-0 flex-col overflow-hidden px-2 py-2">
     <header class="mb-2 shrink-0">
-      <p class="text-xs font-bold uppercase tracking-wide text-[var(--app-theme-sidebar-muted-foreground)]">Working tree</p>
+      <p class="text-xs font-semibold text-[var(--app-theme-sidebar-muted-foreground)]">Working tree</p>
       <div class="mt-1 flex items-baseline justify-between gap-3">
         <h2 class="truncate text-base font-semibold text-[var(--app-theme-text)]">Changes</h2>
         <span class="shrink-0 text-xs text-[var(--app-theme-text-subtle)]">
@@ -246,7 +246,7 @@
           <div class="flex min-w-0 items-center gap-2">
             <button
               type="button"
-              class="inline-flex min-w-0 items-center gap-1 text-left text-xs font-bold uppercase tracking-wide text-[var(--app-theme-text-subtle)] transition-colors hover:text-[var(--app-theme-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus)]"
+              class="inline-flex min-w-0 items-center gap-1 text-left text-xs font-semibold text-[var(--app-theme-text-subtle)] transition-colors hover:text-[var(--app-theme-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus)]"
               aria-controls="unstaged-files-list"
               aria-expanded={fileSectionsOpen.unstaged}
               onclick={() => toggleFileSection("unstaged")}
@@ -260,7 +260,7 @@
           </div>
           <button
             aria-label={unstagedActionLabel === "Stage selected" ? "Stage selected changes" : "Stage all changes"}
-            class="inline-flex h-[22px] shrink-0 items-center justify-center rounded-[2px] border border-[var(--app-theme-accent)]/35 bg-[var(--app-theme-accent)]/10 px-1.5 text-[10px] font-semibold text-[var(--app-theme-accent)] transition-colors hover:border-[var(--app-theme-accent)]/55 hover:bg-[var(--app-theme-accent)]/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus)] disabled:cursor-not-allowed disabled:opacity-40"
+            class="inline-flex h-[22px] shrink-0 items-center justify-center rounded-sm border border-[var(--app-theme-accent)]/35 bg-[var(--app-theme-accent)]/10 px-1.5 text-[10px] font-semibold text-[var(--app-theme-accent)] transition-colors hover:border-[var(--app-theme-accent)]/55 hover:bg-[var(--app-theme-accent)]/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus)] disabled:cursor-not-allowed disabled:opacity-40"
             disabled={stageControlsDisabled || !unstagedFiles.length}
             title={unstagedActionLabel === "Stage selected" ? "Stage selected changes" : "Stage all changes"}
             type="button"
@@ -302,7 +302,7 @@
           <div class="flex min-w-0 items-center gap-2">
             <button
               type="button"
-              class="inline-flex min-w-0 items-center gap-1 text-left text-xs font-bold uppercase tracking-wide text-[var(--app-theme-text-subtle)] transition-colors hover:text-[var(--app-theme-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus)]"
+              class="inline-flex min-w-0 items-center gap-1 text-left text-xs font-semibold text-[var(--app-theme-text-subtle)] transition-colors hover:text-[var(--app-theme-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus)]"
               aria-controls="staged-files-list"
               aria-expanded={fileSectionsOpen.staged}
               onclick={() => toggleFileSection("staged")}
@@ -316,7 +316,7 @@
           </div>
           <button
             aria-label={stagedActionLabel === "Unstage selected" ? "Unstage selected files" : "Unstage all files"}
-            class="inline-flex h-[22px] shrink-0 items-center justify-center rounded-[2px] border border-[var(--app-theme-error)]/35 bg-[var(--app-theme-error)]/10 px-1.5 text-[10px] font-semibold text-[var(--app-theme-error)] transition-colors hover:border-[var(--app-theme-error)]/55 hover:bg-[var(--app-theme-error)]/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus)] disabled:cursor-not-allowed disabled:opacity-40"
+            class="inline-flex h-[22px] shrink-0 items-center justify-center rounded-sm border border-[var(--app-theme-error)]/35 bg-[var(--app-theme-error)]/10 px-1.5 text-[10px] font-semibold text-[var(--app-theme-error)] transition-colors hover:border-[var(--app-theme-error)]/55 hover:bg-[var(--app-theme-error)]/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus)] disabled:cursor-not-allowed disabled:opacity-40"
             disabled={stageControlsDisabled || !stagedFiles.length}
             title={stagedActionLabel === "Unstage selected" ? "Unstage selected files" : "Unstage all files"}
             type="button"
@@ -359,7 +359,7 @@
 
     <form class="mt-2 shrink-0 border-t border-[var(--app-theme-sidebar-border)] pt-2" onsubmit={submitCommit}>
       <div class="mb-3 flex items-center justify-between gap-3">
-        <label class="text-xs font-bold uppercase tracking-wide text-[var(--app-theme-text-subtle)]" for="commit-summary">
+        <label class="text-xs font-semibold text-[var(--app-theme-text-subtle)]" for="commit-summary">
           Commit message
         </label>
         {#if commitPending}
@@ -393,7 +393,7 @@
 
       <input
         id="commit-summary"
-        class="mb-2 block h-9 w-full rounded-[2px] border border-[var(--app-theme-input)] bg-[var(--app-theme-canvas)] px-3 text-sm text-[var(--app-theme-text)] outline-none placeholder:text-[var(--app-theme-placeholder)] focus:border-[var(--app-theme-focus)] focus:ring-2 focus:ring-[var(--app-theme-focus-ring)] disabled:cursor-not-allowed disabled:opacity-50"
+        class="mb-2 block h-9 w-full rounded-sm border border-[var(--app-theme-input)] bg-[var(--app-theme-canvas)] px-3 text-sm text-[var(--app-theme-text)] outline-none placeholder:text-[var(--app-theme-placeholder)] focus:border-[var(--app-theme-focus)] focus:ring-2 focus:ring-[var(--app-theme-focus-ring)] disabled:cursor-not-allowed disabled:opacity-50"
         disabled={commitInputsDisabled}
         placeholder="Summary"
         type="text"
@@ -402,7 +402,7 @@
       />
       <textarea
         id="commit-description"
-        class="block h-20 w-full resize-none rounded-[2px] border border-[var(--app-theme-input)] bg-[var(--app-theme-canvas)] px-3 py-2 text-sm text-[var(--app-theme-text)] outline-none placeholder:text-[var(--app-theme-placeholder)] focus:border-[var(--app-theme-focus)] focus:ring-2 focus:ring-[var(--app-theme-focus-ring)] disabled:cursor-not-allowed disabled:opacity-50"
+        class="block h-20 w-full resize-none rounded-sm border border-[var(--app-theme-input)] bg-[var(--app-theme-canvas)] px-3 py-2 text-sm text-[var(--app-theme-text)] outline-none placeholder:text-[var(--app-theme-placeholder)] focus:border-[var(--app-theme-focus)] focus:ring-2 focus:ring-[var(--app-theme-focus-ring)] disabled:cursor-not-allowed disabled:opacity-50"
         aria-label="Commit description"
         disabled={commitInputsDisabled}
         placeholder="Description (optional)"
@@ -410,7 +410,7 @@
         oninput={(event) => editMessage("description", event.currentTarget.value)}
       ></textarea>
       <button
-        class="mt-2 flex h-10 w-full items-center justify-center gap-2 rounded-[2px] border border-[var(--app-theme-accent)] bg-[var(--app-theme-accent-surface)] px-3 text-sm font-semibold text-[var(--app-theme-accent-surface-foreground)] transition-colors hover:bg-[var(--app-theme-sidebar-row-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus)] disabled:cursor-not-allowed disabled:opacity-45"
+        class="mt-2 flex h-10 w-full items-center justify-center gap-2 rounded-sm border border-[var(--app-theme-accent)] bg-[var(--app-theme-accent-surface)] px-3 text-sm font-semibold text-[var(--app-theme-accent-surface-foreground)] transition-colors hover:bg-[var(--app-theme-sidebar-row-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus)] disabled:cursor-not-allowed disabled:opacity-45"
         disabled={commitDisabled}
         type="submit"
       >
