@@ -24,13 +24,11 @@ unsigned for this initial personal/small-group distribution. macOS is excluded.
 GitHub builds must run only when a new stable version tag such as `v0.1.1` is
 pushed. Branch pushes, pull requests, schedules, and manual dispatches must not
 start release builds. Derive and validate the release version from that tag.
-Publication remains disabled until separately enabled; a build trigger does not
-authorize publication. Publication was enabled for v0.1.5 and disabled afterward.
+Successful builds publish the release automatically.
 
 The version-tag-only trigger is implemented in the local workflow. It admits new
 tag pushes only and validates the stable version before compilation. Publication
-uses the existing tag and stays disabled unless the repository Actions variable
-`GITGUI_PUBLISH_RELEASES` is explicitly set to `true` or the exact authorized tag.
+uses the existing tag after validation and both platform builds succeed.
 
 Remote updates are deferred until GitGui's remote architecture is closer to
 T3 Code. This includes remote service launchers, trial/rollback, standalone

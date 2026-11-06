@@ -132,11 +132,8 @@ Artifact filenames use the literal supported `x64` suffix because electron-build
 otherwise expands the AppImage architecture macro to `x86_64` (and DEB to `amd64`).
 A regression test exercises those mappings with electron-builder's own helpers.
 
-Publication is disabled by default. Setting the repository Actions variable
-`GITGUI_PUBLISH_RELEASES` to an exact stable tag such as `v0.1.5` authorizes only
-that release. The value `true` enables publication for every subsequent stable
-tag. The final job runs only in `math254e/GitGui` and after every build and check
-succeeds. Leave the variable unset for builds that only retain Actions artifacts.
+Each new stable version tag publishes automatically after every build and check
+succeeds. The final job runs only in `math254e/GitGui`.
 
 The publication job revalidates both platforms and verifies that the existing
 release tag still resolves to the built commit, including annotated tags. It
@@ -147,16 +144,15 @@ inspection; no incomplete release is intentionally exposed. Tags point at source
 before runner-only version injection; the tag version is authoritative for the
 compiled payloads.
 
-Only this opt-in publication job has `contents: write`. It uses the built-in
+Only the publication job has `contents: write`. It uses the built-in
 `GITHUB_TOKEN` and needs no external release secret. Repository/organization
 Actions policies must allow that permission. Packaging always passes
 `--publish never` and strips publishing/signing credentials from its child process.
-Without the publication variable, new tags produce build artifacts only. There
-are no hosted deployments or npm publications.
+There are no hosted deployments or npm publications.
 
 To use it, commit the configuration and intended source, create a new stable
-`vX.Y.Z` tag on that commit, and push that tag. Enable publication before pushing a release tag only
-when its installers should become discoverable by the desktop updater.
+`vX.Y.Z` tag on that commit, and push that tag. Successful builds publish the
+installers and make them discoverable by the desktop updater.
 
 ## T3 Code translation and limits
 

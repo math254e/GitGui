@@ -35,7 +35,7 @@ async function fixture(directory, platform = "win") {
 }
 const metadataWrite = (directory, platform, metadata) => writeFile(join(directory, platform === "win" ? "latest.yml" : "latest-linux.yml"), yaml.dump(metadata));
 
-test("release configuration keeps publication explicit and restricts the supported targets", async () => {
+test("new stable tags publish after validation and both platform builds", async () => {
   const workflow = yaml.load(await readFile(new URL("../.github/workflows/desktop-release.yml", import.meta.url), "utf8"));
   assert.deepEqual(workflow.on, { push: { tags: ["v[0-9]+.[0-9]+.[0-9]+"] } });
   assert.match(workflow.jobs.validate.if, /github\.event_name == 'push'/);
@@ -44,8 +44,7 @@ test("release configuration keeps publication explicit and restricts the support
   assert.match(workflow.jobs.validate.if, /github\.event\.deleted == false/);
   assert.match(workflow.jobs.validate.if, /github\.event\.forced == false/);
   assert.deepEqual(workflow.permissions, { contents: "read" });
-  assert.match(workflow.jobs.publish.if, /vars\.GITGUI_PUBLISH_RELEASES == 'true'/);
-  assert.match(workflow.jobs.publish.if, /github\.repository == 'math254e\/GitGui'/);
+  assert.equal(workflow.jobs.publish.if, "${{ github.repository == 'math254e/GitGui' }}");
   assert.deepEqual(workflow.jobs.publish.permissions, { contents: "write" });
   assert.deepEqual(workflow.jobs.publish.needs, ["validate", "build"]);
   assert.deepEqual(workflow.jobs.build.strategy.matrix.include.map((entry) => entry.platform), ["win", "linux"]);
