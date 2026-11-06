@@ -1,11 +1,28 @@
-/* Static T3 Code fallback used before the runtime has painted a preference. */
+/* Static standard palette, matching themePalette.ts before preferences are applied. */
 :root {
   color-scheme: light;
 
+  --app-theme-graph-lane-1: #1d839b;
+  --app-theme-graph-lane-2: #0f54c3;
+  --app-theme-graph-lane-3: #72049b;
+  --app-theme-graph-lane-4: #a10e91;
+  --app-theme-graph-lane-5: #ad005a;
+  --app-theme-graph-lane-6: #a6000e;
+  --app-theme-graph-lane-7: #c4432d;
+  --app-theme-graph-lane-8: #8c731a;
+  --app-theme-graph-lane-9: #487c27;
+  --app-theme-diff-addition: #047857;
+  --app-theme-diff-deletion: #b91c1c;
+  --app-theme-status-modified: #8c5c00;
+  --app-theme-status-renamed: #6d28d9;
+  --app-theme-search-match-background: #ffde8b;
+  --app-theme-search-match-foreground: #21180a;
+  --app-theme-search-match-active-background: #eea52b;
+  --app-theme-search-match-active-foreground: #21180a;
   --app-theme-canvas: #fcfcfc;
   --app-theme-chrome: #fcfcfc;
   --app-theme-toolbar: #fcfcfc;
-  --app-theme-toolbar-foreground: #27272a;
+  --app-theme-toolbar-foreground: #18181b;
   --app-theme-toolbar-border: #e4e4e7;
   --app-theme-toolbar-control: #ffffff;
   --app-theme-toolbar-control-foreground: #27272a;
@@ -13,7 +30,7 @@
   --app-theme-surface: #ffffff;
   --app-theme-surface-raised: #fcfcfc;
   --app-theme-surface-overlay: #ffffff;
-  --app-theme-text: #27272a;
+  --app-theme-text: #18181b;
   --app-theme-text-muted: #71717b;
   --app-theme-border: #e4e4e7;
   --app-theme-input: #d4d4d8;
@@ -38,7 +55,7 @@
   --app-theme-update-surface: #e0e6f7;
   --app-theme-accent-surface: #f4f4f5;
   --app-theme-accent-surface-foreground: #18181b;
-  --app-theme-message-surface: #f4f4f5;
+  --app-theme-message-surface: #ebebed;
   --app-theme-message-foreground: #27272a;
   --app-theme-message-action: #1b4ed8;
   --app-theme-message-action-foreground: #ffffff;
@@ -46,7 +63,7 @@
   --app-theme-code-background: #ffffff;
   --app-theme-code-foreground: #27272a;
   --app-theme-sidebar: #fafafa;
-  --app-theme-sidebar-foreground: #27272a;
+  --app-theme-sidebar-foreground: #18181b;
   --app-theme-sidebar-muted-foreground: #71717b;
   --app-theme-sidebar-control-surface: #f4f4f5;
   --app-theme-sidebar-row-hover: #fcfcfc;
@@ -59,28 +76,19 @@
   --app-theme-terminal-selection-background: #d0d6dd;
   --app-theme-terminal-scrollbar: #d6d6d6;
   --app-theme-terminal-scrollbar-hover: #bdbdbd;
-  --app-theme-graph-lane-1: #1d839b;
-  --app-theme-graph-lane-2: #0f54c3;
-  --app-theme-graph-lane-3: #72049b;
-  --app-theme-graph-lane-4: #a10e91;
-  --app-theme-graph-lane-5: #ad005a;
-  --app-theme-graph-lane-6: #a6000e;
-  --app-theme-graph-lane-7: #c4432d;
-  --app-theme-graph-lane-8: #a88d24;
-  --app-theme-graph-lane-9: #5ea632;
+
+  /* Compatibility aliases for existing controls. */
   --app-scrollbar-thumb: #d6d6d6;
   --app-scrollbar-thumb-hover: #bdbdbd;
-
-  /* Compatibility aliases for the migrated shell components. */
   --app-theme-accent-hover: #3160db;
-  --app-theme-border-subtle: #e4e4e7;
+  --app-theme-border-subtle: color-mix(in srgb, oklch(from #e4e4e7 l 0 h) 55%, transparent);
   --app-theme-control-hover: #f4f4f5;
-  --app-theme-dialog-shadow: 0 24px 80px rgb(39 39 42 / 24%);
-  --app-theme-error-border: rgb(251 44 54 / 35%);
-  --app-theme-focus-ring: rgb(27 78 216 / 25%);
-  --app-theme-overlay: rgb(39 39 42 / 35%);
-  --app-theme-success: #1b4ed8;
-  --app-theme-success-surface: #e0e6f7;
+  --app-theme-dialog-shadow: 0 16px 48px rgb(0 0 0 / 24%);
+  --app-theme-error-border: color-mix(in srgb, #fb2c36 35%, transparent);
+  --app-theme-focus-ring: color-mix(in srgb, #1b4ed8 25%, transparent);
+  --app-theme-overlay: rgb(0 0 0 / 48%);
+  --app-theme-success: #047857;
+  --app-theme-success-surface: color-mix(in srgb, #047857 12%, #fcfcfc);
   --app-theme-text-placeholder: #71717b;
   --app-theme-text-secondary: #27272a;
   --app-theme-text-subtle: #71717b;
@@ -90,31 +98,48 @@
 :root[data-theme-appearance="dark"] {
   color-scheme: dark;
 
-  --app-theme-canvas: #0a0a0a;
+  --app-theme-graph-lane-1: #23a1be;
+  --app-theme-graph-lane-2: #136bf4;
+  --app-theme-graph-lane-3: #b781ed;
+  --app-theme-graph-lane-4: #de58cf;
+  --app-theme-graph-lane-5: #d70071;
+  --app-theme-graph-lane-6: #f06b78;
+  --app-theme-graph-lane-7: #f05a36;
+  --app-theme-graph-lane-8: #f1c942;
+  --app-theme-graph-lane-9: #7ed944;
+  --app-theme-diff-addition: #6ee7b7;
+  --app-theme-diff-deletion: #fca5a5;
+  --app-theme-status-modified: #f6c86a;
+  --app-theme-status-renamed: #c4b5fd;
+  --app-theme-search-match-background: #8c6c1f;
+  --app-theme-search-match-foreground: #f5f5f5;
+  --app-theme-search-match-active-background: #eea52b;
+  --app-theme-search-match-active-foreground: #21180a;
+  --app-theme-canvas: #000000;
   --app-theme-chrome: #0a0a0a;
   --app-theme-toolbar: #0a0a0a;
   --app-theme-toolbar-foreground: #f5f5f5;
-  --app-theme-toolbar-border: #191919;
-  --app-theme-toolbar-control: #191919;
+  --app-theme-toolbar-border: #141414;
+  --app-theme-toolbar-control: #111111;
   --app-theme-toolbar-control-foreground: #f5f5f5;
   --app-theme-toolbar-control-hover: #141414;
   --app-theme-surface: #111111;
-  --app-theme-surface-raised: #141414;
-  --app-theme-surface-overlay: #191919;
+  --app-theme-surface-raised: #111111;
+  --app-theme-surface-overlay: #111111;
   --app-theme-text: #f5f5f5;
-  --app-theme-text-muted: #818181;
-  --app-theme-border: #191919;
-  --app-theme-input: #1e1e1e;
+  --app-theme-text-muted: #a3a3a3;
+  --app-theme-border: #141414;
+  --app-theme-input: #2e2e2e;
   --app-theme-focus: #346bf1;
   --app-theme-accent: #346bf1;
   --app-theme-accent-foreground: #ffffff;
-  --app-theme-secondary: #141414;
+  --app-theme-secondary: #111111;
   --app-theme-secondary-foreground: #f5f5f5;
-  --app-theme-muted: #141414;
-  --app-theme-muted-foreground: #818181;
-  --app-theme-placeholder: #818181;
-  --app-theme-secondary-label: #818181;
-  --app-theme-icon-muted: #818181;
+  --app-theme-muted: #111111;
+  --app-theme-muted-foreground: #a3a3a3;
+  --app-theme-placeholder: #a3a3a3;
+  --app-theme-secondary-label: #a3a3a3;
+  --app-theme-icon-muted: #a3a3a3;
   --app-theme-error: #fb414a;
   --app-theme-error-foreground: #ff6467;
   --app-theme-error-surface: #301214;
@@ -126,7 +151,7 @@
   --app-theme-update-surface: #121b34;
   --app-theme-accent-surface: #141414;
   --app-theme-accent-surface-foreground: #f5f5f5;
-  --app-theme-message-surface: #141414;
+  --app-theme-message-surface: #1e1e1e;
   --app-theme-message-foreground: #f5f5f5;
   --app-theme-message-action: #346bf1;
   --app-theme-message-action-foreground: #ffffff;
@@ -147,34 +172,20 @@
   --app-theme-terminal-selection-background: #343a47;
   --app-theme-terminal-scrollbar: #222222;
   --app-theme-terminal-scrollbar-hover: #363636;
-  --app-theme-graph-lane-1: #23a1be;
-  --app-theme-graph-lane-2: #136bf4;
-  --app-theme-graph-lane-3: #8c05bf;
-  --app-theme-graph-lane-4: #c315b4;
-  --app-theme-graph-lane-5: #d70071;
-  --app-theme-graph-lane-6: #cb0011;
-  --app-theme-graph-lane-7: #f05a36;
-  --app-theme-graph-lane-8: #f1c942;
-  --app-theme-graph-lane-9: #7ed944;
+
+  /* Compatibility aliases for existing controls. */
   --app-scrollbar-thumb: #222222;
   --app-scrollbar-thumb-hover: #363636;
-
   --app-theme-accent-hover: #3061d9;
-  --app-theme-border-subtle: #191919;
+  --app-theme-border-subtle: color-mix(in srgb, oklch(from #141414 l 0 h) 55%, transparent);
   --app-theme-control-hover: #141414;
-  --app-theme-dialog-shadow: 0 24px 80px rgb(0 0 0 / 45%);
-  --app-theme-error-border: rgb(251 65 74 / 35%);
-  --app-theme-focus-ring: rgb(52 107 241 / 28%);
-  --app-theme-overlay: rgb(0 0 0 / 55%);
-  --app-theme-success: #346bf1;
-  --app-theme-success-surface: #121b34;
-  --app-theme-text-placeholder: #818181;
+  --app-theme-dialog-shadow: 0 16px 48px rgb(0 0 0 / 24%);
+  --app-theme-error-border: color-mix(in srgb, #fb414a 35%, transparent);
+  --app-theme-focus-ring: color-mix(in srgb, #346bf1 25%, transparent);
+  --app-theme-overlay: rgb(0 0 0 / 48%);
+  --app-theme-success: #6ee7b7;
+  --app-theme-success-surface: color-mix(in srgb, #6ee7b7 12%, #000000);
+  --app-theme-text-placeholder: #a3a3a3;
   --app-theme-text-secondary: #f5f5f5;
-  --app-theme-text-subtle: #818181;
-}
-
-:root.no-transitions,
-:root.no-transitions * {
-  transition-duration: 0s !important;
-  animation-duration: 0s !important;
+  --app-theme-text-subtle: #a3a3a3;
 }

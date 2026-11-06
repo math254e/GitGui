@@ -25,12 +25,10 @@
     { appearance: "dark" as const, label: "Dark", palette: theme.colors.dark },
   ] satisfies Array<{ appearance: ThemeAppearance; label: string; palette: ThemePalette }>);
 
-  function swatchStyle(palette: ThemePalette, appearance: ThemeAppearance) {
-    const glow = appearance === "light" ? palette.surface : palette.text;
-
+  function swatchStyle(palette: ThemePalette) {
     return [
-      `background: radial-gradient(circle at 31% 24%, color-mix(in srgb, ${glow} 84%, ${palette.accent}) 0%, ${palette.accent} 49%, ${palette.canvas} 100%)`,
-      `box-shadow: inset 0 0 0 1px color-mix(in srgb, ${palette.text} 22%, transparent)`,
+      `background: conic-gradient(${palette.canvas} 0deg 180deg, ${palette.sidebar} 180deg 285deg, ${palette.accent} 285deg 360deg)`,
+      `box-shadow: inset 0 0 0 1px ${palette.border}`,
     ].join(";");
   }
 
@@ -45,19 +43,20 @@
   }
 </script>
 
-<div class="flex items-center justify-center gap-5 sm:gap-6" aria-label={`${theme.label} color variants`}>
+<div class="flex items-center justify-center gap-4" aria-label={`${theme.label} color variants`}>
   {#each swatches as swatch (swatch.appearance)}
     {@const isSelected = isSwatchSelected(swatch.appearance)}
     <button
       type="button"
-      class="group relative h-[76px] w-[76px] rounded-full transition duration-200 hover:-translate-y-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus,#4c8dff)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--app-theme-surface,#101012)]"
+      class="group relative h-12 w-12 sm:h-14 sm:w-14 rounded-full transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus,#4c8dff)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--app-theme-surface,#101012)]"
       aria-label={`Use ${theme.label} ${swatch.label} theme`}
+      title={`${theme.label} · ${swatch.label}`}
       aria-pressed={isSelected}
-      style={`${swatchStyle(swatch.palette, swatch.appearance)}; ${isSelected ? "outline: 2px solid var(--app-theme-focus, #4c8dff); outline-offset: 4px" : ""}`}
+      style={`${swatchStyle(swatch.palette)}; ${isSelected ? "outline: 2px solid var(--app-theme-focus, #4c8dff); outline-offset: 4px" : ""}`}
       onclick={() => onSelect?.(swatch.appearance)}
     >
       <span
-        class="absolute -right-1 -bottom-1 flex h-6 w-6 items-center justify-center rounded-full border shadow-sm"
+        class="absolute -right-1 -bottom-1 flex h-5 w-5 items-center justify-center rounded-full border shadow-sm"
         style={indicatorStyle(swatch.palette)}
       >
         {#if swatch.appearance === "light"}

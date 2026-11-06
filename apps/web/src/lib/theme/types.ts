@@ -18,6 +18,9 @@ export const GRAPH_THEME_COLOR_ROLES = [
 
 export type GraphThemeColorRole = (typeof GRAPH_THEME_COLOR_ROLES)[number];
 
+export const GIT_THEME_COLOR_ROLES = ["diffAddition", "diffDeletion", "statusModified", "statusRenamed"] as const;
+export type GitThemeColorRole = (typeof GIT_THEME_COLOR_ROLES)[number];
+
 export const THEME_COLOR_ROLES = [
   "canvas",
   "chrome",
@@ -62,6 +65,10 @@ export const THEME_COLOR_ROLES = [
   "messageActionHover",
   "codeBackground",
   "codeForeground",
+  "searchMatchBackground",
+  "searchMatchForeground",
+  "searchMatchActiveBackground",
+  "searchMatchActiveForeground",
   "sidebar",
   "sidebarForeground",
   "sidebarMutedForeground",
@@ -77,6 +84,7 @@ export const THEME_COLOR_ROLES = [
   "terminalScrollbar",
   "terminalScrollbarHover",
   ...GRAPH_THEME_COLOR_ROLES,
+  ...GIT_THEME_COLOR_ROLES,
 ] as const;
 
 export type ThemeColorRole = (typeof THEME_COLOR_ROLES)[number];
@@ -201,6 +209,14 @@ export const APP_THEME_VARIABLES: Readonly<Record<ThemeColorRole, string>> = {
   messageActionHover: "--app-theme-message-action-hover",
   codeBackground: "--app-theme-code-background",
   codeForeground: "--app-theme-code-foreground",
+  searchMatchBackground: "--app-theme-search-match-background",
+  searchMatchForeground: "--app-theme-search-match-foreground",
+  searchMatchActiveBackground: "--app-theme-search-match-active-background",
+  searchMatchActiveForeground: "--app-theme-search-match-active-foreground",
+  diffAddition: "--app-theme-diff-addition",
+  diffDeletion: "--app-theme-diff-deletion",
+  statusModified: "--app-theme-status-modified",
+  statusRenamed: "--app-theme-status-renamed",
   sidebar: "--app-theme-sidebar",
   sidebarForeground: "--app-theme-sidebar-foreground",
   sidebarMutedForeground: "--app-theme-sidebar-muted-foreground",

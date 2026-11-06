@@ -56,9 +56,9 @@
   onDestroy(() => read.cancel());
 </script>
 
-<aside class="flex h-full min-h-0 flex-col overflow-hidden border-l border-[var(--app-theme-sidebar-border)] bg-[var(--app-theme-sidebar)]">
+<aside class="flex h-full min-h-0 flex-col overflow-hidden border-l border-[var(--app-theme-sidebar-border-subtle)] bg-[var(--app-theme-sidebar)]">
   <header title={stash.selector} class="shrink-0 border-b border-[var(--app-theme-border)] px-5 py-4">
-    <p class="text-xs font-bold uppercase tracking-wide text-[var(--app-theme-text-subtle)]">Stash details</p>
+    <p class="text-xs font-semibold text-[var(--app-theme-text-subtle)]">Stash details</p>
   </header>
   <div class="flex min-h-0 flex-1 flex-col gap-4 overflow-auto px-5 py-4">
     <p title={stash.selector} class="max-h-40 shrink-0 overflow-auto whitespace-pre-wrap break-words border border-[var(--app-theme-border)] bg-[var(--app-theme-surface-raised)] p-3 text-sm">{stash.message}</p>

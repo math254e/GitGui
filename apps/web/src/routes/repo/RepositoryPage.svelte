@@ -61,7 +61,7 @@
     </div>
   </div>
 {:else if !store.largeScreen}
-  <div class="grid h-full min-h-0 grid-cols-1 overflow-hidden">
+  <div class="compact-workspace grid h-full min-h-0 grid-cols-1 overflow-hidden">
     {#if store.snapshot && store.selectedFile && (store.selectedCommit || store.selectedStash || store.changesSelected)}
       <Sidebar
         repositoryEnvironments={store.activeRepositoryEnvironments}
@@ -408,3 +408,33 @@
 {#if store.stashReview}
   <StashReviewDialog review={store.stashReview} onSubmit={(value) => store.submitStashReview(value)} onCancel={() => store.stashReview = null} />
 {/if}
+
+<style>
+  /* Keep navigation useful on small desktop windows instead of shrinking all
+     three regions into shallow rows. Full desktop panes stay resizable. */
+  @media (min-width: 768px) {
+    .compact-workspace {
+      grid-template-columns: 200px minmax(0, 1fr);
+      grid-template-rows: minmax(0, 1fr) minmax(180px, 35%);
+    }
+
+    .compact-workspace > :global(:first-child) {
+      grid-column: 1;
+      grid-row: 1 / 3;
+    }
+
+    .compact-workspace > :global(:nth-child(2)) {
+      grid-column: 2;
+      grid-row: 1;
+      min-width: 0;
+    }
+
+    .compact-workspace > :global(:nth-child(3)) {
+      grid-column: 2;
+      grid-row: 2;
+      min-width: 0;
+      border-top: 1px solid var(--app-theme-sidebar-border-subtle);
+      border-left: 0;
+    }
+  }
+</style>

@@ -63,7 +63,7 @@
 
 <dialog
   bind:this={dialog}
-  class="m-auto w-[calc(100%_-_2rem)] max-w-[420px] overflow-hidden rounded-[2px] border border-[var(--app-theme-border)] bg-[var(--app-theme-surface-overlay)] p-0 text-[var(--app-theme-text)] shadow-2xl backdrop:bg-black/55"
+  class="m-auto w-[calc(100%_-_2rem)] max-w-[420px] overflow-hidden rounded-lg border border-[var(--app-theme-border)] bg-[var(--app-theme-surface-overlay)] p-0 text-[var(--app-theme-text)] shadow-[var(--app-theme-dialog-shadow)] backdrop:bg-black/55"
   aria-labelledby="git-name-dialog-title"
   oncancel={(event) => { event.preventDefault(); if (!loading) onCancel(); }}
 >
@@ -73,7 +73,7 @@
     </h2>
 
     <button
-      class="flex h-6 w-6 shrink-0 items-center justify-center rounded-[2px] text-[var(--app-theme-text-muted)] transition-colors hover:bg-[var(--app-theme-sidebar-row-hover)] hover:text-[var(--app-theme-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus)] disabled:cursor-not-allowed disabled:opacity-45"
+      class="flex h-6 w-6 shrink-0 items-center justify-center rounded-sm text-[var(--app-theme-text-muted)] transition-colors hover:bg-[var(--app-theme-sidebar-row-hover)] hover:text-[var(--app-theme-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus)] disabled:cursor-not-allowed disabled:opacity-45"
       type="button"
       aria-label="Close name dialog"
       disabled={loading}
@@ -93,7 +93,7 @@
     <input
       bind:this={nameInput}
       id="git-name-dialog-input"
-      class="mt-1.5 h-8 w-full rounded-[2px] border border-[var(--app-theme-input)] bg-[var(--app-theme-canvas)] px-2.5 font-mono text-sm text-[var(--app-theme-text)] outline-none placeholder:text-[var(--app-theme-placeholder)]"
+      class="mt-1.5 h-8 w-full rounded-sm border border-[var(--app-theme-input)] bg-[var(--app-theme-canvas)] px-2.5 font-mono text-sm text-[var(--app-theme-text)] outline-none placeholder:text-[var(--app-theme-placeholder)]"
       type="text"
       autocomplete="off"
       spellcheck="false"
@@ -118,7 +118,7 @@
 
     <footer class="mt-4 flex justify-end gap-2">
       <button
-        class="h-8 rounded-[2px] border border-[var(--app-theme-border)] bg-[var(--app-theme-surface-raised)] px-3 text-sm font-medium text-[var(--app-theme-text-secondary)] transition-colors hover:bg-[var(--app-theme-sidebar-row-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus)] disabled:cursor-not-allowed disabled:opacity-45"
+        class="h-8 rounded-sm border border-[var(--app-theme-border)] bg-[var(--app-theme-surface-raised)] px-3 text-sm font-medium text-[var(--app-theme-text-secondary)] transition-colors hover:bg-[var(--app-theme-sidebar-row-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus)] disabled:cursor-not-allowed disabled:opacity-45"
         type="button"
         disabled={loading}
         onclick={onCancel}
@@ -126,7 +126,7 @@
         Cancel
       </button>
       <button
-        class="inline-flex h-8 items-center justify-center rounded-[2px] border border-[var(--app-theme-accent)] bg-[var(--app-theme-accent-surface)] px-3 text-sm font-medium text-[var(--app-theme-accent-surface-foreground)] transition-colors hover:bg-[var(--app-theme-sidebar-row-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus)] disabled:cursor-not-allowed disabled:opacity-45"
+        class="inline-flex h-8 items-center justify-center rounded-sm border border-[var(--app-theme-accent)] bg-[var(--app-theme-accent-surface)] px-3 text-sm font-medium text-[var(--app-theme-accent-surface-foreground)] transition-colors hover:bg-[var(--app-theme-sidebar-row-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus)] disabled:cursor-not-allowed disabled:opacity-45"
         type="submit"
         disabled={loading || (kind !== "stash" && !value.trim())}
       >

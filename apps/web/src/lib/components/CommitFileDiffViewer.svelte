@@ -524,7 +524,7 @@
 <section class="diff-viewer flex h-full min-h-0 flex-col">
   <header class="diff-toolbar">
     <div class="file-heading">
-      <code class="file-status" title={statusDescription(selectedFile)} aria-label={statusDescription(selectedFile)}>
+      <code class="file-status" data-status={statusLabel(selectedFile)} title={statusDescription(selectedFile)} aria-label={statusDescription(selectedFile)}>
         {statusLabel(selectedFile)}
       </code>
       <div class="min-w-0">
@@ -648,7 +648,7 @@
     flex-shrink: 0;
     min-height: 48px;
     padding: 8px 12px;
-    border-bottom: 1px solid var(--app-theme-toolbar-border);
+    border-bottom: 1px solid var(--app-theme-toolbar-border-subtle);
     background: var(--app-theme-toolbar);
     color: var(--app-theme-toolbar-foreground);
   }
@@ -672,6 +672,12 @@
     font-size: 11px;
     font-weight: 600;
   }
+
+  .file-status[data-status="A"], .file-status[data-status="?"] { color: var(--app-theme-diff-addition); }
+  .file-status[data-status="D"] { color: var(--app-theme-diff-deletion); }
+  .file-status[data-status="M"], .file-status[data-status="T"] { color: var(--app-theme-status-modified); }
+  .file-status[data-status="R"], .file-status[data-status="C"] { color: var(--app-theme-status-renamed); }
+  .file-status[data-status="U"] { color: var(--app-theme-warning-foreground); }
 
   .file-path,
   .file-detail {
@@ -731,7 +737,7 @@
     background: transparent;
     color: var(--app-theme-toolbar-control-foreground);
     font-size: 12px;
-    font-weight: 600;
+    font-weight: 500;
     white-space: nowrap;
   }
 
@@ -740,11 +746,11 @@
   }
 
   .viewer-button:first-child {
-    border-radius: 2px 0 0 2px;
+    border-radius: 4px 0 0 4px;
   }
 
   .viewer-button:last-child {
-    border-radius: 0 2px 2px 0;
+    border-radius: 0 4px 4px 0;
   }
 
   .viewer-button:hover,
@@ -770,7 +776,7 @@
   }
 
   .viewer-button.wrap-control {
-    border-radius: 2px;
+    border-radius: 4px;
   }
 
   .close-button {
@@ -792,7 +798,7 @@
     max-height: 180px;
     overflow: auto;
     padding: 10px 12px;
-    border-bottom: 1px solid var(--app-theme-toolbar-border);
+    border-bottom: 1px solid var(--app-theme-toolbar-border-subtle);
     background: var(--app-theme-toolbar);
   }
   .diff-content :global(.inline-hunk-actions) {
@@ -801,7 +807,7 @@
     gap: 12px;
     min-height: 36px;
     padding: 4px 12px;
-    border-block: 1px solid var(--app-theme-toolbar-border);
+    border-block: 1px solid var(--app-theme-toolbar-border-subtle);
     background: var(--app-theme-toolbar);
     color: var(--app-theme-toolbar-control-foreground);
     font-family: var(--font-sans, system-ui, sans-serif);

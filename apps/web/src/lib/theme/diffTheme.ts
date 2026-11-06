@@ -23,7 +23,8 @@ export const DIFF_SURFACE_THEME_UNSAFE_CSS = `
   --diffs-dark-bg: var(--app-theme-code-background) !important;
   --diffs-light: var(--app-theme-code-foreground);
   --diffs-dark: var(--app-theme-code-foreground);
-  --diffs-deletion-color-override: var(--app-theme-error);
+  --diffs-addition-color-override: var(--app-theme-diff-addition);
+  --diffs-deletion-color-override: var(--app-theme-diff-deletion);
   --diffs-modified-color-override: var(--app-theme-accent);
   --diffs-token-light-bg: transparent;
   --diffs-token-dark-bg: transparent;
@@ -33,7 +34,7 @@ export const DIFF_SURFACE_THEME_UNSAFE_CSS = `
      when a palette separates the two. */
   --diffs-fg-number-override: color-mix(in srgb, var(--app-theme-code-foreground) 68%, var(--app-theme-code-background));
   --diffs-fg-number-addition-override: color-mix(in srgb, var(--app-theme-code-foreground) 80%, var(--diffs-addition-base));
-  --diffs-fg-number-deletion-override: color-mix(in srgb, var(--app-theme-code-foreground) 80%, var(--app-theme-error));
+  --diffs-fg-number-deletion-override: color-mix(in srgb, var(--app-theme-code-foreground) 80%, var(--app-theme-diff-deletion));
   --diffs-bg-context-override: color-mix(in srgb, var(--app-theme-code-background) 97%, var(--app-theme-code-foreground));
   --diffs-bg-hover-override: color-mix(in srgb, var(--app-theme-code-background) 94%, var(--app-theme-code-foreground));
   --diffs-bg-separator-override: color-mix(
@@ -43,8 +44,7 @@ export const DIFF_SURFACE_THEME_UNSAFE_CSS = `
   );
   --diffs-bg-buffer-override: color-mix(in srgb, var(--app-theme-code-background) 90%, var(--app-theme-code-foreground));
 
-  /* GitGui's success alias is also its update/notification color. Keep
-     additions on Pierre's Git green, with light tints behind syntax tokens. */
+  /* Keep additions/deletions independent of the notification accent. */
   --diffs-bg-addition-override: light-dark(
     color-mix(in srgb, var(--app-theme-code-background) 75%, var(--diffs-addition-base)),
     color-mix(in srgb, var(--app-theme-code-background) 65%, var(--diffs-addition-base))
@@ -61,22 +61,22 @@ export const DIFF_SURFACE_THEME_UNSAFE_CSS = `
   );
 
   --diffs-bg-deletion-override: light-dark(
-    color-mix(in srgb, var(--app-theme-code-background) 75%, var(--app-theme-error)),
-    color-mix(in srgb, var(--app-theme-code-background) 65%, var(--app-theme-error))
+    color-mix(in srgb, var(--app-theme-code-background) 75%, var(--app-theme-diff-deletion)),
+    color-mix(in srgb, var(--app-theme-code-background) 65%, var(--app-theme-diff-deletion))
   );
   --diffs-bg-deletion-number-override: light-dark(
-    color-mix(in srgb, var(--app-theme-code-background) 60%, var(--app-theme-error)),
-    color-mix(in srgb, var(--app-theme-code-background) 50%, var(--app-theme-error))
+    color-mix(in srgb, var(--app-theme-code-background) 60%, var(--app-theme-diff-deletion)),
+    color-mix(in srgb, var(--app-theme-code-background) 50%, var(--app-theme-diff-deletion))
   );
   --diffs-bg-deletion-hover-override: color-mix(
     in srgb,
     var(--app-theme-code-background) 85%,
-    var(--app-theme-error)
+    var(--app-theme-diff-deletion)
   );
   --diffs-bg-deletion-emphasis-override: color-mix(
     in srgb,
     var(--app-theme-code-background) 80%,
-    var(--app-theme-error)
+    var(--app-theme-diff-deletion)
   );
 
   background-color: var(--diffs-bg) !important;

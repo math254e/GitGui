@@ -1,3 +1,4 @@
+import * as upstream from "./upstreamPalettes";
 import {
   APP_THEME_VARIABLES,
   CUSTOM_THEMES_STORAGE_KEY,
@@ -26,13 +27,6 @@ const customThemeListeners = new Set<() => void>();
 let customThemeCache: ReadonlyArray<ThemeDefinition> | null = null;
 
 type Rgb = Readonly<{ r: number; g: number; b: number }>;
-
-type ThemeSeed = Readonly<{
-  lightCanvas: string;
-  lightAccent: string;
-  darkCanvas: string;
-  darkAccent: string;
-}>;
 
 const REFERENCE_GRAPH_COLORS: Readonly<
   Record<ThemeAppearance, Readonly<Record<GraphThemeColorRole, string>>>
@@ -92,10 +86,35 @@ function mixHex(first: string, second: string, amount: number): string {
   });
 }
 
+function gitColors(appearance: ThemeAppearance) {
+  return appearance === "light"
+    ? { diffAddition: "#047857", diffDeletion: "#b91c1c", statusModified: "#8c5c00", statusRenamed: "#6d28d9" }
+    : { diffAddition: "#6ee7b7", diffDeletion: "#fca5a5", statusModified: "#f6c86a", statusRenamed: "#c4b5fd" };
+}
+
+function searchColors(appearance: ThemeAppearance) {
+  return {
+    searchMatchBackground: appearance === "light" ? "#ffde8b" : "#8c6c1f",
+    searchMatchForeground: appearance === "light" ? "#21180a" : "#f5f5f5",
+    searchMatchActiveBackground: "#eea52b",
+    searchMatchActiveForeground: "#21180a",
+  };
+}
+
 function createGraphColors(
   appearance: ThemeAppearance,
 ): Readonly<Record<GraphThemeColorRole, string>> {
   return REFERENCE_GRAPH_COLORS[appearance];
+}
+
+/** Boost weak lanes on tinted surfaces without changing stored/import defaults. */
+function builtInGraphColors(appearance: ThemeAppearance): Readonly<Record<GraphThemeColorRole, string>> {
+  return {
+    ...createGraphColors(appearance),
+    ...(appearance === "light"
+      ? { graphLane8: "#8c731a", graphLane9: "#487c27" }
+      : { graphLane3: "#b781ed", graphLane4: "#de58cf", graphLane6: "#f06b78" }),
+  };
 }
 
 function channelToLinear(channel: number): number {
@@ -137,6 +156,8 @@ function createThemeColors(
 
   return {
     ...createGraphColors(appearance),
+    ...gitColors(appearance),
+    ...searchColors(appearance),
     canvas,
     chrome: canvas,
     toolbar: canvas,
@@ -197,158 +218,14 @@ function createThemeColors(
   };
 }
 
-function createManagedTheme(seed: ThemeSeed, id: string, label: string): ThemeDefinition {
-  return {
-    id,
-    label,
-    appearance: "light",
-    colors: createThemeColors("light", seed.lightCanvas, seed.lightAccent),
-    variants: {
-      dark: createThemeColors("dark", seed.darkCanvas, seed.darkAccent),
-    },
-  };
-}
-
-/**
- * The flagship T3 Code palette, copied from the installed T3 implementation's
- * standard theme definitions. GitGui keeps the same role names and variants so
- * the Appearance screen and runtime behave like the source application.
- */
-export const T3_CODE_THEME: ThemeDefinition = {
-  id: "t3-code",
-  label: "T3 Code",
-  appearance: "light",
-  colors: {
-    ...createGraphColors("light"),
-    canvas: "#fcfcfc",
-    chrome: "#fcfcfc",
-    toolbar: "#fcfcfc",
-    toolbarForeground: "#27272a",
-    toolbarBorder: "#e4e4e7",
-    toolbarControl: "#ffffff",
-    toolbarControlForeground: "#27272a",
-    toolbarControlHover: "#f4f4f5",
-    surface: "#ffffff",
-    surfaceRaised: "#fcfcfc",
-    surfaceOverlay: "#ffffff",
-    text: "#27272a",
-    textMuted: "#71717b",
-    border: "#e4e4e7",
-    input: "#d4d4d8",
-    focus: "#1b4ed8",
-    accent: "#1b4ed8",
-    accentForeground: "#ffffff",
-    secondary: "#fafafa",
-    secondaryForeground: "#27272a",
-    muted: "#fafafa",
-    mutedForeground: "#71717b",
-    placeholder: "#71717b",
-    secondaryLabel: "#71717b",
-    iconMuted: "#71717b",
-    error: "#fb2c36",
-    errorForeground: "#c10007",
-    errorSurface: "#fcebec",
-    warning: "#fe9a00",
-    warningForeground: "#bb4d00",
-    warningSurface: "#fcf4e8",
-    update: "#1b4ed8",
-    updateForeground: "#1b4ed8",
-    updateSurface: "#e0e6f7",
-    accentSurface: "#f4f4f5",
-    accentSurfaceForeground: "#18181b",
-    messageSurface: "#f4f4f5",
-    messageForeground: "#27272a",
-    messageAction: "#1b4ed8",
-    messageActionForeground: "#ffffff",
-    messageActionHover: "#3160db",
-    codeBackground: "#ffffff",
-    codeForeground: "#27272a",
-    sidebar: "#fafafa",
-    sidebarForeground: "#27272a",
-    sidebarMutedForeground: "#71717b",
-    sidebarControlSurface: "#f4f4f5",
-    sidebarRowHover: "#fcfcfc",
-    sidebarRowActive: "#ffffff",
-    sidebarRowSelected: "#ffffff",
-    sidebarBorder: "#e4e4e7",
-    terminalBackground: "#fcfcfc",
-    terminalForeground: "#27272a",
-    terminalCursor: "#26384e",
-    terminalSelection: "#d0d6dd",
-    terminalScrollbar: "#d6d6d6",
-    terminalScrollbarHover: "#bdbdbd",
-  },
-  variants: {
-    dark: {
-      ...createGraphColors("dark"),
-      canvas: "#0a0a0a",
-      chrome: "#0a0a0a",
-      toolbar: "#0a0a0a",
-      toolbarForeground: "#f5f5f5",
-      toolbarBorder: "#191919",
-      toolbarControl: "#191919",
-      toolbarControlForeground: "#f5f5f5",
-      toolbarControlHover: "#141414",
-      surface: "#111111",
-      surfaceRaised: "#141414",
-      surfaceOverlay: "#191919",
-      text: "#f5f5f5",
-      textMuted: "#818181",
-      border: "#191919",
-      input: "#1e1e1e",
-      focus: "#346bf1",
-      accent: "#346bf1",
-      accentForeground: "#ffffff",
-      secondary: "#141414",
-      secondaryForeground: "#f5f5f5",
-      muted: "#141414",
-      mutedForeground: "#818181",
-      placeholder: "#818181",
-      secondaryLabel: "#818181",
-      iconMuted: "#818181",
-      error: "#fb414a",
-      errorForeground: "#ff6467",
-      errorSurface: "#301214",
-      warning: "#fe9a00",
-      warningForeground: "#ffb900",
-      warningSurface: "#312108",
-      update: "#346bf1",
-      updateForeground: "#51a2ff",
-      updateSurface: "#121b34",
-      accentSurface: "#141414",
-      accentSurfaceForeground: "#f5f5f5",
-      messageSurface: "#141414",
-      messageForeground: "#f5f5f5",
-      messageAction: "#346bf1",
-      messageActionForeground: "#ffffff",
-      messageActionHover: "#3061d9",
-      codeBackground: "#111111",
-      codeForeground: "#f5f5f5",
-      sidebar: "#000000",
-      sidebarForeground: "#f1f3f7",
-      sidebarMutedForeground: "#a3a3a3",
-      sidebarControlSurface: "#0a0a0a",
-      sidebarRowHover: "#131313",
-      sidebarRowActive: "#1a1b1b",
-      sidebarRowSelected: "#111111",
-      sidebarBorder: "#141414",
-      terminalBackground: "#0a0a0a",
-      terminalForeground: "#f5f5f5",
-      terminalCursor: "#b4cbff",
-      terminalSelection: "#343a47",
-      terminalScrollbar: "#222222",
-      terminalScrollbarHover: "#363636",
-    },
-  },
-};
-
-/** The T3 Chat companion palette shown beside T3 Code in the library. */
-export const T3_CHAT_THEME: ThemeDefinition = {
+const LEGACY_T3_CHAT_THEME: ThemeDefinition = {
   id: "t3-chat",
   label: "T3 Chat",
   appearance: "light",
   colors: {
     ...createGraphColors("light"),
+    ...gitColors("light"),
+    ...searchColors("light"),
     canvas: "#fdf7fd",
     chrome: "#fdf7fd",
     toolbar: "#fdf7fd",
@@ -410,6 +287,8 @@ export const T3_CHAT_THEME: ThemeDefinition = {
   variants: {
     dark: {
       ...createGraphColors("dark"),
+      ...gitColors("dark"),
+      ...searchColors("dark"),
       canvas: "#1f1a24",
       chrome: "#1f1a24",
       toolbar: "#1f1a24",
@@ -472,17 +351,6 @@ export const T3_CHAT_THEME: ThemeDefinition = {
   sidebarArtwork: true,
 };
 
-export const OCEAN_THEME = createManagedTheme(
-  {
-    lightCanvas: "#f2f7fb",
-    lightAccent: "#2878b8",
-    darkCanvas: "#1b2938",
-    darkAccent: "#70b9ee",
-  },
-  "ocean",
-  "Ocean",
-);
-
 const GITKRAKEN_LIGHT_BASE = createThemeColors("light", "#f1f3f5", "#008ba6");
 const GITKRAKEN_DARK_BASE = createThemeColors("dark", "#181a1f", "#00a8c6");
 
@@ -493,6 +361,7 @@ export const GITKRAKEN_THEME: ThemeDefinition = {
   appearance: "light",
   colors: {
     ...GITKRAKEN_LIGHT_BASE,
+    ...builtInGraphColors("light"),
     canvas: "#f1f3f5",
     chrome: "#e4e7ea",
     toolbar: "#eaecf0",
@@ -545,6 +414,7 @@ export const GITKRAKEN_THEME: ThemeDefinition = {
   variants: {
     dark: {
       ...GITKRAKEN_DARK_BASE,
+      ...builtInGraphColors("dark"),
       canvas: "#181a1f",
       chrome: "#2a2d34",
       toolbar: "#30333a",
@@ -606,40 +476,61 @@ export const GITKRAKEN_THEME: ThemeDefinition = {
   },
 };
 
-export const GROVE_THEME = createManagedTheme(
-  {
-    lightCanvas: "#f2f8f4",
-    lightAccent: "#19734a",
-    darkCanvas: "#1d2b24",
-    darkAccent: "#69d69a",
-  },
-  "grove",
-  "Grove",
-);
+/** Preserve upstream semantic roles; graph and Git status colors are GitGui-owned. */
+function adaptUpstreamTheme(theme: (typeof upstream.BUILT_IN_THEMES)[number]): ThemeDefinition {
+  return {
+    ...theme,
+    // `ember` was historically a GitKraken alias. Never reinterpret saved preferences.
+    id: theme.id === "ember" ? "t3-ember" : theme.id,
+    colors: { ...builtInGraphColors(theme.appearance), ...gitColors(theme.appearance), ...theme.colors },
+    variants: Object.fromEntries(Object.entries(theme.variants ?? {}).map(([mode, colors]) => [
+      mode, { ...builtInGraphColors(mode as ThemeAppearance), ...gitColors(mode as ThemeAppearance), ...colors },
+    ])),
+  };
+}
 
-export const IRIS_THEME = createManagedTheme(
-  {
-    lightCanvas: "#f7f4fc",
-    lightAccent: "#7254b9",
-    darkCanvas: "#29243b",
-    darkAccent: "#ad92f5",
+// Standard web paint overrides differ from the shared/mobile palette upstream.
+export const T3_CODE_THEME: ThemeDefinition = adaptUpstreamTheme({
+  id: "t3-code",
+  label: "T3 Code",
+  appearance: "light",
+  colors: {
+    ...upstream.T3_CODE_LIGHT_THEME_COLORS,
+    text: "#18181b",
+    toolbarForeground: "#18181b",
+    sidebarForeground: "#18181b",
+    messageSurface: "#ebebed",
   },
-  "iris",
-  "Iris",
-);
+  variants: {
+    dark: {
+      ...upstream.T3_CODE_DARK_THEME_COLORS,
+      canvas: "#000000",
+      messageSurface: "#1e1e1e",
+      // index.css paints standard web metadata brighter than the shared palette.
+      textMuted: "#a3a3a3",
+      mutedForeground: "#a3a3a3",
+      placeholder: "#a3a3a3",
+      secondaryLabel: "#a3a3a3",
+      iconMuted: "#a3a3a3",
+      border: "#141414",
+      toolbarBorder: "#141414",
+      input: "#2e2e2e",
+    },
+  },
+});
+export const T3_CHAT_THEME = adaptUpstreamTheme(upstream.T3_CHAT_THEME);
+export const GROVE_THEME = adaptUpstreamTheme(upstream.GROVE_THEME);
+export const OCEAN_THEME = adaptUpstreamTheme(upstream.OCEAN_THEME);
+export const EMBER_THEME = adaptUpstreamTheme(upstream.EMBER_THEME);
+export const IRIS_THEME = adaptUpstreamTheme(upstream.IRIS_THEME);
 
 export const BUILT_IN_THEMES: ReadonlyArray<ThemeDefinition> = [
-  T3_CODE_THEME,
-  T3_CHAT_THEME,
-  GROVE_THEME,
-  OCEAN_THEME,
-  GITKRAKEN_THEME,
-  IRIS_THEME,
+  T3_CODE_THEME, T3_CHAT_THEME, GROVE_THEME, OCEAN_THEME, EMBER_THEME, IRIS_THEME, GITKRAKEN_THEME,
 ];
 
 const DEFAULT_THEME_COLORS: Readonly<Record<ThemeAppearance, ThemeColors>> = {
-  light: T3_CHAT_THEME.colors,
-  dark: T3_CHAT_THEME.variants!.dark!,
+  light: LEGACY_T3_CHAT_THEME.colors,
+  dark: LEGACY_T3_CHAT_THEME.variants!.dark!,
 };
 
 export function getDefaultThemeColors(appearance: ThemeAppearance): ThemeColors {
@@ -980,6 +871,11 @@ export function removeCustomTheme(themeId: string): void {
 }
 
 export function getThemeDefinition(themeId: string): ThemeDefinition | null {
+  // A pre-existing imported theme may already use the newly added Ember id.
+  if (themeId === "t3-ember") {
+    const custom = getCustomThemeLibrary().find((theme) => theme.id === themeId);
+    if (custom) return custom;
+  }
   return BUILT_IN_THEMES.find((theme) => theme.id === themeId) ??
     getCustomThemeLibrary().find((theme) => theme.id === themeId) ??
     null;
@@ -1089,11 +985,11 @@ function applyCompatibilityThemeVariables(root: HTMLElement, colors: ThemeColors
   root.style.setProperty("--app-scrollbar-thumb", colors.terminalScrollbar);
   root.style.setProperty("--app-scrollbar-thumb-hover", colors.terminalScrollbarHover);
   root.style.setProperty("--app-theme-accent-hover", colors.messageActionHover);
-  root.style.setProperty("--app-theme-border-subtle", colors.border);
+  root.style.setProperty("--app-theme-border-subtle", `color-mix(in srgb, oklch(from ${colors.border} l 0 h) 55%, transparent)`);
   root.style.setProperty("--app-theme-control-hover", colors.toolbarControlHover);
   root.style.setProperty(
     "--app-theme-dialog-shadow",
-    `0 24px 80px color-mix(in srgb, ${colors.text} 24%, transparent)`,
+    "0 16px 48px rgb(0 0 0 / 24%)",
   );
   root.style.setProperty(
     "--app-theme-error-border",
@@ -1105,10 +1001,10 @@ function applyCompatibilityThemeVariables(root: HTMLElement, colors: ThemeColors
   );
   root.style.setProperty(
     "--app-theme-overlay",
-    `color-mix(in srgb, ${colors.text} 35%, transparent)`,
+    "rgb(0 0 0 / 48%)",
   );
-  root.style.setProperty("--app-theme-success", colors.update);
-  root.style.setProperty("--app-theme-success-surface", colors.updateSurface);
+  root.style.setProperty("--app-theme-success", colors.diffAddition);
+  root.style.setProperty("--app-theme-success-surface", `color-mix(in srgb, ${colors.diffAddition} 12%, ${colors.canvas})`);
   root.style.setProperty("--app-theme-text-placeholder", colors.placeholder);
   root.style.setProperty("--app-theme-text-secondary", colors.secondaryForeground);
   root.style.setProperty("--app-theme-text-subtle", colors.secondaryLabel);

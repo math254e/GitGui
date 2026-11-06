@@ -35,11 +35,24 @@ function setup() {
 }
 
 describe("connection names in settings", () => {
+  it("uses readable connection summaries while retaining environment IDs in details", () => {
+    const f = setup();
+    expect(f.target.textContent).toContain("This computer");
+    expect(f.target.textContent).toContain("SSH connection");
+    expect(f.target.textContent).toContain("Offline");
+    const details = [...f.target.querySelectorAll("details")].find((entry) => entry.textContent?.includes("Environment ID") && entry.textContent?.includes("primary"))!;
+    expect(details.open).toBe(false);
+    expect(details.querySelector("dd")?.textContent).toBe("primary");
+    details.querySelector("summary")!.click();
+    expect(details.open).toBe(true);
+    expect(f.target.querySelector('[aria-label="Rename Workstation"]')).not.toBeNull();
+    expect(f.target.querySelector('[aria-label="Rename Build host"]')).not.toBeNull();
+  });
   it("passes the configured direct and SSH names without changing credentials or host fields", async () => {
     const f = setup();
     await f.fill(f.input("connections-direct", "Environment name"), "Office");
-    await f.fill(f.input("connections-direct", "Backend URL"), "https://office.example.com");
-    f.button("Connect backend").click();
+    await f.fill(f.input("connections-direct", "Server address"), "https://office.example.com");
+    f.button("Connect server").click();
     await vi.waitFor(() => expect(f.runtime.addDirect).toHaveBeenCalledWith("https://office.example.com", undefined, "Office"));
     await tick();
     await f.fill(f.input("connections-ssh", "Environment name"), "Build server");

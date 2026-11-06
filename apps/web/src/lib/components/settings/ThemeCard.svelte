@@ -41,7 +41,7 @@
 </script>
 
 <article
-  class="min-w-0 cursor-pointer rounded-2xl border p-3.5 transition duration-200 hover:-translate-y-0.5"
+  class="min-w-0 cursor-pointer rounded-lg border p-3.5 transition-colors duration-150"
   style={`background: var(--app-theme-surface, #101012); border-color: ${cardSelected ? "var(--app-theme-focus, #4c8dff)" : "var(--app-theme-border, #27272c)"}; box-shadow: ${cardSelected ? "0 0 0 1px color-mix(in srgb, var(--app-theme-focus, #4c8dff) 32%, transparent)" : "none"}`}
   onpointerup={handleCardPointerUp}
 >
@@ -57,7 +57,7 @@
   <div class="mt-4 flex items-center gap-2">
     <button
       type="button"
-      class="min-w-0 flex-1 truncate text-left text-base font-semibold tracking-[-0.02em] transition hover:opacity-75 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus,#4c8dff)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--app-theme-surface,#101012)]"
+      class="min-w-0 flex-1 truncate text-left text-sm font-semibold transition hover:opacity-75 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus,#4c8dff)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--app-theme-surface,#101012)]"
       style="color: var(--app-theme-text, #f4f4f5)"
       aria-label={`Use ${theme.label} theme`}
       aria-pressed={cardSelected}

@@ -90,15 +90,15 @@
             <div class="divide-y divide-[var(--app-theme-border-subtle)]">
               <section class="py-7" aria-labelledby="general-project-location">
                 <div class="mb-5">
-                  <h3 id="general-project-location" class="text-sm font-semibold text-[var(--app-theme-text)]">Default project location</h3>
+                  <h3 id="general-project-location" class="text-base font-semibold text-[var(--app-theme-text)]">Default project location</h3>
                   <p class="mt-1 text-sm text-[var(--app-theme-text-subtle)]">New repositories start here by default.</p>
                 </div>
                 <label class="block max-w-[620px]" for="projects-location">
-                  <span class="mb-2 block text-xs font-semibold uppercase tracking-[0.08em] text-[var(--app-theme-text-subtle)]">Location</span>
+                  <span class="mb-2 block text-xs font-medium text-[var(--app-theme-text-subtle)]">Location</span>
                   <div class="flex gap-2">
                     <input
                       id="projects-location"
-                      class="h-8 min-w-0 flex-1 rounded-[2px] border border-[var(--app-theme-input)] bg-[var(--app-theme-canvas)] px-3 font-mono text-sm text-[var(--app-theme-text-secondary)] outline-none transition placeholder:text-[var(--app-theme-placeholder)] focus:border-[var(--app-theme-focus)] focus:ring-2 focus:ring-[var(--app-theme-focus-ring)]"
+                      class="h-8 min-w-0 flex-1 rounded-sm border border-[var(--app-theme-input)] bg-[var(--app-theme-canvas)] px-3 font-mono text-sm text-[var(--app-theme-text-secondary)] outline-none transition placeholder:text-[var(--app-theme-placeholder)] focus:border-[var(--app-theme-focus)] focus:ring-2 focus:ring-[var(--app-theme-focus-ring)]"
                       type="text"
                       autocomplete="off"
                       spellcheck="false"
@@ -108,7 +108,7 @@
                     />
                     <button
                       type="button"
-                      class="inline-flex h-8 items-center gap-2 rounded-[2px] border border-[var(--app-theme-border)] bg-[var(--app-theme-surface-raised)] px-3 text-sm font-semibold text-[var(--app-theme-text-muted)] transition hover:bg-[var(--app-theme-sidebar-row-hover)] disabled:cursor-not-allowed disabled:opacity-45"
+                      class="inline-flex h-8 items-center gap-2 rounded-sm border border-[var(--app-theme-border)] bg-[var(--app-theme-surface-raised)] px-3 text-sm font-semibold text-[var(--app-theme-text-muted)] transition hover:bg-[var(--app-theme-sidebar-row-hover)] disabled:cursor-not-allowed disabled:opacity-45"
                       disabled={!projectsLocationCanBrowse}
                       title={projectsLocationCanBrowse ? "Browse for a folder" : "Folder browsing is available in the desktop app"}
                       onclick={() => void browseProjectsLocation()}
@@ -129,7 +129,7 @@
                     id="branch-switch-mode"
                     value={branchSwitchMode}
                     onchange={handleBranchSwitchModeChange}
-                    class="h-9 w-full max-w-[190px] rounded-md border border-[var(--app-theme-border)] bg-[var(--app-theme-input)] px-3 text-sm text-[var(--app-theme-text-secondary)] outline-none transition focus:border-[var(--app-theme-focus)] focus:ring-2 focus:ring-[var(--app-theme-focus-ring)]"
+                    class="h-9 w-full max-w-[190px] rounded-md border border-[var(--app-theme-border)] bg-[var(--app-theme-surface)] px-3 text-sm text-[var(--app-theme-text-secondary)] outline-none transition focus:border-[var(--app-theme-focus)] focus:ring-2 focus:ring-[var(--app-theme-focus-ring)]"
                   >
                     <option value="normal">Normal</option>
                     <option value="merge">Merge</option>
@@ -141,7 +141,7 @@
                 <section class="py-7" aria-labelledby="general-updates">
                   <div class="flex flex-wrap items-center justify-between gap-4">
                     <div>
-                      <h3 id="general-updates" class="text-sm font-semibold text-[var(--app-theme-text)]">Desktop updates</h3>
+                      <h3 id="general-updates" class="text-base font-semibold text-[var(--app-theme-text)]">Desktop updates</h3>
                       <p class="mt-1 text-xs text-[var(--app-theme-text-subtle)]">
                         {#if updateStatus.currentVersion}Version {updateStatus.currentVersion} · {/if}
                         {updateStatus.message ?? statusSummary(updateStatus)}

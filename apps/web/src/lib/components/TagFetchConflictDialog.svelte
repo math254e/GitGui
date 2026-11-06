@@ -14,7 +14,7 @@
 </script>
 
 <dialog bind:this={dialog} aria-labelledby="tag-fetch-title"
-  class="m-auto w-[calc(100%_-_2rem)] max-w-[540px] rounded-[2px] border border-[var(--app-theme-border)] bg-[var(--app-theme-surface-overlay)] p-0 text-[var(--app-theme-text)] shadow-2xl backdrop:bg-black/55"
+  class="m-auto w-[calc(100%_-_2rem)] max-w-[540px] rounded-lg border border-[var(--app-theme-border)] bg-[var(--app-theme-surface-overlay)] p-0 text-[var(--app-theme-text)] shadow-[var(--app-theme-dialog-shadow)] backdrop:bg-black/55"
   oncancel={(event) => { event.preventDefault(); if (!loading) onCancel(); }}>
   <div class="p-4">
     <h2 id="tag-fetch-title" class="text-sm font-semibold">Remote tags differ from local tags</h2>
@@ -33,9 +33,9 @@
     {#if review?.error}<p role="alert" class="mt-3 text-xs text-[var(--app-theme-error)]">{review.error}</p>{/if}
     <footer class="mt-4 flex justify-end gap-2">
       <button bind:this={keepButton} type="button" disabled={loading} onclick={onCancel}
-        class="h-8 rounded-[2px] border border-[var(--app-theme-border)] bg-[var(--app-theme-surface-raised)] px-3 text-sm disabled:opacity-45">Keep local tags</button>
+        class="h-8 rounded-sm border border-[var(--app-theme-border)] bg-[var(--app-theme-surface-raised)] px-3 text-sm disabled:opacity-45">Keep local tags</button>
       <button type="button" disabled={loading || !review?.selectedNames.size} onclick={onConfirm}
-        class="h-8 rounded-[2px] border border-[var(--app-theme-error)] bg-[var(--app-theme-error-surface)] px-3 text-sm text-[var(--app-theme-error)] disabled:opacity-45">{loading ? "Updating…" : `Replace selected (${review?.selectedNames.size ?? 0})`}</button>
+        class="h-8 rounded-sm border border-[var(--app-theme-error)] bg-[var(--app-theme-error-surface)] px-3 text-sm text-[var(--app-theme-error)] disabled:opacity-45">{loading ? "Updating…" : `Replace selected (${review?.selectedNames.size ?? 0})`}</button>
     </footer>
   </div>
 </dialog>

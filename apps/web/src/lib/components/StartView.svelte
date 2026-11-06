@@ -1,6 +1,7 @@
 <script lang="ts">
   import { CloudDownload, FolderOpen, PlusSquare, Search, X } from "@lucide/svelte";
   import { displayHostPath } from "$lib/display-host-path";
+  import { connectionStatusLabel } from "./connection-status";
   import GroupedRepositoriesHome, {
     type GroupedRepository,
     type GroupedRepositoryTarget,
@@ -93,15 +94,15 @@
 
 <section class="h-full min-h-0 overflow-auto bg-[var(--app-theme-canvas)] text-[var(--app-theme-text)]">
   <div class="mx-auto flex min-h-full w-full max-w-[1120px] flex-col px-5 py-6 sm:px-8 lg:px-10">
-    <header class="flex flex-wrap items-center justify-between gap-x-5 gap-y-3 border-b border-[var(--app-theme-border)] pb-4">
-      <div class="flex min-w-0 items-baseline gap-3">
+    <header class="flex flex-wrap items-center justify-between gap-x-5 gap-y-3 border-b border-[var(--app-theme-border-subtle)] pb-4">
+      <div class="flex min-w-0 flex-col gap-1">
         <h1 class="text-xl font-semibold leading-tight text-[var(--app-theme-text)]">Repositories</h1>
-        <span class="text-xs text-[var(--app-theme-text-muted)]">Open, create, and manage repository locations</span>
+        <span class="text-sm text-[var(--app-theme-text-muted)]">Open a repository to view history and changes.</span>
       </div>
 
     <div class="flex flex-wrap items-center gap-2">
       <button
-        class="inline-flex h-8 items-center justify-center gap-2 rounded-[3px] border border-[var(--app-theme-input)] bg-[var(--app-theme-surface)] px-3 text-sm font-medium text-[var(--app-theme-text)] transition-colors hover:bg-[var(--app-theme-sidebar-row-hover)] disabled:cursor-not-allowed disabled:opacity-55 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--app-theme-focus)]"
+        class="inline-flex h-8 items-center justify-center gap-2 rounded-sm border border-[var(--app-theme-input)] bg-[var(--app-theme-surface)] px-3 text-sm font-medium text-[var(--app-theme-text)] transition-colors hover:bg-[var(--app-theme-sidebar-row-hover)] disabled:cursor-not-allowed disabled:opacity-55 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--app-theme-focus)]"
         type="button"
         disabled={loading || !canOpenHere}
         title={canOpenHere ? "Open a repository path" : openReason}
@@ -112,8 +113,9 @@
       </button>
 
       <button
-        class="inline-flex h-8 items-center justify-center gap-2 rounded-[3px] border border-[var(--app-theme-input)] bg-[var(--app-theme-surface)] px-3 text-sm font-medium text-[var(--app-theme-text-muted)] disabled:cursor-not-allowed disabled:opacity-60"
+        class="inline-flex h-8 items-center justify-center gap-2 rounded-sm border border-[var(--app-theme-input)] bg-[var(--app-theme-surface)] px-3 text-sm font-medium text-[var(--app-theme-text-muted)] disabled:cursor-not-allowed disabled:opacity-60"
         type="button"
+        title="Cloning is not yet available"
         disabled
       >
         <CloudDownload aria-hidden="true" class="text-[var(--app-theme-text-muted)]" size={16} />
@@ -121,7 +123,7 @@
       </button>
 
       <button
-        class="inline-flex h-8 items-center justify-center gap-2 rounded-[3px] border border-[var(--app-theme-input)] bg-[var(--app-theme-surface)] px-3 text-sm font-medium text-[var(--app-theme-text)] transition-colors hover:bg-[var(--app-theme-sidebar-row-hover)] disabled:cursor-not-allowed disabled:opacity-55 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--app-theme-focus)]"
+        class="inline-flex h-8 items-center justify-center gap-2 rounded-sm border border-[var(--app-theme-input)] bg-[var(--app-theme-surface)] px-3 text-sm font-medium text-[var(--app-theme-text)] transition-colors hover:bg-[var(--app-theme-sidebar-row-hover)] disabled:cursor-not-allowed disabled:opacity-55 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--app-theme-focus)]"
         type="button"
         disabled={!canCreateHere || loading}
         title={canCreateHere ? "Create a repository" : createReason}
@@ -130,10 +132,10 @@
         <PlusSquare aria-hidden="true" class="text-[var(--app-theme-text-muted)]" size={16} />
         Create
       </button>
-      {#if environments && environments.length > 0}
+      {#if environments && environments.length > 1}
         <label class="sr-only" for="repository-operation-environment">Environment for open and create</label>
         <select id="repository-operation-environment" value={operationEnvironmentId} onchange={(event) => { operationEnvironmentId = event.currentTarget.value; }} disabled={loading}
-          class="h-8 max-w-52 rounded-[3px] border border-[var(--app-theme-input)] bg-[var(--app-theme-surface)] px-2 text-sm text-[var(--app-theme-text)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--app-theme-focus)]">
+          class="h-8 max-w-52 rounded-sm border border-[var(--app-theme-input)] bg-[var(--app-theme-surface)] px-2 text-sm text-[var(--app-theme-text)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--app-theme-focus)]">
           {#each environments as environment (environment.id)}<option value={environment.id}>{environment.label}</option>{/each}
         </select>
       {/if}
@@ -145,10 +147,10 @@
     {/if}
 
     {#if error}
-      <div class="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-[2px] border border-[var(--app-theme-error-border)] bg-[var(--app-theme-error-surface)] px-3 py-2 text-sm text-[var(--app-theme-error-foreground)]">
+      <div class="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-sm border border-[var(--app-theme-error-border)] bg-[var(--app-theme-error-surface)] px-3 py-2 text-sm text-[var(--app-theme-error-foreground)]">
         <span>{error}</span>
         {#if connectionError && onRetryConnection}
-          <button class="inline-flex h-8 items-center justify-center rounded-[2px] border border-[var(--app-theme-error-border)] bg-[var(--app-theme-surface-raised)] px-3 text-sm font-medium text-[var(--app-theme-error-foreground)] transition hover:bg-[var(--app-theme-error-surface)] disabled:cursor-not-allowed disabled:opacity-55"
+          <button class="inline-flex h-8 items-center justify-center rounded-sm border border-[var(--app-theme-error-border)] bg-[var(--app-theme-surface-raised)] px-3 text-sm font-medium text-[var(--app-theme-error-foreground)] transition hover:bg-[var(--app-theme-error-surface)] disabled:cursor-not-allowed disabled:opacity-55"
             type="button" disabled={loading} onclick={onRetryConnection}>
             {loading ? "Restarting…" : "Retry connection"}
           </button>
@@ -162,10 +164,10 @@
           <div class="mt-3 flex flex-wrap items-center justify-between gap-3 border-l-2 border-[var(--app-theme-focus)] bg-[var(--app-theme-surface-raised)] px-3 py-2 text-sm text-[var(--app-theme-text-secondary)]" aria-label={`${catalog.label} repositories`}>
             <p role={catalog.error ? "alert" : "status"}>
               <span class="font-medium text-[var(--app-theme-text)]">{catalog.label}:</span>
-              {catalog.error || (catalog.loading ? "Loading repositories…" : catalog.connectionStatus === "offline" ? "Offline" : catalog.connectionStatus === "blocked" ? "Connection needs attention" : "Connecting…")}
+              {catalog.error || (catalog.loading ? "Loading repositories…" : connectionStatusLabel(catalog.connectionStatus))}
             </p>
             {#if onRetryEnvironmentCatalog && (catalog.error || catalog.connectionStatus === "blocked" || catalog.connectionStatus === "offline")}
-              <button class="rounded-[3px] border border-[var(--app-theme-input)] bg-[var(--app-theme-surface)] px-3 py-1 text-sm text-[var(--app-theme-text)] hover:bg-[var(--app-theme-sidebar-row-hover)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--app-theme-focus)] disabled:cursor-not-allowed disabled:opacity-55"
+              <button class="rounded-sm border border-[var(--app-theme-input)] bg-[var(--app-theme-surface)] px-3 py-1 text-sm text-[var(--app-theme-text)] hover:bg-[var(--app-theme-sidebar-row-hover)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--app-theme-focus)] disabled:cursor-not-allowed disabled:opacity-55"
                 type="button" disabled={catalog.loading} aria-label={`Retry ${catalog.label} repositories`} onclick={() => onRetryEnvironmentCatalog(catalog.id)}>
                 {catalog.connectionStatus === "connected" ? "Retry repositories" : "Retry connection"}
               </button>
@@ -188,7 +190,7 @@
       <label class="sr-only" for="repository-search">Search repositories</label>
       <input
         id="repository-search"
-        class="h-9 w-full rounded-[2px] border border-[var(--app-theme-input)] bg-[var(--app-theme-canvas)] pr-3 pl-8 text-sm text-[var(--app-theme-text)] outline-none placeholder:text-[var(--app-theme-placeholder)] focus:border-[var(--app-theme-focus)] focus:ring-2 focus:ring-[var(--app-theme-focus-ring)]"
+        class="h-9 w-full rounded-sm border border-[var(--app-theme-input)] bg-[var(--app-theme-canvas)] pr-3 pl-8 text-sm text-[var(--app-theme-text)] outline-none placeholder:text-[var(--app-theme-placeholder)] focus:border-[var(--app-theme-focus)] focus:ring-2 focus:ring-[var(--app-theme-focus-ring)]"
         bind:value={search}
         placeholder="Search repositories"
       />
@@ -201,7 +203,7 @@
         <ul class="space-y-1">
           {#each filteredRepos as repo (repo.repositoryId)}
             <li>
-              <div class="group relative grid min-w-0 grid-cols-[1fr] items-center gap-2 border-b border-[var(--app-theme-border)] pr-9 transition-colors hover:bg-[var(--app-theme-sidebar-row-hover)]">
+              <div class="group relative grid min-w-0 grid-cols-[1fr] items-center gap-2 border-b border-[var(--app-theme-border-subtle)] pr-9 transition-colors hover:bg-[var(--app-theme-sidebar-row-hover)]">
                 <button
                   class="grid min-h-10 min-w-0 w-full grid-cols-[minmax(0,auto)_1fr] items-center gap-4 px-2 py-1 text-left leading-5 focus-visible:outline-2 focus-visible:outline-inset focus-visible:outline-[var(--app-theme-focus)]"
                   type="button"
@@ -211,13 +213,13 @@
                   <span class="flex min-w-0 items-center gap-2">
                     <span class="truncate text-sm font-semibold text-[var(--app-theme-text)]">{repo.title}</span>
                     {#if repo.missing}
-                      <span class="shrink-0 rounded-[2px] border border-[var(--app-theme-error-border)] bg-[var(--app-theme-error-surface)] px-1.5 text-xs font-medium leading-5 text-[var(--app-theme-error-foreground)]">Missing</span>
+                      <span class="shrink-0 rounded-sm border border-[var(--app-theme-error-border)] bg-[var(--app-theme-error-surface)] px-1.5 text-xs font-medium leading-5 text-[var(--app-theme-error-foreground)]">Missing</span>
                     {/if}
                   </span>
                   <span class="truncate font-mono text-xs text-[var(--app-theme-text-secondary)]">{displayHostPath(repo.root)}</span>
                 </button>
                 <button
-                  class="absolute right-1 top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-[3px] text-[var(--app-theme-error-foreground)] opacity-100 transition-colors hover:bg-[var(--app-theme-error-surface)] focus-visible:outline-2 focus-visible:outline-[var(--app-theme-focus)] aria-disabled:cursor-not-allowed aria-disabled:opacity-40 sm:opacity-0 sm:group-hover:opacity-100 sm:focus-visible:opacity-100"
+                  class="absolute right-1 top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-sm text-[var(--app-theme-error-foreground)] opacity-100 transition-colors hover:bg-[var(--app-theme-error-surface)] focus-visible:outline-2 focus-visible:outline-[var(--app-theme-focus)] aria-disabled:cursor-not-allowed aria-disabled:opacity-40 sm:opacity-0 sm:group-hover:opacity-100 sm:focus-visible:opacity-100"
                   type="button"
                   aria-label={`Remove ${repo.title} from GitGui${!canRemoveRepository ? `. ${removeUnavailableReason}` : loading ? ". Please wait." : ""}`}
                   title={canRemoveRepository ? "Remove from GitGui (files stay on disk)" : removeUnavailableReason}
