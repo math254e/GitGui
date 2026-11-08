@@ -12,6 +12,84 @@ pub(super) type Client = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
 pub(super) const GIT_FIXTURE_DEADLINE: Duration = Duration::from_secs(120);
 
 #[tokio::test]
+async fn stash_listing_failure_reports_error_and_preserves_applied_mutation() {
+    let root = repository();
+    git(root.path(), &["stash", "push", "-m", "saved"]);
+    fs::write(root.path().join("file.txt"), "new working tree\n").unwrap();
+    let reflog = root.path().join(".git/logs/refs/stash");
+    let original = fs::read(&reflog).unwrap();
+    assert!(original.ends_with(b"\n"));
+    // A real Git reflog over the stash metadata bound must fail as a whole,
+    // rather than masquerade as an empty stash list in a successful snapshot.
+    let mut oversized = original[..original.len() - 1].to_vec();
+    oversized.extend(std::iter::repeat(b'x').take(33 * 1024 * 1024));
+    oversized.push(b'\n');
+    fs::write(&reflog, oversized).unwrap();
+    assert!(gitgui_core::git::repository::load_repository(root.path().to_str().unwrap()).is_err());
+
+    let state = state(root.path());
+    let id = state.repositories.read().await[0].summary.id.clone();
+    let (mut client, _, server) = socket(
+        state,
+        vec![
+            SCOPE_REPOSITORY_READ.into(),
+            SCOPE_REPOSITORY_OPERATE.into(),
+        ],
+    )
+    .await;
+    let repository = json!({"repositoryId": id});
+    send(
+        &mut client,
+        "snapshot",
+        METHOD_REPOSITORIES_GET_SNAPSHOT,
+        repository.clone(),
+    )
+    .await;
+    let failed = receive(&mut client).await;
+    assert_eq!(failed["ok"], false, "{failed}");
+    assert_eq!(failed["error"]["code"], error_codes::GIT_OPERATION_FAILED);
+
+    // Status remains independently available, and an operation which succeeds
+    // before its snapshot fails is explicitly marked as applied.
+    send(&mut client, "status", METHOD_GIT_STATUS, repository.clone()).await;
+    assert_eq!(receive(&mut client).await["ok"], true);
+    send(
+        &mut client,
+        "stage",
+        METHOD_GIT_STAGE,
+        json!({"repositoryId": id, "paths": ["file.txt"]}),
+    )
+    .await;
+    let staged = receive(&mut client).await;
+    assert_eq!(staged["ok"], false, "{staged}");
+    assert_eq!(staged["error"]["details"]["mutationSucceeded"], true);
+    assert_eq!(
+        git(root.path(), &["diff", "--cached", "--name-only"]),
+        "file.txt"
+    );
+
+    fs::write(&reflog, original).unwrap();
+    send(
+        &mut client,
+        "recovered",
+        METHOD_REPOSITORIES_GET_SNAPSHOT,
+        repository,
+    )
+    .await;
+    let recovered = receive(&mut client).await;
+    assert_eq!(recovered["ok"], true, "{recovered}");
+    assert_eq!(
+        recovered["result"]["snapshot"]["stashes"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    client.close(None).await.unwrap();
+    server.abort();
+}
+
+#[tokio::test]
 async fn tag_creation_requires_operate_scope_and_returns_the_reviewed_tag_snapshot() {
     let root = repository();
     let target = git(root.path(), &["rev-parse", "HEAD"]);

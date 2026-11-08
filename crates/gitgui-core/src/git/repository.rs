@@ -155,7 +155,9 @@ fn load_repository_impl(path: &str, display: bool) -> Result<RepositorySnapshot,
     // A stash is user-facing history; its synthetic baseline, index and
     // untracked parents are helpers. Project a synthetic first-parent edge onto
     // original HEAD before laying out the visible graph.
-    let (stashes, mut stash_helper_hashes) = load_stashes(root, display).unwrap_or_default();
+    // A failed listing is not evidence that the repository has no stashes.
+    // Returning an error preserves the distinction for snapshot consumers.
+    let (stashes, mut stash_helper_hashes) = load_stashes(root, display)?;
     let worktrees = load_worktrees(root)?;
     let refs = load_refs(root)?;
     let history = load_commits(root, status.head_oid.as_deref(), &stashes, &worktrees)?;

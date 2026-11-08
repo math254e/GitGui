@@ -249,16 +249,13 @@ from read and document-decode errors.
 
 ### Stash read errors become an empty list
 
-**Confirmed by control flow; partial-failure visibility risk.**
-`gitgui-core/src/git/repository.rs::load_repository_impl` uses
-`load_stashes(...).unwrap_or_default()`. If stash loading fails, the snapshot
-reports no stashes and proceeds to build history without them; a genuinely empty
-stash and a failed stash read are indistinguishable to the client. Other snapshot
-sections propagate errors. The appropriate fix needs a product decision about
-whether to fail the full snapshot or expose a partial error while retaining
-usable status and history; it must also preserve compatibility and consider
-refresh after an already-completed mutation. A concrete failing-Git fixture and
-recovery test should precede a change.
+**Fixed for whole-list failures.** Snapshot loading propagates a failed stash
+listing instead of reporting an empty list. Independent status reads remain
+available; if a mutation succeeds but the subsequent snapshot fails, the
+existing `mutationSucceeded` marker reports that distinction. An integration
+test covers a real oversized reflog, applied staging, and recovery. Individual
+malformed stash objects still follow the existing policy of being skipped, and
+the snapshot error presented to clients remains generic.
 
 ### Cache eviction has a load-ownership race
 
