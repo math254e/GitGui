@@ -4,6 +4,7 @@ import { EnvironmentId } from "@gitgui/contracts/environment";
 import { PrimaryConnectionRegistration } from "@gitgui/client-runtime/connection/catalog";
 import { PrimaryConnectionTarget } from "@gitgui/client-runtime/connection/model";
 import * as EnvironmentRegistry from "@gitgui/client-runtime/connection/registry";
+import { PrimaryEnvironmentAuth } from "@gitgui/client-runtime/platform/capabilities";
 import { ApplicationWorkspaceMetadataAdapter } from "../client-runtime/application-workspace-metadata";
 import { ApplicationWorkspace } from "../client-runtime/application-workspace";
 import { createCatalogBackend, type WebConnectionOptions } from "./platform";
@@ -99,5 +100,39 @@ describe("browser re-pair with actual registry and storage", () => {
     await runtime.addDirect("https://primary.test/", { kind: "pairing", token: "fresh-grant" });
     await vi.waitFor(() => expect(tickets).toContain(`Bearer new-${primary}`), { timeout: 4000 });
     expect(options.storage.getItem(`gitgui.credential.v3.${primary}`)).toBeNull();
+  });
+
+  it("retires a reusable URL bootstrap after replacing the primary session", async () => {
+    vi.stubGlobal("window", Object.assign(new EventTarget(), { location: new URL("https://primary.test/#bootstrap=reusable-admin") }));
+    let exchanges = 0;
+    let rejectNarrow = false;
+    options = { ...options, fetchFn: vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(input instanceof Request ? input.url : input.toString());
+      const authorization = new Headers(input instanceof Request ? input.headers : init?.headers).get("authorization") ?? "";
+      if (url.pathname === "/.well-known/gitgui/environment") return response(descriptor(primary));
+      if (url.pathname === "/oauth/token") {
+        exchanges++;
+        return response({ access_token: exchanges === 1 ? "admin-session" : "narrow-session", token_type: "Bearer", issued_token_type: "urn:ietf:params:oauth:token-type:access_token", expires_in: 3600, scope: "repository:read" });
+      }
+      if (url.pathname === "/api/auth/session") return rejectNarrow && authorization === "Bearer narrow-session"
+        ? response({ error: "unauthorized" }, 401)
+        : response({ environmentId: primary, sessionId: "session", scopes: ["repository:read"], expiresAtUnixMs: Date.now() + 3600_000 });
+      if (url.pathname === "/api/auth/websocket-ticket") return response({ error: "unavailable" }, 503);
+      throw new Error(`Unexpected path ${url.pathname}`);
+    }) };
+    runtime = new WebApplicationRuntime(options, { tabOwnership: "external" });
+    const managed = runtime["runtime"];
+    const read = Effect.gen(function* () { return yield* (yield* PrimaryEnvironmentAuth).bearerToken; });
+    await managed.runPromise(read);
+    await managed.runPromise(Effect.gen(function* () {
+      const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+      yield* registry.registerPlatform(new PrimaryConnectionRegistration({ target: new PrimaryConnectionTarget({
+        environmentId: primary, label: "Primary", httpBaseUrl: "https://primary.test/", wsBaseUrl: "wss://primary.test/",
+      }) }));
+    }));
+    await runtime.addDirect("https://primary.test/", { kind: "pairing", token: "narrow-pairing" });
+    rejectNarrow = true;
+    await expect(managed.runPromise(read)).rejects.toMatchObject({ reason: "authentication" });
+    expect(exchanges).toBe(2); // Initial bootstrap plus explicit pairing; no fallback.
   });
 });

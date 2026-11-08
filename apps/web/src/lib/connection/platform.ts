@@ -66,6 +66,7 @@ import * as Option from "effect/Option";
 import * as HttpClient from "effect/http/HttpClient";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as Socket from "effect/socket/Socket";
 
@@ -190,9 +191,9 @@ class LocalStorageCatalogBackend implements EnvironmentCatalogBackend {
   constructor(private readonly storage: Storage) {}
 
   async read(): Promise<PersistedEnvironmentCatalog> {
-    const parsed = readBrowserCatalog(this.storage);
     // Primary and removed environments may not have a catalog record. Retire
-    // every old secret key, retaining valid values only for this page lifetime.
+    // every old secret key even when the catalog cannot be read, retaining
+    // valid values only for this page lifetime.
     const keys = Array.from({ length: this.storage.length }, (_, index) => this.storage.key(index))
       .filter((key): key is string => key !== null && key.startsWith(CREDENTIAL_PREFIX));
     for (const key of keys) {
@@ -205,6 +206,7 @@ class LocalStorageCatalogBackend implements EnvironmentCatalogBackend {
       } catch { /* Invalid legacy secrets are retired, never copied to the catalog. */ }
       this.storage.removeItem(key);
     }
+    const parsed = readBrowserCatalog(this.storage);
     const decoded = await Promise.all(parsed.environments.map((candidate) => migrateRecord(candidate, this)));
     const catalog: PersistedEnvironmentCatalog = {
       schemaVersion: PERSISTED_ENVIRONMENT_SCHEMA_VERSION,
@@ -450,6 +452,42 @@ const readBrowserPrimaryHint = (): BrowserPrimaryHint => {
   return credential === undefined ? { endpoint } : { endpoint, credential };
 };
 
+/** Owns the initial browser fragment grant for exactly one connection layer. */
+export class BrowserPrimaryHintOwner {
+  private hint?: BrowserPrimaryHint;
+  private generation = 0;
+  private readonly credentialWrites = Semaphore.makeUnsafe(1);
+
+  read(): BrowserPrimaryHint {
+    if (!this.hint) {
+      const hint = readBrowserPrimaryHint();
+      this.hint = this.generation ? { endpoint: hint.endpoint } : hint;
+    }
+    return this.hint;
+  }
+
+  get revision(): number { return this.generation; }
+
+  retireGrant(): void {
+    this.generation += 1;
+    if (this.hint) this.hint = { endpoint: this.hint.endpoint };
+  }
+
+  writeIfCurrent(revision: number, write: Effect.Effect<void, ConnectionAttemptError>): Effect.Effect<boolean, ConnectionAttemptError> {
+    return this.credentialWrites.withPermit(Effect.suspend(() =>
+      revision === this.generation ? write.pipe(Effect.as(true)) : Effect.succeed(false),
+    ));
+  }
+
+  replaceCredential(write: Effect.Effect<void, ConnectionAttemptError>): Effect.Effect<void, ConnectionAttemptError> {
+    return Effect.suspend(() => {
+      // Invalidate old attempts before waiting for a write already in progress.
+      this.retireGrant();
+      return this.credentialWrites.withPermit(write);
+    });
+  }
+}
+
 /**
  * Remove the bootstrap grant from the address bar.
  *
@@ -467,8 +505,11 @@ const clearBrowserPrimaryFragment = (): void => {
 /** The primary environment: the desktop's own backend, or the page's origin. */
 const readPrimaryEnvironment = (
   options: WebConnectionOptions,
+  browserHint: BrowserPrimaryHintOwner,
 ) => {
-  const hint = options.desktop ? undefined : readBrowserPrimaryHint();
+  // Read before routing changes the address bar; the owner can later discard
+  // the grant without changing the selected primary endpoint.
+  if (!options.desktop) browserHint.read();
   return Effect.gen(function* () {
     if (options.desktop) {
       const prepared: DesktopPreparedConnection = yield* Effect.tryPromise({
@@ -482,7 +523,8 @@ const readPrimaryEnvironment = (
       };
     }
     clearBrowserPrimaryFragment();
-    const endpoint = hint!.endpoint;
+    const hint = browserHint.read();
+    const endpoint = hint.endpoint;
     yield* Effect.try({
       try: () => validateDirectEndpoint(endpoint, false),
       catch: () => new ConnectionBlockedError({ reason: "configuration", detail: "The primary environment endpoint is invalid." }),
@@ -491,7 +533,7 @@ const readPrimaryEnvironment = (
     return {
       httpUrl: endpoint,
       descriptor,
-      ...(hint!.credential === undefined ? {} : { credential: hint!.credential }),
+      ...(hint.credential === undefined ? {} : { credential: hint.credential }),
     };
   });
 };
@@ -544,11 +586,15 @@ const makePrimarySource = (readPrimary: Effect.Effect<PrimaryEnvironment, Connec
  */
 const ANONYMOUS_BEARER = "";
 
-const makePrimaryEnvironmentAuth = (readPrimary: Effect.Effect<PrimaryEnvironment, ConnectionAttemptError>) =>
+const makePrimaryEnvironmentAuth = (
+  readPrimary: Effect.Effect<PrimaryEnvironment, ConnectionAttemptError>,
+  browserHint: BrowserPrimaryHintOwner,
+) =>
   Effect.gen(function* () {
     const credentials = yield* ConnectionCredentialStore;
     const httpClient = yield* HttpClient.HttpClient;
     const bearerToken = Effect.gen(function* () {
+      const revision = browserHint.revision;
       const primary = yield* readPrimary;
       const environmentId = primary.descriptor.environmentId;
       const cached = Option.getOrUndefined(yield* credentials.get(environmentId));
@@ -567,17 +613,21 @@ const makePrimaryEnvironmentAuth = (readPrimary: Effect.Effect<PrimaryEnvironmen
           // the server restarts. Only rejection authorizes using a fresh grant;
           // permission and transient failures stay with the supervisor.
           if (error.reason !== "authentication") return Effect.fail(error);
-          if (!primary.descriptor.auth.required) {
+          if (!primary.descriptor.auth.required && revision === 0) {
             // The environment no longer requires authentication, so a stale
-            // credential must not block its anonymous session.
+            // credential must not block its anonymous session. An explicit
+            // replacement, however, must never be expanded to anonymous scopes.
             return Effect.succeed(new BearerConnectionCredential({ token: ANONYMOUS_BEARER }));
           }
-          if (saved === undefined || grant === undefined) return Effect.fail(error);
+          if (saved === undefined || grant === undefined || browserHint.revision !== revision) return Effect.fail(error);
           return authorizeConnectionCredential(primary.httpUrl, environmentId, grant);
         }),
         Effect.provideService(HttpClient.HttpClient, httpClient),
       );
-      yield* credentials.put(environmentId, credential);
+      const stored = yield* browserHint.writeIfCurrent(revision, credentials.put(environmentId, credential));
+      if (!stored || browserHint.revision !== revision) {
+        return yield* new ConnectionTransientError({ reason: "transport", detail: "Primary authentication changed during connection." });
+      }
       return Option.some(credential.token);
     });
     return ClientCapabilities.PrimaryEnvironmentAuth.of({ bearerToken });
@@ -795,9 +845,13 @@ export const discoverSshHosts = async (desktop: DesktopBridge | null): Promise<D
  * The runtime's own layer provides the registry, the resolver, the driver, and
  * the RPC session. This layer adds the platform services it needs.
  */
-export const webConnectionLayer = (options: WebConnectionOptions, backend = createCatalogBackend(options)) => {
+export const webConnectionLayer = (
+  options: WebConnectionOptions,
+  backend = createCatalogBackend(options),
+  browserHint = new BrowserPrimaryHintOwner(),
+) => {
   const layerPersistence = layerConnectionPersistence(backend);
-  const readPrimary = readPrimaryEnvironment(options);
+  const readPrimary = readPrimaryEnvironment(options, browserHint);
   const layerHttp = layerRemoteHttpClient(options.fetchFn);
   const layerPresentation = Layer.succeed(ClientCapabilities.ClientPresentation, {
     metadata: {
@@ -811,7 +865,7 @@ export const webConnectionLayer = (options: WebConnectionOptions, backend = crea
     .pipe(Layer.provide(layerSignals));
   const layerPlatform = Layer.mergeAll(
     layerPresentation,
-    Layer.effect(ClientCapabilities.PrimaryEnvironmentAuth, makePrimaryEnvironmentAuth(readPrimary)),
+    Layer.effect(ClientCapabilities.PrimaryEnvironmentAuth, makePrimaryEnvironmentAuth(readPrimary, browserHint)),
     Layer.effect(ClientCapabilities.SshEnvironmentGateway, makeSshEnvironmentGateway(options)),
     layerSource,
     Layer.succeed(EnvironmentOwnedDataCleanup, {

@@ -18,7 +18,7 @@ import { layerRemoteHttpClient } from "@gitgui/client-runtime/rpc/http";
 import { resolveRemoteWebSocketConnectionUrl } from "@gitgui/client-runtime/authorization/remote";
 import * as HttpClient from "effect/http/HttpClient";
 import { LocalStorageWorkspaceMetadataAdapter, createEmptyWorkspaceMetadata } from "../client-runtime/metadata";
-import { authorizeConnectionCredential, createCatalogBackend, webConnectionLayer, writeSelectedEnvironmentId, readSelectedEnvironmentId, readEnvironmentNames, writeEnvironmentName, type WebConnectionOptions } from "./platform";
+import { BrowserPrimaryHintOwner, authorizeConnectionCredential, createCatalogBackend, webConnectionLayer, writeSelectedEnvironmentId, readSelectedEnvironmentId, readEnvironmentNames, writeEnvironmentName, type WebConnectionOptions } from "./platform";
 
 class MemoryStorage implements Storage {
   private values = new Map<string, string>();
@@ -358,6 +358,108 @@ describe("web connection platform", () => {
     }
   });
 
+  it("never falls back to the original bootstrap grant after explicit re-pair", async () => {
+    const backend = createCatalogBackend(options);
+    const hint = new BrowserPrimaryHintOwner();
+    const fetchFn = options.fetchFn;
+    options = { ...options, fetchFn: async (input, init) => {
+      const path = new URL(input instanceof Request ? input.url : input.toString()).pathname;
+      return path === "/api/auth/session" ? new Response(null, { status: 401 }) : fetchFn(input, init);
+    } };
+    const managed = ManagedRuntime.make(webConnectionLayer(options, backend, hint));
+    try {
+      const read = Effect.gen(function* () { return yield* (yield* PrimaryEnvironmentAuth).bearerToken; });
+      expect(Option.getOrUndefined(await managed.runPromise(read))).toBe("test-session");
+      expect(exchanges).toBe(1);
+      hint.retireGrant();
+      await backend.writeCredential(environmentId, new BearerConnectionCredential({ token: "narrow-session" }));
+      await expect(managed.runPromise(read)).rejects.toMatchObject({ reason: "authentication" });
+      expect(exchanges).toBe(1);
+      expect((await backend.readCredential(environmentId))?.token).toBe("narrow-session");
+    } finally { await managed.dispose(); }
+  });
+
+  it("does not expand a rejected explicit replacement into an anonymous session", async () => {
+    const backend = createCatalogBackend(options);
+    const hint = new BrowserPrimaryHintOwner();
+    const openDescriptor = { ...descriptor, auth: { bootstrapMethods: [], sessionMethods: ["development-anonymous"], required: false } };
+    options = { ...options, fetchFn: async (input) => {
+      const path = new URL(input instanceof Request ? input.url : input.toString()).pathname;
+      if (path === "/.well-known/gitgui/environment") return json(openDescriptor);
+      if (path === "/api/auth/session") return new Response(null, { status: 401 });
+      throw new Error(`Unexpected request path: ${path}`);
+    } };
+    const managed = ManagedRuntime.make(webConnectionLayer(options, backend, hint));
+    try {
+      await Effect.runPromise(hint.replaceCredential(Effect.promise(() =>
+        backend.writeCredential(environmentId, new BearerConnectionCredential({ token: "narrow-session" })),
+      )));
+      const read = Effect.gen(function* () { return yield* (yield* PrimaryEnvironmentAuth).bearerToken; });
+      await expect(managed.runPromise(read)).rejects.toMatchObject({ reason: "authentication" });
+      expect((await backend.readCredential(environmentId))?.token).toBe("narrow-session");
+    } finally { await managed.dispose(); }
+  });
+
+  it("does not let an in-flight old bootstrap exchange overwrite a replacement session", async () => {
+    const backend = createCatalogBackend(options);
+    const hint = new BrowserPrimaryHintOwner();
+    let release!: (response: Response) => void;
+    let started!: () => void;
+    const pendingExchange = new Promise<void>((resolve) => { started = resolve; });
+    const fetchFn = options.fetchFn;
+    options = { ...options, fetchFn: async (input, init) => {
+      const path = new URL(input instanceof Request ? input.url : input.toString()).pathname;
+      if (path !== "/oauth/token") return fetchFn(input, init);
+      started();
+      return await new Promise<Response>((resolve) => { release = resolve; });
+    } };
+    const managed = ManagedRuntime.make(webConnectionLayer(options, backend, hint));
+    try {
+      const read = Effect.gen(function* () { return yield* (yield* PrimaryEnvironmentAuth).bearerToken; });
+      const oldAttempt = managed.runPromise(read);
+      await pendingExchange;
+      hint.retireGrant();
+      await backend.writeCredential(environmentId, new BearerConnectionCredential({ token: "narrow-session" }));
+      release(json({ access_token: "old-admin-session", token_type: "Bearer", issued_token_type: "urn:ietf:params:oauth:token-type:access_token", expires_in: 3600, scope: "repository:manage" }));
+      await expect(oldAttempt).rejects.toMatchObject({ reason: "transport" });
+      expect((await backend.readCredential(environmentId))?.token).toBe("narrow-session");
+    } finally { await managed.dispose(); }
+  });
+
+  it("serializes a replacement behind an already-started credential write", async () => {
+    const base = createCatalogBackend(options);
+    const hint = new BrowserPrimaryHintOwner();
+    let release!: () => void;
+    let started!: () => void;
+    const writing = new Promise<void>((resolve) => { started = resolve; });
+    const backend = { ...base,
+      // Backend methods are prototype methods, so preserve them explicitly.
+      read: () => base.read(), write: (catalog: Parameters<typeof base.write>[0]) => base.write(catalog),
+      readCredential: (id: string) => base.readCredential(id), removeCredential: (id: string) => base.removeCredential(id),
+      writeCredential: async (id: string, credential: BearerConnectionCredential) => {
+        if (credential.token === "test-session") {
+          started();
+          await new Promise<void>((resolve) => { release = resolve; });
+        }
+        await base.writeCredential(id, credential);
+      },
+    };
+    const managed = ManagedRuntime.make(webConnectionLayer(options, backend, hint));
+    try {
+      const read = Effect.gen(function* () { return yield* (yield* PrimaryEnvironmentAuth).bearerToken; });
+      const oldAttempt = managed.runPromise(read);
+      await writing;
+      const replacement = Effect.runPromise(hint.replaceCredential(Effect.promise(() =>
+        backend.writeCredential(environmentId, new BearerConnectionCredential({ token: "narrow-session" })),
+      )));
+      // The older write cannot publish a session after replacement begins.
+      release();
+      await expect(oldAttempt).rejects.toMatchObject({ reason: "transport" });
+      await replacement;
+      expect((await base.readCredential(environmentId))?.token).toBe("narrow-session");
+    } finally { await managed.dispose(); }
+  });
+
   it("recovers initial discovery on the next poll and retains the last registration during refresh failure", async () => {
     let failed = true;
     let calls = 0;
@@ -634,6 +736,18 @@ describe("web connection platform", () => {
     expect(await createCatalogBackend(options).readCredential(environmentId)).toBeUndefined();
     await backend.removeCredential(environmentId);
     expect(await backend.readCredential(environmentId)).toBeUndefined();
+  });
+
+  it("retires separately stored browser credentials even when the catalog is corrupt", async () => {
+    const key = "gitgui.credential.v3." + environmentId;
+    const corruptCatalog = "{unreadable catalog";
+    options.storage.setItem("gitgui.connections.v3", corruptCatalog);
+    options.storage.setItem(key, JSON.stringify({ _tag: "BearerConnectionCredential", token: "old-session" }));
+    const backend = createCatalogBackend(options);
+    await expect(backend.read()).rejects.toThrow();
+    expect(options.storage.getItem("gitgui.connections.v3")).toBe(corruptCatalog);
+    expect(options.storage.getItem(key)).toBeNull();
+    expect((await backend.readCredential(environmentId))?.token).toBe("old-session");
   });
 
   it("removes credentials, registrations and workspace metadata together while retaining another environment", async () => {

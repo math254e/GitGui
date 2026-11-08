@@ -36,6 +36,7 @@ import { RepositoryCatalogCache } from "./repository-catalog-cache";
 import { EnvironmentWorkspaceData, type EnvironmentWorkspaceView } from "./environment-workspace";
 import { EnvironmentWorkspaceRemovalJournal } from "../client-runtime/application-workspace-metadata";
 import {
+  BrowserPrimaryHintOwner,
   authorizeConnectionCredential,
   discoverSshHosts,
   readDesktopBridge,
@@ -129,6 +130,7 @@ const emptyConnection: SupervisorConnectionState = {
 export class WebApplicationRuntime {
   readonly isDesktop: boolean;
   private readonly options: WebConnectionOptions;
+  private readonly browserPrimaryHint = new BrowserPrimaryHintOwner();
   private readonly runtime: ManagedRuntime.ManagedRuntime<
     Layer.Success<WebConnectionLayer>,
     Layer.Error<WebConnectionLayer>
@@ -176,7 +178,7 @@ export class WebApplicationRuntime {
       this.notify();
     } };
     this.isDesktop = this.options.desktop !== null;
-    this.runtime = ManagedRuntime.make(webConnectionLayer(this.options));
+    this.runtime = ManagedRuntime.make(webConnectionLayer(this.options, undefined, this.browserPrimaryHint));
   }
 
   get state(): WebApplicationRuntimeState {
@@ -421,10 +423,13 @@ export class WebApplicationRuntime {
     const label = chosenName ?? defaultEnvironmentName(descriptor.label, new URL(httpUrl).hostname);
     const bearerCredential = await this.runtime.runPromise(authorizeConnectionCredential(httpUrl, environmentId, credential));
     if (primary) {
+      const browserHint = this.browserPrimaryHint;
       await this.runtime.runPromise(Effect.gen(function* () {
         const credentials = yield* ConnectionCredentialStore;
         const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
-        yield* credentials.put(environmentId, bearerCredential);
+        // Retire the initial URL grant and serialize its in-flight writes
+        // before publishing a replacement credential.
+        yield* browserHint.replaceCredential(credentials.put(environmentId, bearerCredential));
         // A healthy existing session still uses its original authenticated
         // grant. Replace it through the supervisor so scopes and subsequent
         // requests are bound to the newly accepted credential.

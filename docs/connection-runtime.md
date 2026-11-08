@@ -238,10 +238,18 @@ model.
   memory; registrations and workspace data remain in origin-scoped storage.
   Legacy browser credential keys and inline catalog credentials are moved into
   memory and removed from persisted state when the catalog is read.
+  Separately stored keys are retired even if a corrupt catalog prevents startup;
+  the unreadable catalog is preserved for recovery.
   Reconnects within the current page reuse the session, but a reload or new
   tab requires a fresh pairing or bearer token. Enter the same server address
   and token in Settings → Connections to reauthenticate without removing tabs.
   Previously issued server sessions remain valid until expiry or revocation.
+- Explicit browser-primary re-pair retires the URL bootstrap grant. A rejected
+  replacement bearer cannot fall back to that older grant and regain broader
+  scopes; in-flight authentication writes are serialized and fenced so an old
+  exchange cannot overwrite the replacement. A rejected explicit replacement
+  also does not fall back to an anonymous session. Desktop bootstrap remains
+  managed by the shell.
 - Discovery strips browser fragment credentials from history and retains them
   for authentication within the application layer. Existing bearer sessions are
   validated directly, including cached primary sessions; bootstrap and pairing
