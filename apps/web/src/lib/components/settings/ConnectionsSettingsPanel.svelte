@@ -65,7 +65,9 @@
         directName,
       );
       directToken = "";
-      connectionNotice = "Environment connected and saved.";
+      connectionNotice = applicationRuntime.isDesktop
+        ? "Environment connected and saved."
+        : "Environment connected. Authenticated connections need a new token after this page is reloaded.";
     } catch (error) {
       connectionNotice = error instanceof Error ? error.message : "The environment could not be connected.";
     } finally {
@@ -236,6 +238,7 @@
                 <div class="mb-5">
                   <h3 id="connections-direct" class="text-base font-semibold text-[var(--app-theme-text)]">Direct connection</h3>
                   <p class="mt-1 text-sm text-[var(--app-theme-text-subtle)]">Connect using a server address and a pairing or bearer token. Tailscale addresses work here too.</p>
+                  {#if !applicationRuntime.isDesktop}<p class="mt-1 text-sm text-[var(--app-theme-text-subtle)]">Your browser remembers the connection, but authenticated connections require a new token after a reload. To reconnect, enter the same server address and a new token here.</p>{/if}
                 </div>
                 <div class="grid max-w-[720px] gap-3 md:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
                   <label class="block md:col-span-2">

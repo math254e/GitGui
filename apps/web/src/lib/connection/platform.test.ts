@@ -331,7 +331,7 @@ describe("web connection platform", () => {
     const token = await Effect.runPromise(Effect.gen(function* () {
       const auth = yield* PrimaryEnvironmentAuth;
       return yield* auth.bearerToken;
-    }).pipe(Effect.provide(webConnectionLayer(options)), Effect.scoped));
+    }).pipe(Effect.provide(webConnectionLayer(options, backend)), Effect.scoped));
     expect(Option.getOrUndefined(token)).toBe("");
   });
 
@@ -346,7 +346,7 @@ describe("web connection platform", () => {
     const result = await Effect.runPromise(Effect.gen(function* () {
       const auth = yield* PrimaryEnvironmentAuth;
       return yield* auth.bearerToken.pipe(Effect.result);
-    }).pipe(Effect.provide(webConnectionLayer(options)), Effect.scoped));
+    }).pipe(Effect.provide(webConnectionLayer(options, backend)), Effect.scoped));
     if (status === 401) {
       expect(result._tag).toBe("Success");
       expect((await backend.readCredential(environmentId))?.token).toBe("test-session");
@@ -597,7 +597,7 @@ describe("web connection platform", () => {
     expect(exchanges).toBe(0); expect(validations).toEqual([]);
   });
 
-  it("moves legacy browser catalog credentials into the separate store and scrubs the record", async () => {
+  it("migrates inline browser credentials to memory, scrubs the record, and keeps the registration after reload", async () => {
     options.storage.setItem("gitgui.connections.v3", JSON.stringify({ schemaVersion: 1, environments: [{
       schemaVersion: 1, environmentId, enabled: true,
       registration: {
@@ -613,6 +613,27 @@ describe("web connection platform", () => {
     expect(JSON.stringify(catalog)).not.toContain("legacy-session");
     expect(options.storage.getItem("gitgui.connections.v3")).not.toContain("legacy-session");
     expect((await backend.readCredential(environmentId))?.token).toBe("legacy-session");
+    const afterReload = createCatalogBackend(options);
+    expect((await afterReload.read()).environments).toHaveLength(1);
+    expect(await afterReload.readCredential(environmentId)).toBeUndefined();
+  });
+
+  it("retires old browser credential keys and keeps new sessions only in memory", async () => {
+    const oldKey = "gitgui.credential.v3." + environmentId;
+    const orphanKey = "gitgui.credential.v3.other";
+    options.storage.setItem(oldKey, JSON.stringify({ _tag: "BearerConnectionCredential", token: "old-session" }));
+    options.storage.setItem(orphanKey, JSON.stringify({ _tag: "BearerConnectionCredential", token: "orphan-session" }));
+    const backend = createCatalogBackend(options);
+    await backend.read();
+    expect(options.storage.getItem(oldKey)).toBeNull();
+    expect(options.storage.getItem(orphanKey)).toBeNull();
+    expect((await backend.readCredential(environmentId))?.token).toBe("old-session");
+    await backend.writeCredential(environmentId, new BearerConnectionCredential({ token: "new-session" }));
+    expect(options.storage.getItem(oldKey)).toBeNull();
+    expect((await backend.readCredential(environmentId))?.token).toBe("new-session");
+    expect(await createCatalogBackend(options).readCredential(environmentId)).toBeUndefined();
+    await backend.removeCredential(environmentId);
+    expect(await backend.readCredential(environmentId)).toBeUndefined();
   });
 
   it("removes credentials, registrations and workspace metadata together while retaining another environment", async () => {
@@ -628,7 +649,7 @@ describe("web connection platform", () => {
     await Effect.runPromise(Effect.gen(function* () {
       const registry = yield* EnvironmentRegistry;
       yield* registry.remove(environmentId);
-    }).pipe(Effect.provide(webConnectionLayer(options)), Effect.scoped));
+    }).pipe(Effect.provide(webConnectionLayer(options, backend)), Effect.scoped));
     expect(await backend.readCredential(environmentId)).toBeUndefined();
     expect(await metadata.load({ environmentId })).toBeNull();
     expect((await backend.read()).environments.map((entry) => entry.environmentId)).toEqual(["other"]);

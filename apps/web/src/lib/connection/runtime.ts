@@ -10,6 +10,7 @@ import {
   type SupervisorConnectionState,
 } from "@gitgui/client-runtime";
 import * as EnvironmentRegistry from "@gitgui/client-runtime/connection/registry";
+import { ConnectionCredentialStore } from "@gitgui/client-runtime/connection/credentialStore";
 import * as EnvironmentSupervisor from "@gitgui/client-runtime/connection/supervisor";
 import { ConnectionWakeups, shouldResubscribeAfterWakeup } from "@gitgui/client-runtime/connection/wakeups";
 import { ConnectionOnboarding } from "@gitgui/client-runtime/connection/onboarding";
@@ -403,8 +404,39 @@ export class WebApplicationRuntime {
     const chosenName = name?.trim() ? environmentName(name) : undefined;
     validateDirectEndpoint(httpUrl, this.isDesktop);
     const descriptor = await this.fetchDescriptor(httpUrl);
+    const environmentId = descriptor.environmentId;
+    const primary = await this.runtime.runPromise(Effect.gen(function* () {
+      const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+      const entries = yield* SubscriptionRef.get(registry.entries);
+      const target = entries.get(environmentId)?.target;
+      return target?._tag === "PrimaryConnectionTarget" ? target : undefined;
+    }));
+    const normalizedEndpoint = (value: string) => {
+      const url = new URL(value);
+      return `${url.origin}${url.pathname.replace(/\/+$/, "")}`;
+    };
+    if (primary && (this.isDesktop || normalizedEndpoint(httpUrl) !== normalizedEndpoint(primary.httpBaseUrl))) {
+      throw new Error("Use the primary environment's configured address to authenticate.");
+    }
     const label = chosenName ?? defaultEnvironmentName(descriptor.label, new URL(httpUrl).hostname);
-    const bearerCredential = await this.runtime.runPromise(authorizeConnectionCredential(httpUrl, descriptor.environmentId, credential));
+    const bearerCredential = await this.runtime.runPromise(authorizeConnectionCredential(httpUrl, environmentId, credential));
+    if (primary) {
+      await this.runtime.runPromise(Effect.gen(function* () {
+        const credentials = yield* ConnectionCredentialStore;
+        const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+        yield* credentials.put(environmentId, bearerCredential);
+        // A healthy existing session still uses its original authenticated
+        // grant. Replace it through the supervisor so scopes and subsequent
+        // requests are bound to the newly accepted credential.
+        yield* registry.run(environmentId, Effect.gen(function* () {
+          const supervisor = yield* EnvironmentSupervisor.EnvironmentSupervisor;
+          yield* supervisor.disconnect;
+          yield* supervisor.connect;
+        }));
+      }));
+      if (chosenName !== undefined) await this.saveConfiguredName(environmentId, chosenName);
+      return environmentId;
+    }
     const connectionId = `bearer:${crypto.randomUUID()}`;
     const registration = new BearerConnectionRegistration({
       target: new BearerConnectionTarget({
@@ -492,7 +524,8 @@ export class WebApplicationRuntime {
     await this.runtime.runPromise(
       Effect.gen(function* () {
         const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
-        yield* registry.register(registration);
+        const registered = yield* registry.register(registration);
+        if (!registered) return yield* new ConnectionBlockedError({ reason: "configuration", detail: "This environment is managed by the application." });
       }),
     );
   }

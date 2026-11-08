@@ -184,10 +184,27 @@ const migrateRecord = async (value: unknown, backend: EnvironmentCatalogBackend)
 };
 
 class LocalStorageCatalogBackend implements EnvironmentCatalogBackend {
+  // A browser origin has no protected credential store. Keep bearer sessions
+  // only for this connection layer's lifetime; the catalog remains durable.
+  private readonly credentials = new Map<string, ConnectionCredential>();
   constructor(private readonly storage: Storage) {}
 
   async read(): Promise<PersistedEnvironmentCatalog> {
     const parsed = readBrowserCatalog(this.storage);
+    // Primary and removed environments may not have a catalog record. Retire
+    // every old secret key, retaining valid values only for this page lifetime.
+    const keys = Array.from({ length: this.storage.length }, (_, index) => this.storage.key(index))
+      .filter((key): key is string => key !== null && key.startsWith(CREDENTIAL_PREFIX));
+    for (const key of keys) {
+      const raw = this.storage.getItem(key);
+      if (raw === null) continue;
+      try {
+        const id = decodeURIComponent(key.slice(CREDENTIAL_PREFIX.length));
+        const decoded = Schema.decodeUnknownOption(ConnectionCredential)(JSON.parse(raw));
+        if (!this.credentials.has(id) && Option.isSome(decoded)) this.credentials.set(id, decoded.value);
+      } catch { /* Invalid legacy secrets are retired, never copied to the catalog. */ }
+      this.storage.removeItem(key);
+    }
     const decoded = await Promise.all(parsed.environments.map((candidate) => migrateRecord(candidate, this)));
     const catalog: PersistedEnvironmentCatalog = {
       schemaVersion: PERSISTED_ENVIRONMENT_SCHEMA_VERSION,
@@ -211,24 +228,25 @@ class LocalStorageCatalogBackend implements EnvironmentCatalogBackend {
   }
 
   async readCredential(environmentId: string): Promise<ConnectionCredential | undefined> {
-    const raw = this.storage.getItem(CREDENTIAL_PREFIX + encodeURIComponent(environmentId));
-    if (!raw) return undefined;
+    const existing = this.credentials.get(environmentId);
+    const key = CREDENTIAL_PREFIX + encodeURIComponent(environmentId);
+    const raw = this.storage.getItem(key);
+    if (raw === null) return existing;
     try {
       const decoded = Schema.decodeUnknownOption(ConnectionCredential)(JSON.parse(raw));
-      return decoded._tag === "Some" ? decoded.value : undefined;
-    } catch {
-      return undefined;
-    }
+      if (existing === undefined && Option.isSome(decoded)) this.credentials.set(environmentId, decoded.value);
+    } catch { /* Discard unreadable legacy secret values. */ }
+    this.storage.removeItem(key);
+    return this.credentials.get(environmentId);
   }
 
   async writeCredential(environmentId: string, credential: ConnectionCredential) {
-    this.storage.setItem(
-      CREDENTIAL_PREFIX + encodeURIComponent(environmentId),
-      JSON.stringify(credential),
-    );
+    this.storage.removeItem(CREDENTIAL_PREFIX + encodeURIComponent(environmentId));
+    this.credentials.set(environmentId, credential);
   }
 
   async removeCredential(environmentId: string) {
+    this.credentials.delete(environmentId);
     this.storage.removeItem(CREDENTIAL_PREFIX + encodeURIComponent(environmentId));
   }
 }
@@ -777,8 +795,7 @@ export const discoverSshHosts = async (desktop: DesktopBridge | null): Promise<D
  * The runtime's own layer provides the registry, the resolver, the driver, and
  * the RPC session. This layer adds the platform services it needs.
  */
-export const webConnectionLayer = (options: WebConnectionOptions) => {
-  const backend = createCatalogBackend(options);
+export const webConnectionLayer = (options: WebConnectionOptions, backend = createCatalogBackend(options)) => {
   const layerPersistence = layerConnectionPersistence(backend);
   const readPrimary = readPrimaryEnvironment(options);
   const layerHttp = layerRemoteHttpClient(options.fetchFn);

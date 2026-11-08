@@ -233,9 +233,15 @@ model.
   Primary, hosted browser, direct/Tailscale, and forwarded SSH endpoints all use
   this same path. Anonymous development sessions use the server's explicit grant.
 - Durable tokens never appear in URLs, logs, generated bundles, crash reports,
-  or ordinary desktop settings. Non-secret catalog records and credentials use
-  separate backend operations; Electron protects credentials through its native
-  bridge, while the browser uses separate origin-scoped credential storage.
+  or ordinary settings. Electron protects credentials through its native bridge.
+  The browser keeps bearer credentials only in the current connection layer's
+  memory; registrations and workspace data remain in origin-scoped storage.
+  Legacy browser credential keys and inline catalog credentials are moved into
+  memory and removed from persisted state when the catalog is read.
+  Reconnects within the current page reuse the session, but a reload or new
+  tab requires a fresh pairing or bearer token. Enter the same server address
+  and token in Settings → Connections to reauthenticate without removing tabs.
+  Previously issued server sessions remain valid until expiry or revocation.
 - Discovery strips browser fragment credentials from history and retains them
   for authentication within the application layer. Existing bearer sessions are
   validated directly, including cached primary sessions; bootstrap and pairing

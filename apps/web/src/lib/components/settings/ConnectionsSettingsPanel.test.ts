@@ -11,7 +11,7 @@ vi.mock("@lucide/svelte", () => ({ GitBranch: () => {}, Info: () => {} }));
 let component: ReturnType<typeof mount> | undefined;
 afterEach(async () => { if (component) await unmount(component); component = undefined; document.body.replaceChildren(); });
 
-function setup() {
+function setup(isDesktop = true) {
   const connection: NonNullable<WebApplicationRuntimeState["connection"]> = {
     desired: true, network: "online", phase: "connected", stage: null, attempt: 0, generation: 1, lastFailure: null, retryAt: null,
   };
@@ -19,7 +19,7 @@ function setup() {
     { registration: { environmentId: "primary", displayName: "Workstation", target: { kind: "primary" } }, connection },
     { registration: { environmentId: "remote", displayName: "Build host", target: { kind: "ssh" } }, connection: { ...connection, phase: "offline" } },
   ] }, catalogs: {}, repositoryGroups: [], connection: null, client: null, workspace: null, workspaceState: null, loading: false, error: "" };
-  const runtime = { state, isDesktop: true, tabOwnership: "external",
+  const runtime = { state, isDesktop, tabOwnership: "external",
     subscribe: (listener: (value: WebApplicationRuntimeState) => void) => { listener(state); return () => {}; },
     addDirect: vi.fn().mockResolvedValue("direct"), addSsh: vi.fn().mockResolvedValue("ssh"),
     renameEnvironment: vi.fn().mockResolvedValue(undefined), discoverSshHosts: vi.fn().mockResolvedValue([]),
@@ -35,6 +35,13 @@ function setup() {
 }
 
 describe("connection names in settings", () => {
+  it("explains browser sessions and reconnecting with a new token", async () => {
+    const f = setup(false);
+    expect(f.target.textContent).toContain("require a new token after a reload");
+    await f.fill(f.input("connections-direct", "Server address"), "https://office.example.com");
+    f.button("Connect server").click();
+    await vi.waitFor(() => expect(f.target.textContent).toContain("need a new token after this page is reloaded"));
+  });
   it("uses readable connection summaries while retaining environment IDs in details", () => {
     const f = setup();
     expect(f.target.textContent).toContain("This computer");

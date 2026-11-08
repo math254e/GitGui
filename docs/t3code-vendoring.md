@@ -332,8 +332,10 @@ supervisor learns routes from it.
   but persisted records contain only targets and profiles. Credential writes
   complete through the separate credential backend before a registration can
   connect. Earlier records are scrubbed after moving their credential to that
-  backend. Browser credentials use separate origin-scoped storage; Electron
-  uses its protected credential bridge.
+  backend. Browser credentials are held only in the connection layer's memory,
+  including values migrated from earlier origin-scoped storage; Electron uses
+  its protected credential bridge. This GitGui policy divergence from T3's
+  browser persistence means a browser reload requires pairing again.
 - All retained routes keep independent profiles, including learned routes.
   Catalog updates share a lock across environments, following T3's single
   catalog update boundary. Removed routes drop their profiles, and explicit

@@ -32,7 +32,7 @@ shapes; Electron bridge contracts are separate.
 | --- | --- | --- |
 | Environment identity, repository catalog and host paths | Server | Server data directory; identity and catalog JSON |
 | Authentication grants and sessions | Server auth | `auth.sqlite3` for persistent auth data; sessions have their own lifetime |
-| Connection registrations, profiles, credentials | Registry and platform adapters | Desktop protected credential store; browser origin storage |
+| Connection registrations, profiles, credentials | Registry and platform adapters | Browser catalog in origin storage; browser credentials in memory; desktop protected credential store |
 | Application-wide tab order and active tab | `ApplicationWorkspace` / `WorkspaceTabCoordinator` | Browser local storage, including legacy migration and removal journal |
 | Repository snapshots, loading/errors, refresh and invalidation | `ClientWorkspace`, one per environment | Memory; selected metadata and cached catalog in local storage |
 | Session activation and hydration generation | `EnvironmentWorkspaceData` | Memory; superseded activation is aborted |
@@ -106,16 +106,11 @@ sessions; repository locks serve a separate cross-session purpose.
 
 ## Assessment and priorities
 
-1. **Browser credential persistence — confirmed exposure and policy mismatch to
-   resolve.** `LocalStorageCatalogBackend.writeCredential` serializes bearer
-   credentials to `localStorage`; it is separate from catalog records but not
-   encrypted or protected from scripts running in the origin. The desktop
-   backend uses the narrow protected-storage bridge. Assess credential lifetime,
-   browser threat model and supported hosted flows against the project's rule
-   that durable tokens must not be in ordinary plaintext settings. Do not assume
-   all stored tokens are durable: lifetime depends on the issued credential.
-   A change here touches authentication and connection lifecycle and must follow
-   the T3 source-of-truth and failure-test requirements.
+1. **Browser credential persistence — mitigated.** Bearer credentials were
+   persisted in `localStorage`; the browser adapter now keeps them in memory,
+   migrates existing keys, and supports re-pairing after a page reload. Desktop
+   continues to use the protected-storage bridge. See the follow-up below for
+   the session lifetime, user-facing tradeoff and remaining limitations.
 2. **RPC authorization coverage — confirmed structural risk, not a confirmed
    bypass.** The method registry, dispatch, scope map and queue classification
    must agree. `authorization_error` allows a method with no mapped scope to
@@ -168,15 +163,14 @@ broad refactor is justified from file size alone.
 GitGui exchanges a one-use pairing grant for a scoped bearer session. The server
 sets a 30-day session lifetime (`crates/gitgui-server/src/auth.rs`); a persistent
 server stores a keyed digest and session metadata in SQLite, so that session can
-survive server restarts. The browser `LocalStorageCatalogBackend` persists the
-bearer value as JSON under an origin-scoped key and reads it after reload.
-Environment removal deletes its key. Older catalog records containing inline
-credentials are migrated into that same browser credential store. Electron uses
-its separate bridge and OS-backed encryption. Origin storage separation does not
-protect the browser bearer from scripts executing in that origin or someone with
-access to the browser profile. Server-side expiry does not remove the local
-value automatically. A 30-day recoverable bearer conflicts with the project
-rule against durable tokens in ordinary plaintext settings.
+survive server restarts. Previously the browser stored the bearer as JSON in
+origin-scoped `localStorage`, exposing a 30-day recoverable bearer in plaintext
+settings. The browser adapter now migrates legacy credentials to memory and
+removes their persisted keys or inline catalog copies. Registrations stay durable;
+reloading the page requires re-pairing through Connections. Electron continues to
+use its separate bridge and OS-backed encryption. Previously issued server
+sessions remain valid until expiry or revocation; scripts acting in an open page
+can still use its active session.
 
 The local T3 checkout at `/data/references/t3code` (`1688f96568`) documents
 browser-cookie, bearer, and proof-bound session variants under the same scoped
@@ -185,18 +179,14 @@ connect to environments (`docs/internals/remote.md`). GitGui currently implement
 bearer authentication and ticket-based WebSocket upgrades; T3's cookie support
 cannot simply be enabled in this server.
 
-Recommended follow-up: design browser authentication as a distinct adapter to
+Future work: design browser authentication as a distinct adapter to
 the existing server-owned session model. Evaluate a server-issued HttpOnly,
 Secure cookie for supported same-origin deployments and explicitly resolve
 cross-origin hosted clients, browser third-party-cookie restrictions, CORS,
 CSRF/origin validation, HTTPS requirements, and session revocation before
-implementation. An in-memory bearer is a smaller interim option, but requires
-pairing again after a reload and does not stop malicious script from acting
-while the page is open. `sessionStorage` still exposes the bearer to scripts
-and is not protected credential storage. Whichever approach is selected must
-cover migration/removal of existing stored credentials, scope preservation,
-reconnect, and server restart without weakening the Electron path. No browser
-authentication behavior was changed as part of this review.
+implementation. `sessionStorage` still exposes the bearer to scripts and is
+not protected credential storage. Any durable replacement must cover scope
+preservation, reconnect, and server restart without weakening the Electron path.
 
 ## Follow-up: workspace lifecycle
 
