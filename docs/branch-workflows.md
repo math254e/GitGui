@@ -54,6 +54,14 @@ A fix must preserve those semantics and cover concurrent worktree checkout and
 external ref changes, including partial failures; an additional preflight check
 alone does not close the race.
 
+An isolated Git-level experiment also paused `git branch -D` in its prepared
+reference-transaction hook after Git's own worktree check. A concurrent linked
+worktree successfully switched to that branch, after which deletion succeeded
+and left that worktree's HEAD pointing to the deleted ref. This is a separate
+checkout race, not fixed by comparing the reviewed object ID under a ref lock.
+It does not establish that all Git versions have identical behavior. A solution
+must account for concurrent external worktree switches as well as ref changes.
+
 Dialogs and open menus are scoped to the repository and environment that opened
 them. Repository or environment changes dismiss them. Submitted branch,
 worktree, stash, discard, repository-opening, and theme dialogs close before
