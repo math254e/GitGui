@@ -172,17 +172,18 @@
       <RepositoryLocations environments={repositoryEnvironments} current={locationContext.target} sourceTabId={locationContext.tabId}
         onSwitch={onSwitchLocation} onOpenInNewTab={onOpenLocationInNewTab} />
     {/if}
-    <section class={`flex min-h-0 flex-col border-b border-[var(--app-theme-sidebar-border-subtle)] py-2 first:pt-2 last:border-b-0 ${open.LocalBranches ? 'flex-1' : 'flex-none'}`}>
+    <section class={`flex min-h-0 flex-col border-b border-[var(--app-theme-sidebar-border-subtle)] last:border-b-0 ${open.LocalBranches ? 'flex-1 pb-2' : 'flex-none'}`}>
       <button
         type="button"
         onclick={() => toggle("LocalBranches")}
-        class="group mb-1 inline-flex items-center gap-1 pl-1.5 text-xs font-semibold text-[var(--app-theme-sidebar-muted-foreground)] transition-colors hover:text-[var(--app-theme-accent-surface-foreground)]"
+        aria-expanded={open.LocalBranches} aria-controls="gitgui-local-branches-section"
+        class="sidebar-section-toggle group"
       >
         <FileTreeChevron expanded={open.LocalBranches} />
-        <span>Local branches {snapshot ? `${localBranches.length}` : ""}</span>
+        <span class="min-w-0 truncate">Local branches</span>{" "}<span class="sidebar-section-count">{snapshot ? localBranches.length : ""}</span>
       </button>
       {#if open.LocalBranches}
-        <div class="min-h-0 flex-1 overflow-auto">
+        <div id="gitgui-local-branches-section" class="min-h-0 flex-1 overflow-auto">
           {#if localBranches.length}
             <BranchTree
               refs={localBranches}
@@ -213,17 +214,18 @@
       {/if}
     </section>
 
-    <section class={`flex min-h-0 flex-col border-b border-[var(--app-theme-sidebar-border-subtle)] py-2 last:border-b-0 ${open.RemoteBranches ? 'flex-1' : 'flex-none'}`}>
+    <section class={`flex min-h-0 flex-col border-b border-[var(--app-theme-sidebar-border-subtle)] last:border-b-0 ${open.RemoteBranches ? 'flex-1 pb-2' : 'flex-none'}`}>
       <button
         type="button"
         onclick={() => toggle("RemoteBranches")}
-        class="group mb-1 inline-flex items-center gap-1 pl-1.5 text-xs font-semibold text-[var(--app-theme-sidebar-muted-foreground)] transition-colors hover:text-[var(--app-theme-accent-surface-foreground)]"
+        aria-expanded={open.RemoteBranches} aria-controls="gitgui-remote-branches-section"
+        class="sidebar-section-toggle group"
       >
         <FileTreeChevron expanded={open.RemoteBranches} />
-        <span>Remote branches {snapshot ? `${remoteBranches.length}` : ""}</span>
+        <span class="min-w-0 truncate">Remote branches</span>{" "}<span class="sidebar-section-count">{snapshot ? remoteBranches.length : ""}</span>
       </button>
       {#if open.RemoteBranches}
-        <div class="min-h-0 flex-1 overflow-auto">
+        <div id="gitgui-remote-branches-section" class="min-h-0 flex-1 overflow-auto">
           {#if remoteBranches.length}
             <BranchTree
               refs={remoteBranches}
@@ -243,11 +245,11 @@
       {/if}
     </section>
 
-    <section class={`flex min-h-0 flex-col border-b border-[var(--app-theme-sidebar-border-subtle)] py-2 last:border-b-0 ${open.Tags ? 'flex-1' : 'flex-none'}`}>
+    <section class={`flex min-h-0 flex-col border-b border-[var(--app-theme-sidebar-border-subtle)] last:border-b-0 ${open.Tags ? 'flex-1 pb-2' : 'flex-none'}`}>
       <button type="button" onclick={() => toggle("Tags")} aria-expanded={open.Tags} aria-controls="gitgui-tags"
-        class="group mb-1 inline-flex items-center gap-1 pl-1.5 text-xs font-semibold text-[var(--app-theme-sidebar-muted-foreground)] transition-colors hover:text-[var(--app-theme-accent-surface-foreground)]">
+        class="sidebar-section-toggle group">
         <FileTreeChevron expanded={open.Tags} />
-        <span>Tags {snapshot ? `${tags.length}` : ""}</span>
+        <span class="min-w-0 truncate">Tags</span>{" "}<span class="sidebar-section-count">{snapshot ? tags.length : ""}</span>
       </button>
       {#if open.Tags}
         <div id="gitgui-tags" class="min-h-0 flex-1 overflow-hidden">
@@ -262,17 +264,18 @@
       {/if}
     </section>
 
-    <section class={`flex min-h-0 flex-col border-b border-[var(--app-theme-sidebar-border-subtle)] py-2 last:border-b-0 ${open.Worktrees ? 'flex-1' : 'flex-none'}`}>
+    <section class={`flex min-h-0 flex-col border-b border-[var(--app-theme-sidebar-border-subtle)] last:border-b-0 ${open.Worktrees ? 'flex-1 pb-2' : 'flex-none'}`}>
       <button
         type="button"
         onclick={() => toggle("Worktrees")}
-        class="group mb-1 inline-flex items-center gap-1 pl-1.5 text-xs font-semibold text-[var(--app-theme-sidebar-muted-foreground)] transition-colors hover:text-[var(--app-theme-accent-surface-foreground)]"
+        aria-expanded={open.Worktrees} aria-controls="gitgui-worktrees-section"
+        class="sidebar-section-toggle group"
       >
         <FileTreeChevron expanded={open.Worktrees} />
-        <span>Worktrees {snapshot ? `${(snapshot.worktrees ?? []).length}` : ""}</span>
+        <span class="min-w-0 truncate">Worktrees</span>{" "}<span class="sidebar-section-count">{snapshot ? (snapshot.worktrees ?? []).length : ""}</span>
       </button>
       {#if open.Worktrees}
-        <div class="min-h-0 flex-1 overflow-auto">
+        <div id="gitgui-worktrees-section" class="min-h-0 flex-1 overflow-auto">
           {#if snapshot?.worktrees?.length}
             <WorktreeTree worktrees={snapshot.worktrees} {commitsByHash} treeId="gitgui-worktrees" contextKey={stateKey} {onSwitchWorktree} {onOpenWorktreeInNewTab}
               {canRenameBranch} {canDeleteBranch} {canRemoveWorktree} {onRenameWorktreeBranch} {onRemoveWorktree} />
@@ -283,17 +286,18 @@
       {/if}
     </section>
 
-    <section class={`flex min-h-0 flex-col border-b border-[var(--app-theme-sidebar-border-subtle)] py-2 last:border-b-0 ${open.Stashes ? 'flex-1' : 'flex-none'}`}>
+    <section class={`flex min-h-0 flex-col border-b border-[var(--app-theme-sidebar-border-subtle)] last:border-b-0 ${open.Stashes ? 'flex-1 pb-2' : 'flex-none'}`}>
       <button
         type="button"
         onclick={() => toggle("Stashes")}
-        class="group mb-1 inline-flex items-center gap-1 pl-1.5 text-xs font-semibold text-[var(--app-theme-sidebar-muted-foreground)] transition-colors hover:text-[var(--app-theme-accent-surface-foreground)]"
+        aria-expanded={open.Stashes} aria-controls="gitgui-stashes-section"
+        class="sidebar-section-toggle group"
       >
         <FileTreeChevron expanded={open.Stashes} />
-        <span>Stashes {snapshot ? `${(snapshot.stashes ?? []).length}` : ""}</span>
+        <span class="min-w-0 truncate">Stashes</span>{" "}<span class="sidebar-section-count">{snapshot ? (snapshot.stashes ?? []).length : ""}</span>
       </button>
       {#if open.Stashes}
-        <div class="min-h-0 flex-1 overflow-auto">
+        <div id="gitgui-stashes-section" class="min-h-0 flex-1 overflow-auto">
           {#if snapshot?.stashes?.length}
             <StashTree stashes={snapshot.stashes} {selectedStash} {commitsByHash}
               contextKey={stashContextKey ?? stateKey} capabilities={stashCapabilities}

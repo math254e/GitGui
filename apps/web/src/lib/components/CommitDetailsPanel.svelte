@@ -203,7 +203,7 @@
           class={`group absolute -top-5 inset-x-0 h-5 cursor-row-resize touch-none text-[var(--app-theme-border)] ${resizingMessage ? "text-[var(--app-theme-accent)]" : ""}`}
           role="slider"
           aria-label="Resize commit message"
-          aria-orientation="horizontal"
+          aria-orientation="vertical"
           aria-valuemin="82"
           aria-valuemax="280"
           aria-valuenow={messageCardHeight}
@@ -213,7 +213,7 @@
         >
           <span class="absolute inset-x-0 bottom-0 h-px bg-current transition-colors group-hover:bg-[var(--app-theme-accent)]"></span>
         </div>
-        <dl class="grid grid-cols-2 gap-x-4 gap-y-4 border-y border-[var(--app-theme-border)] py-4">
+        <dl class="grid grid-cols-2 gap-x-4 gap-y-4 border-b border-[var(--app-theme-border)] pb-4 pt-3">
         <div class="min-w-0">
           <dt class="flex items-center gap-1.5 text-xs font-medium text-[var(--app-theme-text-subtle)]">
             <UserRound aria-hidden="true" size={13} />

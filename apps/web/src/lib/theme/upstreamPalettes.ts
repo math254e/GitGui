@@ -1,4 +1,5 @@
 // Palette snapshot from pingdotgg/t3code (MIT), c76f94e16a5a6ba22d9f60680efe9b78fd6c64b7.
+// Verified unchanged against b90e554e0a942605c4de2d4ff5d4654caf998e27 on 2026-11-06.
 // Copyright (c) 2026 T3 Tools Inc. SPDX-License-Identifier: MIT
 // License text: docs/licenses/t3code-theme-palettes-MIT.txt
 // Source: packages/shared/src/themePalettes.ts. Kept separate from the vendored runtime.

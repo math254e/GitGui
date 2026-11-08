@@ -37,10 +37,10 @@
 </script>
 
 {#if environments.length}
-  <section class="flex shrink-0 flex-col border-b border-[var(--app-theme-sidebar-border-subtle)] py-2" aria-label="Repository environments">
+  <section class:pb-2={sectionOpen} class="flex shrink-0 flex-col border-b border-[var(--app-theme-sidebar-border-subtle)]" aria-label="Repository environments">
     <button type="button" aria-expanded={sectionOpen} onclick={() => { sectionOpen = !sectionOpen; }}
-      class="group mb-1 inline-flex items-center gap-1 pl-1.5 text-xs font-semibold text-[var(--app-theme-sidebar-muted-foreground)] transition-colors hover:text-[var(--app-theme-accent-surface-foreground)]">
-      <FileTreeChevron expanded={sectionOpen} /><span>Locations {environments.length}</span>
+      class="sidebar-section-toggle group">
+      <FileTreeChevron expanded={sectionOpen} /><span>Locations</span>{" "}<span class="sidebar-section-count">{environments.length}</span>
     </button>
     {#if sectionOpen}
     {#each environments as environment (environment.environmentId)}

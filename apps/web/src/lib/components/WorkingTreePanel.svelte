@@ -233,7 +233,7 @@
         </span>
       </div>
       {#if snapshot.status.currentBranch}
-        <p class="mt-1 truncate text-xs text-[var(--app-theme-text-muted)]">on {snapshot.status.currentBranch}</p>
+        <p class="mt-1 truncate font-mono text-xs text-[var(--app-theme-text-muted)]" title={snapshot.status.currentBranch}>on {snapshot.status.currentBranch}</p>
       {/if}
     </header>
 
@@ -246,21 +246,21 @@
           <div class="flex min-w-0 items-center gap-2">
             <button
               type="button"
-              class="inline-flex min-w-0 items-center gap-1 text-left text-xs font-semibold text-[var(--app-theme-text-subtle)] transition-colors hover:text-[var(--app-theme-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus)]"
+              class="inline-flex min-h-6 min-w-0 items-center gap-1 rounded-sm text-left text-xs font-medium text-[var(--app-theme-text-subtle)] transition-colors hover:text-[var(--app-theme-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus)]"
               aria-controls="unstaged-files-list"
               aria-expanded={fileSectionsOpen.unstaged}
               onclick={() => toggleFileSection("unstaged")}
             >
               <FileTreeChevron expanded={fileSectionsOpen.unstaged} />
-              <span id="unstaged-files-heading" class="truncate">Unstaged Files</span>
+              <span id="unstaged-files-heading" class="truncate">Unstaged files</span>
             </button>
-            <span class="rounded-full bg-[var(--app-theme-sidebar-control-surface)] px-1.5 py-0.5 text-[11px] font-semibold text-[var(--app-theme-text-muted)]">
+            <span class="px-0.5 text-[11px] tabular-nums font-normal text-[var(--app-theme-text-muted)]">
               {unstagedFiles.length}
             </span>
           </div>
           <button
             aria-label={unstagedActionLabel === "Stage selected" ? "Stage selected changes" : "Stage all changes"}
-            class="inline-flex h-[22px] shrink-0 items-center justify-center rounded-sm border border-[var(--app-theme-accent)]/35 bg-[var(--app-theme-accent)]/10 px-1.5 text-[10px] font-semibold text-[var(--app-theme-accent)] transition-colors hover:border-[var(--app-theme-accent)]/55 hover:bg-[var(--app-theme-accent)]/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus)] disabled:cursor-not-allowed disabled:opacity-40"
+            class="inline-flex h-6 shrink-0 items-center justify-center rounded-sm border border-[var(--app-theme-accent)]/35 bg-[var(--app-theme-accent)]/10 px-2 text-xs font-medium text-[var(--app-theme-accent)] transition-colors hover:border-[var(--app-theme-accent)]/55 hover:bg-[var(--app-theme-accent)]/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus)] disabled:cursor-not-allowed disabled:opacity-40"
             disabled={stageControlsDisabled || !unstagedFiles.length}
             title={unstagedActionLabel === "Stage selected" ? "Stage selected changes" : "Stage all changes"}
             type="button"
@@ -302,21 +302,21 @@
           <div class="flex min-w-0 items-center gap-2">
             <button
               type="button"
-              class="inline-flex min-w-0 items-center gap-1 text-left text-xs font-semibold text-[var(--app-theme-text-subtle)] transition-colors hover:text-[var(--app-theme-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus)]"
+              class="inline-flex min-h-6 min-w-0 items-center gap-1 rounded-sm text-left text-xs font-medium text-[var(--app-theme-text-subtle)] transition-colors hover:text-[var(--app-theme-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus)]"
               aria-controls="staged-files-list"
               aria-expanded={fileSectionsOpen.staged}
               onclick={() => toggleFileSection("staged")}
             >
               <FileTreeChevron expanded={fileSectionsOpen.staged} />
-              <span id="staged-files-heading" class="truncate">Staged Files</span>
+              <span id="staged-files-heading" class="truncate">Staged files</span>
             </button>
-            <span class="rounded-full bg-[var(--app-theme-sidebar-control-surface)] px-1.5 py-0.5 text-[11px] font-semibold text-[var(--app-theme-text-muted)]">
+            <span class="px-0.5 text-[11px] tabular-nums font-normal text-[var(--app-theme-text-muted)]">
               {stagedFiles.length}
             </span>
           </div>
           <button
             aria-label={stagedActionLabel === "Unstage selected" ? "Unstage selected files" : "Unstage all files"}
-            class="inline-flex h-[22px] shrink-0 items-center justify-center rounded-sm border border-[var(--app-theme-error)]/35 bg-[var(--app-theme-error)]/10 px-1.5 text-[10px] font-semibold text-[var(--app-theme-error)] transition-colors hover:border-[var(--app-theme-error)]/55 hover:bg-[var(--app-theme-error)]/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus)] disabled:cursor-not-allowed disabled:opacity-40"
+            class="inline-flex h-6 shrink-0 items-center justify-center rounded-sm border border-[var(--app-theme-error)]/35 bg-[var(--app-theme-error)]/10 px-2 text-xs font-medium text-[var(--app-theme-error)] transition-colors hover:border-[var(--app-theme-error)]/55 hover:bg-[var(--app-theme-error)]/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus)] disabled:cursor-not-allowed disabled:opacity-40"
             disabled={stageControlsDisabled || !stagedFiles.length}
             title={stagedActionLabel === "Unstage selected" ? "Unstage selected files" : "Unstage all files"}
             type="button"
@@ -357,7 +357,7 @@
       {/if}
     </div>
 
-    <form class="mt-2 shrink-0 border-t border-[var(--app-theme-sidebar-border)] pt-2" onsubmit={submitCommit}>
+    <form class="commit-message-form mt-2 shrink-0 border-t border-[var(--app-theme-sidebar-border-subtle)] pt-2" style="--commit-form-border: oklch(from var(--app-theme-input) l 0 h)" onsubmit={submitCommit}>
       <div class="mb-3 flex items-center justify-between gap-3">
         <label class="text-xs font-semibold text-[var(--app-theme-text-subtle)]" for="commit-summary">
           Commit message
@@ -373,7 +373,7 @@
       <label class="mb-2 flex items-center gap-2 text-xs" title={amendBlockedReason}>
         <span class="relative inline-flex size-3.5 shrink-0">
           <input
-            class="peer size-3.5 appearance-none rounded-none border border-[var(--app-theme-input)] bg-[var(--app-theme-canvas)] checked:border-[var(--app-theme-accent)] checked:bg-[var(--app-theme-accent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus)] disabled:cursor-not-allowed disabled:opacity-50"
+            class="peer size-3.5 appearance-none rounded-none border border-[var(--commit-form-border)] bg-[var(--app-theme-canvas)] checked:border-[var(--app-theme-accent)] checked:bg-[var(--app-theme-accent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus)] disabled:cursor-not-allowed disabled:opacity-50"
             type="checkbox"
             checked={draft.amendMode}
             disabled={commitInputsDisabled || amendLoading || (!draft.amendMode && Boolean(amendBlockedReason))}
@@ -393,7 +393,7 @@
 
       <input
         id="commit-summary"
-        class="mb-2 block h-9 w-full rounded-sm border border-[var(--app-theme-input)] bg-[var(--app-theme-canvas)] px-3 text-sm text-[var(--app-theme-text)] outline-none placeholder:text-[var(--app-theme-placeholder)] focus:border-[var(--app-theme-focus)] focus:ring-2 focus:ring-[var(--app-theme-focus-ring)] disabled:cursor-not-allowed disabled:opacity-50"
+        class="mb-2 block h-9 w-full rounded-sm border border-[var(--commit-form-border)] bg-[var(--app-theme-canvas)] px-3 text-sm text-[var(--app-theme-text)] outline-none placeholder:text-[var(--app-theme-placeholder)] disabled:cursor-not-allowed disabled:opacity-50"
         disabled={commitInputsDisabled}
         placeholder="Summary"
         type="text"
@@ -402,7 +402,7 @@
       />
       <textarea
         id="commit-description"
-        class="block h-20 w-full resize-none rounded-sm border border-[var(--app-theme-input)] bg-[var(--app-theme-canvas)] px-3 py-2 text-sm text-[var(--app-theme-text)] outline-none placeholder:text-[var(--app-theme-placeholder)] focus:border-[var(--app-theme-focus)] focus:ring-2 focus:ring-[var(--app-theme-focus-ring)] disabled:cursor-not-allowed disabled:opacity-50"
+        class="block h-20 w-full resize-none rounded-sm border border-[var(--commit-form-border)] bg-[var(--app-theme-canvas)] px-3 py-2 text-sm text-[var(--app-theme-text)] outline-none placeholder:text-[var(--app-theme-placeholder)] disabled:cursor-not-allowed disabled:opacity-50"
         aria-label="Commit description"
         disabled={commitInputsDisabled}
         placeholder="Description (optional)"
@@ -410,7 +410,7 @@
         oninput={(event) => editMessage("description", event.currentTarget.value)}
       ></textarea>
       <button
-        class="mt-2 flex h-10 w-full items-center justify-center gap-2 rounded-sm border border-[var(--app-theme-accent)] bg-[var(--app-theme-accent-surface)] px-3 text-sm font-semibold text-[var(--app-theme-accent-surface-foreground)] transition-colors hover:bg-[var(--app-theme-sidebar-row-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus)] disabled:cursor-not-allowed disabled:opacity-45"
+        class="mt-2 flex h-10 w-full items-center justify-center gap-2 rounded-sm border border-[var(--commit-form-border)] bg-[var(--app-theme-accent-surface)] px-3 text-sm font-semibold text-[var(--app-theme-accent-surface-foreground)] transition-colors hover:bg-[var(--app-theme-sidebar-row-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus)] disabled:cursor-not-allowed disabled:opacity-45"
         disabled={commitDisabled}
         type="submit"
       >
@@ -425,3 +425,9 @@
     </form>
   </div>
 </aside>
+
+<style>
+  .commit-message-form :is(input[type="text"], textarea):focus {
+    border-color: color-mix(in srgb, var(--app-theme-focus) 45%, var(--commit-form-border));
+  }
+</style>

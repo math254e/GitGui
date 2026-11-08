@@ -41,8 +41,8 @@
 </script>
 
 <article
-  class="min-w-0 cursor-pointer rounded-lg border p-3.5 transition-colors duration-150"
-  style={`background: var(--app-theme-surface, #101012); border-color: ${cardSelected ? "var(--app-theme-focus, #4c8dff)" : "var(--app-theme-border, #27272c)"}; box-shadow: ${cardSelected ? "0 0 0 1px color-mix(in srgb, var(--app-theme-focus, #4c8dff) 32%, transparent)" : "none"}`}
+  class="theme-card min-w-0 cursor-pointer rounded-md border p-3 transition-colors duration-150"
+  data-selected={cardSelected}
   onpointerup={handleCardPointerUp}
 >
   <ThemePreviewCircles
@@ -68,25 +68,31 @@
 
     <button
       type="button"
-      class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition hover:bg-[var(--app-theme-sidebar-row-hover,#1a1a1d)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus,#4c8dff)]"
+      class="flex h-7 w-7 shrink-0 items-center justify-center rounded-sm transition hover:bg-[var(--app-theme-sidebar-row-hover,#1a1a1d)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus,#4c8dff)]"
       style="color: var(--app-theme-text-muted, #92939b)"
       aria-label={`Duplicate ${theme.label} theme`}
       title={`Duplicate ${theme.label}`}
       onclick={() => onDuplicate?.(theme.id)}
     >
-      <Copy aria-hidden="true" size={16} strokeWidth={1.8} />
+      <Copy aria-hidden="true" size={15} />
     </button>
 
     {#if theme.removable && onRemove}
       <button
         type="button"
-        class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[var(--app-theme-error,#f97066)] transition hover:bg-[var(--app-theme-error-surface,#351b1d)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus,#4c8dff)]"
+        class="flex h-7 w-7 shrink-0 items-center justify-center rounded-sm text-[var(--app-theme-text-muted)] transition hover:bg-[var(--app-theme-error-surface)] hover:text-[var(--app-theme-error-foreground)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus)]"
         aria-label={`Delete ${theme.label} theme`}
         title={`Delete ${theme.label} theme`}
         onclick={() => onRemove?.(theme.id)}
       >
-        <Trash2 aria-hidden="true" size={16} strokeWidth={1.8} />
+        <Trash2 aria-hidden="true" size={15} />
       </button>
     {/if}
   </div>
 </article>
+
+<style>
+  .theme-card { background: var(--app-theme-surface); border-color: var(--app-theme-border-subtle); }
+  .theme-card:hover { background: var(--app-theme-surface-raised); }
+  .theme-card[data-selected="true"] { border-color: var(--app-theme-text-muted); }
+</style>

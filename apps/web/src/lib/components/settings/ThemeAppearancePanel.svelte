@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Plus, Upload } from "@lucide/svelte";
+  import { Check, Plus, Upload } from "@lucide/svelte";
   import ThemeCard from "./ThemeCard.svelte";
   import ThemeWireframe from "./ThemeWireframe.svelte";
   import {
@@ -56,8 +56,12 @@
   const activeThemeIds = $derived(
     selectedThemeIds ?? { light: selectedThemeId, dark: selectedThemeId },
   );
-  const previewTheme = $derived(
-    availableThemes.find((theme) => theme.id === selectedThemeId) ?? availableThemes[0],
+  // Scheme previews must reflect independent light/dark selections, too.
+  const lightPreview = $derived(
+    (availableThemes.find((theme) => theme.id === activeThemeIds.light) ?? availableThemes[0]).colors.light,
+  );
+  const darkPreview = $derived(
+    (availableThemes.find((theme) => theme.id === activeThemeIds.dark) ?? availableThemes[0]).colors.dark,
   );
 
   function selectAppearance(mode: ThemeAppearanceMode) {
@@ -72,7 +76,7 @@
   <div class="mx-auto max-w-[1080px]">
     <header class="max-w-[760px]">
       <h1 class="text-xl font-semibold tracking-tight">{heading}</h1>
-      <p class="mt-3 text-sm leading-6 text-[var(--app-theme-text-muted,#92939b)] ">{description}</p>
+      <p class="mt-2 text-sm leading-6 text-[var(--app-theme-text-muted,#92939b)]">{description}</p>
     </header>
 
     <section class="mt-6" aria-labelledby="theme-color-scheme-heading">
@@ -83,22 +87,25 @@
           {@const isSelected = appearanceMode === option.id}
           <button
             type="button"
-            class="group min-w-0 rounded-lg border p-2.5 text-left transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus,#4c8dff)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--app-theme-canvas,#0a0a0b)]"
+            class="appearance-option group min-w-0 rounded-md border p-2 text-left transition-colors duration-150"
+            data-selected={isSelected}
             aria-pressed={isSelected}
             aria-label={`${option.label}: ${option.description}`}
-            style={`background: var(--app-theme-surface, #101012); border-color: ${isSelected ? "var(--app-theme-focus, #4c8dff)" : "var(--app-theme-border, #27272c)"}; box-shadow: ${isSelected ? "0 0 0 1px color-mix(in srgb, var(--app-theme-focus, #4c8dff) 34%, transparent)" : "none"}`}
             onclick={() => selectAppearance(option.id)}
           >
             <div class="h-[86px] sm:h-[112px]">
               <ThemeWireframe
                 mode={option.id}
-                lightPalette={previewTheme.colors.light}
-                darkPalette={previewTheme.colors.dark}
+                lightPalette={lightPreview}
+                darkPalette={darkPreview}
               />
             </div>
-            <div class="px-1 pb-1 pt-3 text-center">
-              <span class={`text-sm font-semibold ${isSelected ? "text-[var(--app-theme-text,#f4f4f5)]" : "text-[var(--app-theme-text-muted,#92939b)]"}`}>
+            <div class="flex items-center justify-between gap-2 px-1 pb-1 pt-2.5">
+              <span class={`text-sm font-medium ${isSelected ? "text-[var(--app-theme-text)]" : "text-[var(--app-theme-text-muted)]"}`}>
                 {option.label}
+              </span>
+              <span class="flex h-4 w-4 items-center justify-center text-[var(--app-theme-text)]">
+                {#if isSelected}<Check aria-hidden="true" size={14} />{/if}
               </span>
             </div>
           </button>
@@ -113,20 +120,18 @@
         <div class="flex flex-wrap items-center gap-2">
           <button
             type="button"
-            class="inline-flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-sm font-semibold transition hover:bg-[var(--app-theme-surface-raised,#17171a)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus,#4c8dff)]"
-            style="color: var(--app-theme-text); border-color: var(--app-theme-border, #27272c)"
+            class="inline-flex h-8 items-center gap-1.5 rounded-sm border border-[var(--app-theme-border-subtle)] px-2.5 text-sm font-medium text-[var(--app-theme-text)] transition-colors hover:bg-[var(--app-theme-control-hover)]"
             onclick={() => onCreateTheme?.()}
           >
-            <Plus aria-hidden="true" size={15} strokeWidth={2} />
+            <Plus aria-hidden="true" size={15} />
             Create theme
           </button>
           <button
             type="button"
-            class="inline-flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-sm font-semibold transition hover:bg-[var(--app-theme-surface-raised,#17171a)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus,#4c8dff)]"
-            style="color: var(--app-theme-text); border-color: var(--app-theme-border, #27272c)"
+            class="inline-flex h-8 items-center gap-1.5 rounded-sm border border-[var(--app-theme-border-subtle)] px-2.5 text-sm font-medium text-[var(--app-theme-text)] transition-colors hover:bg-[var(--app-theme-control-hover)]"
             onclick={() => onImportTheme?.()}
           >
-            <Upload aria-hidden="true" size={15} strokeWidth={2} />
+            <Upload aria-hidden="true" size={15} />
             Import theme
           </button>
         </div>
@@ -151,3 +156,12 @@
     </section>
   </div>
 </section>
+
+<style>
+  .appearance-option {
+    background: var(--app-theme-surface);
+    border-color: var(--app-theme-border-subtle);
+  }
+  .appearance-option:hover { background: color-mix(in srgb, var(--app-theme-text) 4%, var(--app-theme-surface)); }
+  .appearance-option[data-selected="true"] { border-color: var(--app-theme-text-muted); }
+</style>

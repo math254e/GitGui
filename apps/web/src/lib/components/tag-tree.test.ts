@@ -128,6 +128,12 @@ describe("tag navigation", () => {
     component = mount(Sidebar, { target, props }); flushSync(); await tick();
     const headings = [...target.querySelectorAll("section > button")];
     expect(headings.map((el) => el.textContent?.trim())).toEqual(["Local branches 0", "Remote branches 0", "Tags 2", "Worktrees 0", "Stashes 0"]);
+    for (const heading of headings) {
+      expect(heading.getAttribute("aria-expanded")).toMatch(/^(true|false)$/);
+      const regionId = heading.getAttribute("aria-controls");
+      expect(regionId).toBeTruthy();
+      expect(target.querySelector(`[id="${regionId}"]`) !== null).toBe(heading.getAttribute("aria-expanded") === "true");
+    }
     const rows = [...target.querySelectorAll<HTMLButtonElement>("[data-tag-index]")];
     expect(rows.map((el) => el.getAttribute("aria-label"))).toEqual(["releases/v2", "releases/v10"]);
     expect(rows[0].getAttribute("aria-disabled")).toBe("true");

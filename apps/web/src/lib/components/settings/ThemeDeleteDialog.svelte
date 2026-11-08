@@ -47,7 +47,7 @@
         </div>
         <button
           type="button"
-          class="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--app-theme-text-muted,#92939b)] transition hover:bg-[var(--app-theme-sidebar-row-hover,#1a1a1d)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus,#4c8dff)]"
+          class="flex h-8 w-8 shrink-0 items-center justify-center rounded-sm text-[var(--app-theme-text-muted,#92939b)] transition hover:bg-[var(--app-theme-sidebar-row-hover,#1a1a1d)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus,#4c8dff)]"
           aria-label="Close delete theme dialog"
           onclick={() => onCancel?.()}
         >
@@ -58,7 +58,7 @@
       <footer class="mt-6 flex justify-end gap-2">
         <button
           type="button"
-          class="h-9 rounded-md px-3 text-sm font-semibold text-[var(--app-theme-text-muted,#92939b)] transition hover:bg-[var(--app-theme-sidebar-row-hover,#1a1a1d)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus,#4c8dff)]"
+          class="h-9 rounded-sm px-3 text-sm font-semibold text-[var(--app-theme-text-muted,#92939b)] transition hover:bg-[var(--app-theme-sidebar-row-hover,#1a1a1d)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus,#4c8dff)]"
           onclick={() => onCancel?.()}
           data-dialog-initial-focus
         >
@@ -66,7 +66,7 @@
         </button>
         <button
           type="button"
-          class="h-9 rounded-md px-3.5 text-sm font-semibold text-[var(--app-theme-error-foreground,#fff)] transition hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus,#4c8dff)]"
+          class="h-9 rounded-sm px-3.5 text-sm font-semibold text-[var(--app-theme-error-foreground,#fff)] transition hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus,#4c8dff)]"
           style="background: var(--app-theme-error-surface); border: 1px solid var(--app-theme-error-border)"
           onclick={() => onConfirm?.()}
         >

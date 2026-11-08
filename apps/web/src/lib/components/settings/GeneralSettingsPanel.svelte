@@ -154,7 +154,7 @@
                         {#if releaseUrl}<a class="mt-1 inline-block text-xs text-[var(--app-theme-accent)] underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus)]" href={releaseUrl} target="_blank" rel="noreferrer">Release notes on GitHub</a>{/if}
                       {/if}
                     </div>
-                    <button type="button" onclick={checkForUpdates} disabled={updateBusy || updateStatus.phase === "disabled"} class="h-8 rounded-md border border-[var(--app-theme-border)] bg-[var(--app-theme-surface-raised)] px-3 text-xs font-semibold text-[var(--app-theme-text-muted)] transition hover:bg-[var(--app-theme-sidebar-row-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus)] disabled:cursor-not-allowed disabled:opacity-50">{updateBusy && updateStatus.phase === "checking" ? "Checking…" : "Check for updates"}</button>
+                    <button type="button" onclick={checkForUpdates} disabled={updateBusy || updateStatus.phase === "disabled"} class="h-8 rounded-sm border border-[var(--app-theme-border)] bg-[var(--app-theme-surface-raised)] px-3 text-xs font-semibold text-[var(--app-theme-text-muted)] transition hover:bg-[var(--app-theme-sidebar-row-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus)] disabled:cursor-not-allowed disabled:opacity-50">{updateBusy && updateStatus.phase === "checking" ? "Checking…" : "Check for updates"}</button>
                   </div>
                 </section>
               {/if}

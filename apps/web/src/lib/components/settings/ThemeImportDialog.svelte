@@ -104,7 +104,7 @@
         </div>
         <button
           type="button"
-          class="flex h-8 w-8 shrink-0 items-center justify-center rounded-md transition hover:bg-[var(--app-theme-sidebar-row-hover,#1a1a1d)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus,#4c8dff)]"
+          class="flex h-8 w-8 shrink-0 items-center justify-center rounded-sm transition hover:bg-[var(--app-theme-sidebar-row-hover,#1a1a1d)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus,#4c8dff)]"
           style="color: var(--app-theme-text-muted, #92939b)"
           aria-label="Close import theme dialog"
           onclick={() => onClose?.()}
@@ -117,7 +117,7 @@
         <div class="flex gap-1 rounded-md border p-1" style="background: var(--app-theme-surface, #0b0b0d); border-color: var(--app-theme-border, #27272c)" role="tablist" aria-label="Theme source">
           <button
             type="button"
-            class="flex h-9 flex-1 items-center justify-center gap-2 rounded-md px-3 text-sm font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus,#4c8dff)]"
+            class="flex h-9 flex-1 items-center justify-center gap-2 rounded-sm px-3 text-sm font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus,#4c8dff)]"
             style={`background: ${source === "paste" ? "var(--app-theme-sidebar-row-selected, #1e2030)" : "transparent"}; color: ${source === "paste" ? "var(--app-theme-text, #f4f4f5)" : "var(--app-theme-text-muted, #92939b)"}`}
             role="tab"
             aria-selected={source === "paste"}
@@ -131,7 +131,7 @@
           </button>
           <button
             type="button"
-            class="flex h-9 flex-1 items-center justify-center gap-2 rounded-md px-3 text-sm font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus,#4c8dff)]"
+            class="flex h-9 flex-1 items-center justify-center gap-2 rounded-sm px-3 text-sm font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus,#4c8dff)]"
             style={`background: ${source === "file" ? "var(--app-theme-sidebar-row-selected, #1e2030)" : "transparent"}; color: ${source === "file" ? "var(--app-theme-text, #f4f4f5)" : "var(--app-theme-text-muted, #92939b)"}`}
             role="tab"
             aria-selected={source === "file"}
@@ -160,7 +160,7 @@
         {:else}
           <button
             type="button"
-            class={`mt-4 flex min-h-44 w-full flex-col items-center justify-center rounded-md border border-dashed px-6 text-center transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus,#4c8dff)] ${isDragging ? "bg-[var(--app-theme-sidebar-row-hover,#1a1a1d)]" : "hover:bg-[var(--app-theme-sidebar-row-hover,#1a1a1d)]"}`}
+            class={`mt-4 flex min-h-44 w-full flex-col items-center justify-center rounded-sm border border-dashed px-6 text-center transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus,#4c8dff)] ${isDragging ? "bg-[var(--app-theme-sidebar-row-hover,#1a1a1d)]" : "hover:bg-[var(--app-theme-sidebar-row-hover,#1a1a1d)]"}`}
             style="border-color: var(--app-theme-border, #3b3c43); color: var(--app-theme-text-muted, #92939b)"
             onclick={() => fileInput?.click()}
             ondragover={(event) => {
@@ -185,8 +185,8 @@
             <span>{errorMessage}</span>
           </div>
         {:else if parsedTheme}
-          <div class="mt-3 flex items-start gap-3 rounded-md border px-3 py-3" style="background: var(--app-theme-accent-surface, #1e2030); border-color: color-mix(in srgb, var(--app-theme-accent,#8d9cff) 38%, transparent)" role="status">
-            <span class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full" style="background: var(--app-theme-accent, #8d9cff); color: var(--app-theme-accent-foreground, #101116)">
+          <div class="mt-3 flex items-start gap-3 rounded-md border border-[var(--app-theme-border-subtle)] bg-[var(--app-theme-surface-raised)] px-3 py-3" role="status">
+            <span class="flex h-7 w-7 shrink-0 items-center justify-center rounded-sm bg-[var(--app-theme-muted)] text-[var(--app-theme-text)]">
               <Check aria-hidden="true" size={15} />
             </span>
             <div class="min-w-0">
@@ -200,7 +200,7 @@
       <footer class="flex flex-col-reverse gap-2 border-t px-5 py-4 sm:flex-row sm:justify-end" style="border-color: var(--app-theme-border, #27272c)">
         <button
           type="button"
-          class="h-9 rounded-md px-3 text-sm font-semibold transition hover:bg-[var(--app-theme-sidebar-row-hover,#1a1a1d)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus,#4c8dff)]"
+          class="h-9 rounded-sm px-3 text-sm font-semibold transition hover:bg-[var(--app-theme-sidebar-row-hover,#1a1a1d)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus,#4c8dff)]"
           style="color: var(--app-theme-text-muted, #92939b)"
           onclick={() => onClose?.()}
         >
@@ -208,7 +208,7 @@
         </button>
         <button
           type="button"
-          class="inline-flex h-9 items-center justify-center gap-2 rounded-md px-4 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus,#4c8dff)]"
+          class="inline-flex h-9 items-center justify-center gap-2 rounded-sm px-4 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-theme-focus,#4c8dff)]"
           style="background: var(--app-theme-accent, #8d9cff); color: var(--app-theme-accent-foreground, #101116)"
           disabled={!parsedTheme}
           onclick={importTheme}

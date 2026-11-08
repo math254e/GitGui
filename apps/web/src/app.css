@@ -86,3 +86,34 @@
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
 }
+
+@layer components {
+  .sidebar-section-toggle {
+    display: flex;
+    width: 100%;
+    min-height: 36px;
+    flex-shrink: 0;
+    align-items: center;
+    gap: 4px;
+    margin-bottom: 0;
+    margin-inline: 0;
+    padding: 8px 6px;
+    border-radius: 0;
+    color: var(--app-theme-sidebar-muted-foreground);
+    font-size: 12px;
+    font-weight: 500;
+    text-align: left;
+    transition: background-color 120ms, color 120ms;
+  }
+  .sidebar-section-toggle:hover {
+    background: var(--app-theme-panel-row-hover);
+    color: var(--app-theme-accent-surface-foreground);
+  }
+  .sidebar-section-count {
+    margin-left: auto;
+    padding-right: 6px;
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+    font-weight: 400;
+  }
+}

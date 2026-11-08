@@ -52,7 +52,7 @@
       aria-label={`Use ${theme.label} ${swatch.label} theme`}
       title={`${theme.label} · ${swatch.label}`}
       aria-pressed={isSelected}
-      style={`${swatchStyle(swatch.palette)}; ${isSelected ? "outline: 2px solid var(--app-theme-focus, #4c8dff); outline-offset: 4px" : ""}`}
+      style={`${swatchStyle(swatch.palette)}; ${isSelected ? "outline: 2px solid var(--app-theme-text-muted); outline-offset: 4px" : ""}`}
       onclick={() => onSelect?.(swatch.appearance)}
     >
       <span
