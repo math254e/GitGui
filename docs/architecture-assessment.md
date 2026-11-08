@@ -285,8 +285,16 @@ worktrees, refs, stashes and full reachable commit history and builds the full
 graph, before selecting reachable commits and building the filtered graph. The
 client requests this when refs are hidden. The frontend virtualizes graph rows
 and indexes visible edges, but that controls rendering cost, not this server
-computation or payload. No latency or scalability claim has been measured here;
-profile a representative large repository before optimizing.
+computation or payload. Profile representative large repositories before
+optimizing.
+
+An exploratory local debug-build measurement used an isolated synthetic linear
+history of 10,000 commits, selecting an ancestor with 1,000 reachable commits.
+Three `load_repository_graph` calls took 277, 270, and 273 ms. This confirms
+measurable work in that fixture, but is not a production benchmark: it omits
+network and UI costs, uses a warm local repository and a debug build, and does
+not model merge-heavy history. Measure release builds on representative real
+repositories before choosing an optimization.
 
 ### Cross-session and linked-worktree coordination
 
