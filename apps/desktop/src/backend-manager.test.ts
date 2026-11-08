@@ -11,7 +11,7 @@ import { BackendManager } from "./backend-manager.js";
 function spawnFixture(prepare = true) {
   const commands: string[] = [];
   const child = Object.assign(new EventEmitter(), { stdin: new PassThrough(), stdout: new PassThrough(),
-    stderr: new PassThrough(), exitCode: null as number | null, signalCode: null, killed: false,
+    stderr: new PassThrough(), exitCode: null as number | null, signalCode: null as NodeJS.Signals | null, killed: false,
     kill: vi.fn(() => true) });
   child.stdin.on("data", (chunk) => {
     for (const line of String(chunk).trim().split("\n")) {
@@ -32,6 +32,31 @@ function spawnFixture(prepare = true) {
 afterEach(() => { vi.unstubAllGlobals(); vi.clearAllMocks(); });
 
 describe("managed local update stop", () => {
+  it.each(["code", "signal"] as const)("rejects a child that exits by %s after its ready line while the descriptor is pending", async (kind) => {
+    const children: ReturnType<typeof spawnFixture>[] = [];
+    let resolveDescriptor!: (value: Response) => void;
+    const descriptor = new Promise<Response>((resolve) => { resolveDescriptor = resolve; });
+    spawnMock.mockImplementation(() => { const value = spawnFixture(); children.push(value); return value.child; });
+    const fetch = vi.fn().mockReturnValueOnce(descriptor).mockResolvedValue(Response.json({ environmentId: "replacement" }));
+    vi.stubGlobal("fetch", fetch);
+
+    const backend = new BackendManager();
+    const connecting = backend.getConnection();
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledOnce());
+    const first = children[0].child;
+    if (kind === "code") first.exitCode = 1;
+    else first.signalCode = "SIGTERM";
+    first.emit("exit", first.exitCode, first.signalCode);
+    resolveDescriptor(Response.json({ environmentId: "exited" }));
+    await expect(connecting).rejects.toThrow("exited before readiness completed");
+    expect(first.kill).not.toHaveBeenCalled();
+
+    expect((await backend.getConnection()).descriptor.environmentId).toBe("replacement");
+    expect(spawnMock).toHaveBeenCalledTimes(2);
+    children[1].child.exitCode = 0;
+    children[1].child.emit("exit", 0);
+  });
+
   it("waits for pending startup during quit and blocks late connection/restart attempts", async () => {
     let fixture!: ReturnType<typeof spawnFixture>;
     let resolveDescriptor!: (value: Response) => void;

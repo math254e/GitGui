@@ -377,6 +377,12 @@ installation. Packaged builds enable updates only when
 `GITGUI_UPDATE_FEED_URL` is a credential-free HTTPS URL. The renderer receives
 typed update state and cannot configure arbitrary feeds.
 
+The desktop backend manager owns the exact server child. It publishes a local
+connection only after receiving the child's ready address and fetching its
+descriptor, and rejects startup if that child exits during the descriptor
+request. A later connection attempt can then start a replacement. Process
+liveness checks account for both normal and signal-based exits.
+
 ## Security invariants
 
 - Treat repository paths, Git output, protocol input, and persisted metadata as untrusted.

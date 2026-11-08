@@ -25,7 +25,7 @@ export class BackendManager {
   async getConnection(): Promise<DesktopPreparedConnection> {
     if (this.updateReserved) throw new Error("The local server is preparing for an app update.");
     if (this.stopping) throw new Error("The local server is stopping.");
-    if (this.running && this.running.child.exitCode === null) return this.running.connection;
+    if (this.running && isChildRunning(this.running.child)) return this.running.connection;
     return (await this.ensureStarted()).connection;
   }
 
@@ -48,7 +48,7 @@ export class BackendManager {
     this.updateReserved = true;
     if (this.starting) await this.starting;
     const running = this.running;
-    if (!running || running.child.exitCode !== null) return;
+    if (!running || !isChildRunning(running.child)) return;
     await running.control.request("prepare-update");
     this.stopping = true;
     this.updateShutdownRequested = true;
@@ -60,7 +60,7 @@ export class BackendManager {
 
   async recoverAfterUpdate(): Promise<void> {
     const running = this.running;
-    if (running && running.child.exitCode === null) {
+    if (running && isChildRunning(running.child)) {
       if (this.updateShutdownRequested) await waitForBackendExit(running.child, 10_000);
       else await running.control.request("resume", 5_000);
     }
@@ -108,6 +108,9 @@ export class BackendManager {
     try {
       address = await readReadyAddress(child);
       descriptor = await fetchDescriptor(`http://${address}`);
+      // The child may exit after its ready line while the descriptor request is
+      // still in flight. Never publish a connection for an already-dead child.
+      if (!isChildRunning(child)) throw new Error("GitGui server exited before readiness completed.");
     } catch (error) {
       control.dispose();
       terminate(child);
@@ -134,14 +137,14 @@ export class BackendManager {
   private async shutdownCurrent(): Promise<void> {
     const running = this.running;
     this.running = undefined;
-    if (!running || running.child.exitCode !== null) return;
+    if (!running || !isChildRunning(running.child)) return;
     running.control.dispose();
     terminate(running.child);
     await Promise.race([
       new Promise<void>((resolve) => running.child.once("exit", () => resolve())),
       new Promise<void>((resolve) => setTimeout(resolve, 5_000)),
     ]);
-    if (running.child.exitCode === null) running.child.kill("SIGKILL");
+    if (isChildRunning(running.child)) running.child.kill("SIGKILL");
   }
 }
 
@@ -197,8 +200,12 @@ async function fetchDescriptor(httpUrl: string) {
   return await response.json() as DesktopPreparedConnection["descriptor"];
 }
 
+function isChildRunning(child: ChildProcessWithoutNullStreams): boolean {
+  return child.exitCode === null && child.signalCode === null;
+}
+
 function terminate(child: ChildProcessWithoutNullStreams): void {
-  if (child.exitCode === null && !child.killed) child.kill();
+  if (isChildRunning(child) && !child.killed) child.kill();
 }
 
 function redact(value: string): string {

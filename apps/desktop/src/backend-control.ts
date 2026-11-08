@@ -22,7 +22,7 @@ export class BackendControl {
   }
 
   request(command: Command, timeoutMs = 35_000): Promise<void> {
-    if (this.closed || this.child.exitCode !== null || this.child.stdin.destroyed) {
+    if (this.closed || this.child.exitCode !== null || this.child.signalCode !== null || this.child.stdin.destroyed) {
       return Promise.reject(new Error("The local server control channel is unavailable."));
     }
     const id = randomUUID();

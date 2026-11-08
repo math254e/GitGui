@@ -35,6 +35,14 @@ describe("inherited local server control", () => {
     await expect(control.request("resume")).rejects.toThrow("unavailable");
   });
 
+  it("rejects new requests for a child already terminated by a signal", async () => {
+    const child = childFixture(); const control = new BackendControl(child);
+    Object.assign(child, { signalCode: "SIGTERM" });
+    await expect(control.request("resume")).rejects.toThrow("unavailable");
+    await expect(waitForBackendExit(child, 100)).resolves.toBeUndefined();
+    control.dispose();
+  });
+
   it("times out without terminating the child and waits for an actual exit", async () => {
     vi.useFakeTimers();
     try {
