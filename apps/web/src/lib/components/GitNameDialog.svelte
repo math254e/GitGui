@@ -1,6 +1,7 @@
 <script lang="ts">
   import { X } from "@lucide/svelte";
   import { tick } from "svelte";
+  import BranchConcurrencyWarning from "./BranchConcurrencyWarning.svelte";
 
   export type GitNameDialogKind = "branch" | "renameBranch" | "tag" | "stash";
 
@@ -65,6 +66,7 @@
   bind:this={dialog}
   class="m-auto w-[calc(100%_-_2rem)] max-w-[420px] overflow-hidden rounded-lg border border-[var(--app-theme-border)] bg-[var(--app-theme-surface-overlay)] p-0 text-[var(--app-theme-text)] shadow-[var(--app-theme-dialog-shadow)] backdrop:bg-black/55"
   aria-labelledby="git-name-dialog-title"
+  aria-describedby={kind === "renameBranch" ? "rename-branch-concurrency" : undefined}
   oncancel={(event) => { event.preventDefault(); if (!loading) onCancel(); }}
 >
   <header class="flex items-center justify-between gap-3 border-b border-[var(--app-theme-border)] px-4 py-2.5">
@@ -111,6 +113,8 @@
         Switch to this branch
       </label>
     {/if}
+
+    {#if kind === "renameBranch"}<BranchConcurrencyWarning action="rename" id="rename-branch-concurrency" />{/if}
 
     {#if error}
       <p id="git-name-dialog-error" class="mt-3 text-xs text-[var(--app-theme-error)]" role="alert">{error}</p>

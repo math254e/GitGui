@@ -1,6 +1,7 @@
 <script lang="ts">
   import { tick } from "svelte";
   import { X } from "@lucide/svelte";
+  import BranchConcurrencyWarning from "./BranchConcurrencyWarning.svelte";
 
   let { open, branchName, force, loading, error, onConfirm, onCancel }: {
     open: boolean;
@@ -30,7 +31,7 @@
 
 <dialog bind:this={dialog}
   class="m-auto w-[calc(100%_-_2rem)] max-w-[420px] overflow-hidden rounded-lg border border-[var(--app-theme-border)] bg-[var(--app-theme-surface-overlay)] p-0 text-[var(--app-theme-text)] shadow-[var(--app-theme-dialog-shadow)] backdrop:bg-black/55"
-  aria-labelledby="delete-branch-title" aria-describedby={force ? "delete-branch-warning" : "delete-branch-name"}
+  aria-labelledby="delete-branch-title" aria-describedby={force ? "delete-branch-name delete-branch-warning delete-branch-concurrency" : "delete-branch-name delete-branch-concurrency"}
   oncancel={(event) => { event.preventDefault(); if (!loading) onCancel(); }}>
   <header class="flex items-center justify-between gap-3 border-b border-[var(--app-theme-border)] px-4 py-2.5">
     <h2 id="delete-branch-title" class="text-sm font-semibold">{force ? "Delete unmerged branch?" : "Delete local branch?"}</h2>
@@ -44,6 +45,7 @@
     {#if force}
       <p id="delete-branch-warning" class="mt-3 text-sm leading-5 text-[var(--app-theme-text)]">Unmerged commits may become difficult to recover.</p>
     {/if}
+    <BranchConcurrencyWarning action="delete" id="delete-branch-concurrency" />
     {#if error}<p class="mt-3 whitespace-pre-wrap text-xs text-[var(--app-theme-error)]" role="alert">{error}</p>{/if}
     <footer class="mt-4 flex justify-end gap-2">
       <button bind:this={cancelButton} type="button" disabled={loading} onclick={onCancel}

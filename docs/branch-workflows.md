@@ -54,6 +54,11 @@ A fix must preserve those semantics and cover concurrent worktree checkout and
 external ref changes, including partial failures; an additional preflight check
 alone does not close the race.
 
+Until that design is implemented, the rename and delete dialogs warn users to
+avoid concurrent Git operations. The worktree-removal dialog displays the same
+deletion warning when it will also delete the branch. The warnings do not change
+the server's concurrency guarantees.
+
 An isolated Git-level experiment also paused `git branch -D` in its prepared
 reference-transaction hook after Git's own worktree check. A concurrent linked
 worktree successfully switched to that branch, after which deletion succeeded

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { tick } from "svelte";
   import { X } from "@lucide/svelte";
+  import BranchConcurrencyWarning from "./BranchConcurrencyWarning.svelte";
 
   let { open, path, branch, deleteBranch, forceBranchDeletion, loading, error, onConfirm, onCancel }: {
     open: boolean;
@@ -26,7 +27,7 @@
 
 <dialog bind:this={dialog}
   class="m-auto w-[calc(100%_-_2rem)] max-w-[480px] overflow-hidden rounded-lg border border-[var(--app-theme-border)] bg-[var(--app-theme-surface-overlay)] p-0 text-[var(--app-theme-text)] shadow-[var(--app-theme-dialog-shadow)] backdrop:bg-black/55"
-  aria-labelledby="remove-worktree-title" aria-describedby="remove-worktree-path"
+  aria-labelledby="remove-worktree-title" aria-describedby={deleteBranch ? "remove-worktree-path remove-worktree-branch-concurrency" : "remove-worktree-path"}
   oncancel={(event) => { event.preventDefault(); if (!loading) onCancel(); }}>
   <header class="flex items-center justify-between gap-3 border-b border-[var(--app-theme-border)] px-4 py-2.5">
     <h2 id="remove-worktree-title" class="text-sm font-semibold">{deleteBranch ? "Remove worktree and delete branch?" : "Remove worktree?"}</h2>
@@ -39,6 +40,7 @@
     {#if branch}<p class="break-all font-mono text-sm">{branch}</p>{/if}
     <p id="remove-worktree-path" class="mt-2 break-all font-mono text-xs text-[var(--app-theme-text-secondary)]">{path}</p>
     {#if forceBranchDeletion}<p class="mt-3 text-sm">Unmerged commits may become difficult to recover.</p>{/if}
+    {#if deleteBranch}<BranchConcurrencyWarning action="delete" id="remove-worktree-branch-concurrency" />{/if}
     {#if error}<p class="mt-3 whitespace-pre-wrap text-xs text-[var(--app-theme-error)]" role="alert">{error}</p>{/if}
     <footer class="mt-4 flex justify-end gap-2">
       <button bind:this={cancelButton} type="button" disabled={loading} onclick={onCancel}
