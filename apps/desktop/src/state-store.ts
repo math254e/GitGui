@@ -15,6 +15,7 @@ interface PersistedState {
 
 export class DesktopStateStore {
   private state?: PersistedState;
+  private loading?: Promise<PersistedState>;
   private queue = Promise.resolve();
 
   constructor(private readonly path: string) {}
@@ -87,28 +88,30 @@ export class DesktopStateStore {
 
   private async load(): Promise<PersistedState> {
     if (this.state) return this.state;
+    if (this.loading) return this.loading;
+    this.loading = this.readState();
     try {
-      const parsed = JSON.parse(await readFile(this.path, "utf8")) as PersistedState;
-      this.state = parsed.schemaVersion === 1 && Array.isArray(parsed.registrations) && isRecord(parsed.credentials)
-        ? {
-          schemaVersion: 1,
-          registrations: parsed.registrations.flatMap((entry) => {
-            try { return [parseRegistration(entry)]; } catch { return []; }
-          }),
-          credentials: Object.fromEntries(Object.entries(parsed.credentials).filter((entry): entry is [string, string] =>
-            typeof entry[0] === "string" && typeof entry[1] === "string",
-          )),
-          environmentNames: isRecord(parsed.environmentNames)
-            ? Object.fromEntries(Object.entries(parsed.environmentNames).flatMap(([id, name]) => {
-                try {
-                  const value = assertSafeString(name, "environment name");
-                  return value.length <= 512 ? [[assertSafeString(id, "environmentId"), value]] : [];
-                } catch { return []; }
-              })) : {},
-        }
-        : emptyState();
+      return await this.loading;
+    } finally {
+      this.loading = undefined;
+    }
+  }
+
+  private async readState(): Promise<PersistedState> {
+    let raw: string;
+    try {
+      raw = await readFile(this.path, "utf8");
+    } catch (error) {
+      // Missing is the only state that can safely start as empty. A failed
+      // read must not be cached, so a later retry can recover the real file.
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return emptyState();
+      throw new Error("Could not read desktop connection state.", { cause: error });
+    }
+    try {
+      this.state = parseState(JSON.parse(raw));
     } catch {
-      this.state = emptyState();
+      // JSON parser errors may include fragments of the persisted document.
+      throw new Error("Invalid desktop connection state; existing data was preserved.");
     }
     return this.state;
   }
@@ -136,6 +139,43 @@ export class DesktopStateStore {
 
 function emptyState(): PersistedState {
   return { schemaVersion: 1, registrations: [], credentials: {}, environmentNames: {} };
+}
+
+function parseState(value: unknown): PersistedState {
+  if (!isRecord(value) || value.schemaVersion !== 1 || !Array.isArray(value.registrations) || !isRecord(value.credentials)) {
+    throw new TypeError("Invalid desktop connection state document");
+  }
+  // Older version 1 documents did not contain environmentNames.
+  if (value.environmentNames !== undefined && !isRecord(value.environmentNames)) {
+    throw new TypeError("Invalid desktop environment names");
+  }
+  const credentials = Object.fromEntries(Object.entries(value.credentials).map(([id, encrypted]) => {
+    if (typeof encrypted !== "string" || !encrypted) throw new TypeError("Invalid encrypted credential");
+    return [assertSafeString(id, "environmentId"), encrypted];
+  }));
+  const environmentNames = Object.fromEntries(Object.entries(value.environmentNames ?? {}).map(([id, name]) => {
+    const safeName = assertSafeString(name, "environment name");
+    if (safeName.length > 512) throw new TypeError("Invalid environment name");
+    return [assertSafeString(id, "environmentId"), safeName];
+  }));
+  return { schemaVersion: 1, registrations: value.registrations.map(parsePersistedRegistration), credentials, environmentNames };
+}
+
+function parsePersistedRegistration(value: unknown): DesktopConnectionRegistration {
+  if (!isRecord(value)) throw new TypeError("Invalid desktop connection registration");
+  // Missing historical optional fields retain their old defaults; malformed
+  // fields must not be silently filtered out and overwritten on the next save.
+  if (value.displayName !== undefined && (typeof value.displayName !== "string" || !value.displayName.trim() || value.displayName.trim().length > 512)) {
+    throw new TypeError("Invalid desktop connection display name");
+  }
+  if (value.capabilities !== undefined && (!Array.isArray(value.capabilities) ||
+      value.capabilities.some((item) => typeof item !== "string" || item.length > 256))) {
+    throw new TypeError("Invalid desktop connection capabilities");
+  }
+  if (value.lastConnectedAt !== undefined && (typeof value.lastConnectedAt !== "number" || !Number.isFinite(value.lastConnectedAt))) {
+    throw new TypeError("Invalid desktop connection timestamp");
+  }
+  return parseRegistration(value);
 }
 
 function parseRegistration(value: unknown): DesktopConnectionRegistration {
@@ -185,5 +225,5 @@ function assertSafeString(value: unknown, label: string): string {
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

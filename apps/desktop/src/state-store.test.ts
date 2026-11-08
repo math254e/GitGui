@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, rename, rm, rmdir } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rename, rm, rmdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -16,6 +16,65 @@ const registration = (id: string) => ({ environmentId: id, displayName: id, reco
 const credential = { kind: "bearer" as const, token: "test-fixture-session" };
 
 describe("desktop state persistence failures", () => {
+  it("initializes a missing store and preserves compatible state without environment names", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "gitgui-state-legacy-"));
+    const path = join(directory, "state.json");
+    try {
+      const store = new DesktopStateStore(path);
+      expect(await store.listRegistrations()).toEqual([]);
+      // A file appearing after the first absent read is not replaced with an
+      // already-cached empty state.
+      await writeFile(path, JSON.stringify({ schemaVersion: 1, registrations: [registration("remote")], credentials: {} }));
+      await store.setEnvironmentName("remote", "Home");
+      expect(await store.listRegistrations()).toEqual([registration("remote")]);
+      expect(await new DesktopStateStore(path).getEnvironmentNames()).toEqual({ remote: "Home" });
+    } finally { await rm(directory, { recursive: true, force: true }); }
+  });
+
+  it.each([
+    ["malformed JSON", "{ malformed"],
+    ["unsupported schema", JSON.stringify({ schemaVersion: 2, registrations: [], credentials: {} })],
+    ["invalid registration", JSON.stringify({ schemaVersion: 1, registrations: [registration("valid"), {}], credentials: {} })],
+    ["invalid registration capabilities", JSON.stringify({ schemaVersion: 1, registrations: [{ ...registration("valid"), capabilities: ["valid", 123] }], credentials: {} })],
+    ["invalid registration display name", JSON.stringify({ schemaVersion: 1, registrations: [{ ...registration("valid"), displayName: {} }], credentials: {} })],
+    ["invalid credential", JSON.stringify({ schemaVersion: 1, registrations: [], credentials: { valid: "encrypted", bad: 12 } })],
+    ["empty credential", JSON.stringify({ schemaVersion: 1, registrations: [], credentials: { bad: "" } })],
+    ["invalid environment name", JSON.stringify({ schemaVersion: 1, registrations: [], credentials: {}, environmentNames: { valid: "Name", bad: null } })],
+    ["invalid environment names container", JSON.stringify({ schemaVersion: 1, registrations: [], credentials: {}, environmentNames: [] })],
+  ])("preserves %s and recovers when the file is repaired", async (_case, original) => {
+    const directory = await mkdtemp(join(tmpdir(), "gitgui-state-invalid-"));
+    const path = join(directory, "state.json");
+    try {
+      await writeFile(path, original);
+      const store = new DesktopStateStore(path);
+      await expect(store.listRegistrations()).rejects.toThrow("Invalid desktop connection state");
+      await expect(store.setEnvironmentName("remote", "Home")).rejects.toThrow("Invalid desktop connection state");
+      expect(await readFile(path, "utf8")).toBe(original);
+      const valid = new DesktopStateStore(join(directory, "valid.json"));
+      await valid.saveRegistration(registration("remote"), credential);
+      await writeFile(path, await readFile(join(directory, "valid.json")));
+      expect(await store.getCredential("remote")).toEqual(credential);
+      await store.setEnvironmentName("remote", "Home");
+      expect(await store.listRegistrations()).toEqual([registration("remote")]);
+      expect(await store.getCredential("remote")).toEqual(credential);
+    } finally { await rm(directory, { recursive: true, force: true }); }
+  });
+
+  it("rejects read errors and retries when the store becomes readable", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "gitgui-state-unreadable-"));
+    const path = join(directory, "state.json");
+    try {
+      await mkdir(path); // Reading a directory produces an error without relying on process permissions.
+      const store = new DesktopStateStore(path);
+      await expect(store.listRegistrations()).rejects.toThrow("Could not read desktop connection state");
+      await expect(store.saveRegistration(registration("remote"))).rejects.toThrow("Could not read desktop connection state");
+      await rmdir(path);
+      await writeFile(path, JSON.stringify({ schemaVersion: 1, registrations: [registration("saved")], credentials: {} }));
+      await store.saveRegistration(registration("remote"));
+      expect((await store.listRegistrations()).map((entry) => entry.environmentId)).toEqual(["saved", "remote"]);
+    } finally { await rm(directory, { recursive: true, force: true }); }
+  });
+
   it("persists primary and remote names independently of registrations, credentials and failed writes", async () => {
     const directory = await mkdtemp(join(tmpdir(), "gitgui-environment-names-"));
     const path = join(directory, "state.json");
