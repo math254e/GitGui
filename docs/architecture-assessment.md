@@ -111,26 +111,18 @@ sessions; repository locks serve a separate cross-session purpose.
    migrates existing keys, and supports re-pairing after a page reload. Desktop
    continues to use the protected-storage bridge. See the follow-up below for
    the session lifetime, user-facing tradeoff and remaining limitations.
-2. **RPC authorization coverage — confirmed structural risk, not a confirmed
-   bypass.** The method registry, dispatch, scope map and queue classification
-   must agree. `authorization_error` allows a method with no mapped scope to
-   proceed to dispatch; unknown methods currently fall through to method-not-found,
-   but a future dispatched method omitted from the scope map would not be
-   rejected there. The existing `every_registered_method_is_dispatched` test
-   checks one direction, and feature-specific tests check selected scopes. A
-   source-level comparison found all 50 registered method constants in the
-   current scope mapping; it does not verify that each assigned scope is correct
-   or prove dispatch has no extra methods. Add
-   an exhaustive authorization invariant before considering a design change:
-   every registered/dispatched method must have the intended scope, with an
-   explicit policy for any intentionally unscoped method. Also test lane semantics
-   for mutations and previews. Check for exceptions before enforcing it.
+2. **RPC authorization coverage — guarded.** The method registry, dispatch,
+   scope map and queue classification must agree. Unmapped methods now fail
+   before dispatch, and independent tests enumerate reviewed scopes, registered
+   handlers and ordered mutation/preview lanes. Future methods must update the
+   reviewed scope inventory; feature tests remain necessary for behavior.
 3. **Workspace coupling — observed maintainability pressure.** The roughly
    2,650-line Svelte store coordinates unrelated feature workflows and imports
    component types. Application-wide and legacy per-environment tab handling
    coexist. Map dependencies and ownership before extracting a cohesive feature
    controller or shared presentation types; do not remove legacy migration or
-   change tab lifecycle without evidence and failure tests.
+   change tab lifecycle without evidence and failure tests. Repository selection
+   reconciliation has since been extracted into a focused pure module.
 4. **Server concentration — observed maintainability pressure.** The roughly
    5,000-line server `lib.rs` combines configuration, transport, scope mapping,
    handlers, state, persistence, and conversion. Existing extracted auth,
@@ -224,10 +216,10 @@ an RPC or its intended scope changes.
 
 **Fixed after reproduction.** Previously, `DesktopStateStore.load()` caught
 all file-read and JSON errors and cached an empty state; it also treated an
-unsupported top-level schema as empty and silently filters invalid individual
+unsupported top-level schema as empty and silently filtered invalid individual
 records (`apps/desktop/src/state-store.ts`). A subsequent successful mutation
 could clone that state and atomically replace `desktop-state.json`. Consequently,
-malformed JSON or an unsupported schema can be overwritten with an incomplete
+malformed JSON or an unsupported schema could be overwritten with an incomplete
 catalog and credentials after a normal save. A transient read failure could also
 leave empty state cached for the process lifetime. An exploratory test reproduced
 the overwrite. The store now initializes an empty state only for a missing file;
@@ -294,8 +286,10 @@ holding the common lock. Tests exercise concurrent linked and legacy stashes,
 worktree lock retention, disconnect and partial outcomes. This supports the
 intended model for those paths, but is not proof that every shared-ref operation
 across linked worktrees is serialized: ordinary branch/tag operations use their
-registration lock, while Git supplies its own ref locks. Evaluate concrete
-cross-worktree conflicts before extending lock scope.
+registration lock, while Git supplies its own ref locks. A reproduced external
+ref-movement race can cause reviewed branch rename/delete to affect a newer tip;
+see `docs/branch-workflows.md` for the finding and the worktree/ref-log/config
+constraints on a safe fix.
 
 ### UI and desktop implementation shape
 
