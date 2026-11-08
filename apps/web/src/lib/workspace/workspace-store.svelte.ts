@@ -34,7 +34,6 @@ import type {
   GitPushResult,
 } from "@gitgui/contracts";
 import { type ClientWorkspace, type ClientWorkspaceState } from "$lib/client-runtime";
-import { reconcileWorkingTreeFile } from "$lib/client-runtime/file-selection";
 import { readDesktopBridge } from "$lib/connection/platform";
 import type { WebApplicationRuntime, WebApplicationRuntimeState } from "$lib/connection/runtime";
 import type { EnvironmentEntryView, EnvironmentRepositoryCatalogView } from "$lib/connection/runtime";
@@ -51,6 +50,7 @@ import { parseTagConflicts, type TagFetchReview } from "./tag-sync";
 import type { CommitFile, CommitInfo, CommitRef, RepositorySnapshot, StashInfo, WorktreeInfo } from "$lib/types/repository";
 import { removableWorktree } from "./worktree-menu";
 import { captureStashActionContext, reconcileSelectedStash } from "./stash-selection";
+import { reconcileRepositorySelection } from "./repository-selection";
 import { performStashOperation, selectedStashPaths, stashContextIsCurrent, stashMethods, type StashAction, type StashDialog, type StashReceipt } from "./stash-operations";
 import type { RepoTab } from "$lib/components/TopMenu.svelte";
 import type { ResizablePane } from "$lib/components/ResizablePaneGroup.svelte";
@@ -75,7 +75,6 @@ import type {
   GitActionRequest,
   PendingGitAction,
   RepositoryListItem,
-  SelectedGraphItem,
   WorkspaceRepo,
 } from "./types";
 
@@ -916,27 +915,6 @@ export class WorkspaceStore {
 
       const snapshot = repositoryState.snapshot;
       const previousRepo = previousRepos.find((candidate) => candidate.id === repositoryId);
-      const selectedGraphItem = snapshot
-        ? previousRepo?.selectionInitialized ? this.reconcileSelection(previousRepo.selectedGraphItem, snapshot) : this.initialGraphSelection(snapshot)
-        : previousRepo?.selectedGraphItem ?? null;
-      const selectedFile = snapshot
-        ? selectedGraphItem?.type === "changes"
-          ? reconcileWorkingTreeFile(
-              previousRepo?.selectedFile ?? null,
-              previousRepo?.selectedFileSource === "staged" ? "staged" : "workingTree",
-              snapshot,
-            )
-          : selectedGraphItem?.type === "commit" &&
-              previousRepo?.selectedGraphItem?.type === "commit" &&
-              selectedGraphItem.commit.hash === previousRepo.selectedGraphItem.commit.hash
-            ? previousRepo.selectedFile
-            : selectedGraphItem?.type === "stash" &&
-                previousRepo?.selectedGraphItem?.type === "stash" &&
-                selectedGraphItem.stash.hash === previousRepo.selectedGraphItem.stash.hash &&
-                selectedGraphItem.stash.selector === previousRepo.selectedGraphItem.stash.selector
-              ? previousRepo.selectedFile
-              : null
-        : previousRepo?.selectedFile ?? null;
 
       return [
         {
@@ -947,18 +925,7 @@ export class WorkspaceStore {
           snapshot,
           error: repositoryState.error?.message ?? null,
           loading: repositoryState.loading || repositoryState.refreshing,
-          selectedGraphItem,
-          selectionInitialized: previousRepo?.selectionInitialized || Boolean(snapshot),
-          selectedFile,
-          selectedFileSource:
-            selectedGraphItem?.type === "changes" && selectedFile
-              ? previousRepo?.selectedFileSource ?? "workingTree"
-              : null,
-          selectedChangePaths: previousRepo?.selectedChangePaths ?? [],
-          selectedChangeSource:
-            selectedGraphItem?.type === "changes"
-              ? previousRepo?.selectedChangeSource ?? "workingTree"
-              : null,
+          ...reconcileRepositorySelection(previousRepo, snapshot),
         },
       ];
     });
@@ -1631,45 +1598,6 @@ export class WorkspaceStore {
       selectedChangePaths: [],
       selectedChangeSource: null,
     }));
-  }
-
-  private initialGraphSelection(nextSnapshot: RepositorySnapshot) {
-    if (nextSnapshot.status.changedFiles.length) {
-      return { type: "changes" } as const;
-    }
-
-    const stashHashes = new Set(nextSnapshot.stashes.map((stash) => stash.hash));
-    const commit = nextSnapshot.commits.find((candidate) => !stashHashes.has(candidate.hash));
-    return commit
-      ? ({ type: "commit", commit } as const)
-      : null;
-  }
-
-  private reconcileSelection(
-    currentSelection: SelectedGraphItem | null,
-    nextSnapshot: RepositorySnapshot,
-  ) {
-    // A cleared stash selection stays cleared on later invalidations too.
-    if (!currentSelection) return null;
-    if (currentSelection?.type === "stash") {
-      const stash = reconcileSelectedStash(currentSelection.stash, nextSnapshot.stashes);
-      return stash ? { type: "stash", stash } as const : null;
-    }
-    if (currentSelection?.type === "commit") {
-      const matchingCommit = nextSnapshot.commits.find(
-        (commit) => commit.hash === currentSelection.commit.hash,
-      );
-
-      if (matchingCommit) {
-        return { type: "commit", commit: matchingCommit } as const;
-      }
-    }
-
-    if (currentSelection?.type === "changes" && nextSnapshot.status.changedFiles.length) {
-      return { type: "changes" } as const;
-    }
-
-    return this.initialGraphSelection(nextSnapshot);
   }
 
   /* ---------------------------------------------------------------------- */
