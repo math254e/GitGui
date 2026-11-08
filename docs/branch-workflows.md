@@ -42,6 +42,18 @@ refreshes, so a refresh failure cannot trigger a repeated mutation. External
 Git processes do not share that lock; the tip check rejects observed changes,
 but is not an atomic transaction with arbitrary external ref updates.
 
+The remaining race has been reproduced against the core operations: if an
+external Git process moves the branch after the tip check but before `git branch`
+runs, forced deletion can delete the replacement, and rename can move the
+replacement under the new name. This also affects branch deletion after worktree
+removal. Per-registration or common-directory mutexes cannot protect against
+other Git processes. `git update-ref` can compare an old object ID atomically,
+but is not a drop-in replacement for `git branch`: branch deletion and rename
+also involve checked-out worktree protection, reflogs, and branch configuration.
+A fix must preserve those semantics and cover concurrent worktree checkout and
+external ref changes, including partial failures; an additional preflight check
+alone does not close the race.
+
 Dialogs and open menus are scoped to the repository and environment that opened
 them. Repository or environment changes dismiss them. Submitted branch,
 worktree, stash, discard, repository-opening, and theme dialogs close before
