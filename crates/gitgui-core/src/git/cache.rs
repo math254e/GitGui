@@ -31,15 +31,17 @@ pub struct CommitFilesCache {
     recent_diff_bytes: usize,
     recent_diff_order: VecDeque<CommitFileDiffKey>,
     in_flight_diffs: HashMap<CommitFileDiffKey, InFlightCommitFileDiff>,
+    file_list_epochs: HashMap<String, Arc<()>>,
 }
 
 pub type SharedCommitFilesCache = Arc<Mutex<CommitFilesCache>>;
 pub type InFlightCommitFileDiff = Arc<(Mutex<Option<Result<CommitFileDiff, GitError>>>, Condvar)>;
+pub struct FileListEpoch(Arc<()>);
 
 pub enum CommitFileDiffLookup {
     Cached(CommitFileDiff),
     Loading(InFlightCommitFileDiff),
-    StartLoad,
+    StartLoad(InFlightCommitFileDiff),
 }
 
 impl CommitFilesCache {
@@ -53,6 +55,34 @@ impl CommitFilesCache {
         self.recent.insert(key.clone(), files);
         self.touch_recent(&key);
         self.evict_recent();
+    }
+
+    /// Retain this token while loading outside the cache lock. Eviction retires
+    /// it so a late read cannot repopulate a removed repository's cache.
+    pub fn file_list_epoch(&mut self, repo_root: &str) -> FileListEpoch {
+        FileListEpoch(
+            self.file_list_epochs
+                .entry(repo_root.to_owned())
+                .or_insert_with(|| Arc::new(()))
+                .clone(),
+        )
+    }
+
+    pub fn insert_recent_if_current(
+        &mut self,
+        key: CommitFilesKey,
+        files: Vec<CommitFile>,
+        epoch: &FileListEpoch,
+    ) -> bool {
+        if !self
+            .file_list_epochs
+            .get(&key.repo_root)
+            .is_some_and(|current| Arc::ptr_eq(current, &epoch.0))
+        {
+            return false;
+        }
+        self.insert_recent(key, files);
+        true
     }
 
     pub fn get_diff(&mut self, key: &CommitFileDiffKey) -> Option<CommitFileDiff> {
@@ -73,7 +103,7 @@ impl CommitFilesCache {
 
         let in_flight = Arc::new((Mutex::new(None), Condvar::new()));
         self.in_flight_diffs.insert(key.clone(), in_flight.clone());
-        CommitFileDiffLookup::StartLoad
+        CommitFileDiffLookup::StartLoad(in_flight)
     }
 
     pub fn insert_diff(&mut self, key: CommitFileDiffKey, diff: CommitFileDiff) {
@@ -94,10 +124,19 @@ impl CommitFilesCache {
     pub fn finish_diff_load(
         &mut self,
         key: &CommitFileDiffKey,
+        owner: &InFlightCommitFileDiff,
         result: Result<CommitFileDiff, GitError>,
-    ) {
+    ) -> bool {
+        // An evicted worker must not finish a newer load with the same key.
+        if !self
+            .in_flight_diffs
+            .get(key)
+            .is_some_and(|current| Arc::ptr_eq(current, owner))
+        {
+            return false;
+        }
         let Some(in_flight) = self.in_flight_diffs.remove(key) else {
-            return;
+            return false;
         };
 
         if let Ok(diff) = &result {
@@ -110,9 +149,11 @@ impl CommitFilesCache {
             *state = Some(result);
             ready.notify_all();
         }
+        true
     }
 
     pub fn evict_repo(&mut self, repo_root: &str) {
+        self.file_list_epochs.remove(repo_root);
         self.recent.retain(|key, _| key.repo_root != repo_root);
         self.recent_order.retain(|key| key.repo_root != repo_root);
         self.recent_diffs
@@ -273,5 +314,119 @@ mod tests {
 
         assert!(cache.get_diff(&key).is_none());
         assert_eq!(cache.recent_diff_bytes, 0);
+    }
+
+    #[test]
+    fn evicted_diff_load_cannot_complete_replacement_or_its_waiters() {
+        let mut cache = CommitFilesCache::default();
+        let key = key("file.txt");
+        let CommitFileDiffLookup::StartLoad(original) = cache.get_or_start_diff(&key) else {
+            panic!("expected first load")
+        };
+        let CommitFileDiffLookup::Loading(old_waiter) = cache.get_or_start_diff(&key) else {
+            panic!("expected old waiter")
+        };
+        cache.evict_repo("/repo");
+        assert!(old_waiter.0.lock().unwrap().as_ref().unwrap().is_err());
+
+        let CommitFileDiffLookup::StartLoad(replacement) = cache.get_or_start_diff(&key) else {
+            panic!("expected replacement load")
+        };
+        let CommitFileDiffLookup::Loading(new_waiter) = cache.get_or_start_diff(&key) else {
+            panic!("expected replacement waiter")
+        };
+        assert!(!cache.finish_diff_load(&key, &original, Ok(diff("old"))));
+        assert!(new_waiter.0.lock().unwrap().is_none());
+        assert!(cache.get_diff(&key).is_none());
+
+        assert!(cache.finish_diff_load(&key, &replacement, Ok(diff("new"))));
+        assert_eq!(
+            new_waiter
+                .0
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .original_content,
+            "new"
+        );
+        assert_eq!(cache.get_diff(&key).unwrap().original_content, "new");
+        assert!(old_waiter.0.lock().unwrap().as_ref().unwrap().is_err());
+    }
+
+    #[test]
+    fn evicted_list_read_cannot_replace_new_data_or_affect_other_repositories() {
+        let mut cache = CommitFilesCache::default();
+        let key = CommitFilesKey {
+            repo_root: "/repo".into(),
+            commit_hash: "commit".into(),
+        };
+        let other = CommitFilesKey {
+            repo_root: "/other".into(),
+            commit_hash: "commit".into(),
+        };
+        let old = cache.file_list_epoch(&key.repo_root);
+        let other_epoch = cache.file_list_epoch(&other.repo_root);
+        cache.evict_repo("/repo");
+        let new = cache.file_list_epoch(&key.repo_root);
+        let file = |name: &str| CommitFile {
+            path: name.into(),
+            original_path: None,
+            status: "M".into(),
+        };
+        assert!(cache.insert_recent_if_current(key.clone(), vec![file("new")], &new));
+        assert!(!cache.insert_recent_if_current(key.clone(), vec![file("old")], &old));
+        assert_eq!(cache.get(&key).unwrap()[0].path, "new");
+        assert!(cache.insert_recent_if_current(other.clone(), vec![file("other")], &other_epoch));
+        assert_eq!(cache.get(&other).unwrap()[0].path, "other");
+    }
+
+    #[test]
+    fn eviction_wakes_old_waiter_and_replacement_wakes_its_own_waiter() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        fn wait(
+            in_flight: InFlightCommitFileDiff,
+        ) -> (
+            mpsc::Receiver<()>,
+            mpsc::Receiver<bool>,
+            std::thread::JoinHandle<()>,
+        ) {
+            let (ready_tx, ready_rx) = mpsc::channel();
+            let (done_tx, done_rx) = mpsc::channel();
+            let handle = std::thread::spawn(move || {
+                let mut value = in_flight.0.lock().unwrap();
+                ready_tx.send(()).unwrap();
+                while value.is_none() {
+                    value = in_flight.1.wait(value).unwrap();
+                }
+                done_tx.send(value.as_ref().unwrap().is_ok()).unwrap();
+            });
+            (ready_rx, done_rx, handle)
+        }
+
+        let mut cache = CommitFilesCache::default();
+        let key = key("file.txt");
+        let CommitFileDiffLookup::StartLoad(old) = cache.get_or_start_diff(&key) else {
+            panic!("expected old load")
+        };
+        let (ready, done, old_thread) = wait(old.clone());
+        ready.recv_timeout(Duration::from_secs(2)).unwrap();
+        cache.evict_repo("/repo");
+        assert!(!done.recv_timeout(Duration::from_secs(2)).unwrap());
+        old_thread.join().unwrap();
+        let CommitFileDiffLookup::StartLoad(new) = cache.get_or_start_diff(&key) else {
+            panic!("expected replacement load")
+        };
+        let (ready, done, new_thread) = wait(new.clone());
+        ready.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(!cache.finish_diff_load(&key, &old, Ok(diff("old"))));
+        assert!(done.try_recv().is_err());
+        assert!(cache.finish_diff_load(&key, &new, Ok(diff("new"))));
+        assert!(done.recv_timeout(Duration::from_secs(2)).unwrap());
+        new_thread.join().unwrap();
     }
 }

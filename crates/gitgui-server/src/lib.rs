@@ -4588,14 +4588,21 @@ fn load_commit_files_cached(
         repo_root: repo_root.to_string(),
         commit_hash: commit_hash.to_string(),
     };
-    if let Some(files) = cache.lock().map_err(cache_error)?.get(&key) {
-        return Ok(files);
-    }
+    let epoch = {
+        let mut cache = cache.lock().map_err(cache_error)?;
+        if let Some(files) = cache.get(&key) {
+            return Ok(files);
+        }
+        cache.file_list_epoch(repo_root)
+    };
     let files = load_core_commit_files(repo_root, commit_hash)?;
-    cache
+    let inserted = cache
         .lock()
         .map_err(cache_error)?
-        .insert_recent(key, files.clone());
+        .insert_recent_if_current(key, files.clone(), &epoch);
+    if !inserted {
+        return Err(cache_load_evicted());
+    }
     Ok(files)
 }
 
@@ -4614,14 +4621,26 @@ fn load_commit_file_diff_cached(
     match lookup {
         CommitFileDiffLookup::Cached(diff) => Ok(diff),
         CommitFileDiffLookup::Loading(in_flight) => wait_for_diff_load(in_flight),
-        CommitFileDiffLookup::StartLoad => {
+        CommitFileDiffLookup::StartLoad(owner) => {
             let result = load_core_commit_file_diff(repo_root, commit_hash, parent_hash, file);
-            cache
+            let finished = cache
                 .lock()
                 .map_err(cache_error)?
-                .finish_diff_load(&key, result.clone());
-            result
+                .finish_diff_load(&key, &owner, result.clone());
+            if finished {
+                result
+            } else {
+                Err(cache_load_evicted())
+            }
         }
+    }
+}
+
+fn cache_load_evicted() -> GitError {
+    GitError {
+        message: "Repository was closed before the cache load finished.".to_string(),
+        stderr: String::new(),
+        status: None,
     }
 }
 
