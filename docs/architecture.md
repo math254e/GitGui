@@ -143,7 +143,8 @@ screen and the client workspace owns which repositories are open.
 
 ```text
 /                          Repositories home: the server catalog
-/repo/[repositoryId]       One repository workspace
+/repo/[environmentId]/[repositoryId]  One repository workspace
+/repo/[repositoryId]       Legacy repository link
 /new                       Create a repository
 /settings                  Redirects to /settings/general
 /settings/general          General preferences
@@ -151,8 +152,9 @@ screen and the client workspace owns which repositories are open.
 /settings/connections      Environments, Git, and SSH
 ```
 
-The repository identifier is the backend-issued id. The environment is not part
-of the URL; it stays a client setting under Settings → Connections.
+The canonical repository URL contains both the backend-issued environment and
+repository identifiers. Legacy unscoped links are resolved by the repository
+route adapter. Connections can be managed under Settings → Connections.
 
 Every shell answers an unknown path with the application shell, so no shell has
 to understand a route:
@@ -162,9 +164,10 @@ to understand a route:
   that is not a static asset, and the window opens the scheme root;
 - the development server serves the shell.
 
-`apps/web/src/lib/workspace/` owns the client workspace: open tabs, the active
-selection, pending Git actions, commit drafts, dialog state, and layout
-preferences. The store is mounted once at the application root, next to the
+The application workspace owns the tab order and active tab across environments;
+environment workspaces own their repository data. `apps/web/src/lib/workspace/`
+exposes presentation state, pending Git actions, commit drafts, dialogs, and
+layout preferences. The store is mounted once at the application root, next to the
 connection runtime, and routes read it and call its actions. The route
 vocabulary lives in `apps/web/src/lib/workspace/routes.ts` and the agreement
 between the URL and the workspace is a pure function in
