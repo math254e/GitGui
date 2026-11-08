@@ -1134,15 +1134,20 @@ async fn dispatch_authorized(
 }
 
 fn authorization_error(method: &str, session: &AuthSession) -> Option<ProtocolError> {
-    let required_scope = required_scope_for_method(method);
-    if let Some(required_scope) = required_scope {
-        if !session.scopes.iter().any(|scope| scope == required_scope) {
-            return Some(ProtocolError::with_details(
-                error_codes::FORBIDDEN,
-                "The current session does not permit this GitGui operation",
-                json!({ "requiredScope": required_scope }),
-            ));
-        }
+    let Some(required_scope) = required_scope_for_method(method) else {
+        // An omitted scope must never make a newly dispatched method public.
+        return Some(ProtocolError::with_details(
+            error_codes::METHOD_NOT_FOUND,
+            "Unknown GitGui method",
+            json!({ "method": method }),
+        ));
+    };
+    if !session.scopes.iter().any(|scope| scope == required_scope) {
+        return Some(ProtocolError::with_details(
+            error_codes::FORBIDDEN,
+            "The current session does not permit this GitGui operation",
+            json!({ "requiredScope": required_scope }),
+        ));
     }
     None
 }
@@ -4963,6 +4968,110 @@ mod tests {
             assert_eq!(
                 required_scope_for_method(method),
                 Some(SCOPE_REPOSITORY_READ)
+            );
+        }
+    }
+
+    #[test]
+    fn every_registered_rpc_has_a_reviewed_scope_and_unknown_methods_fail_closed() {
+        // This independent inventory makes additions and scope changes explicit
+        // in review, rather than merely checking that a scope is present.
+        let manage = [
+            METHOD_REPOSITORIES_OPEN,
+            METHOD_REPOSITORIES_CREATE,
+            METHOD_REPOSITORIES_REMOVE,
+        ];
+        let operate = [
+            METHOD_GIT_STAGE,
+            METHOD_GIT_UNSTAGE,
+            METHOD_GIT_APPLY_HUNKS,
+            METHOD_GIT_DISCARD,
+            METHOD_GIT_AMEND,
+            METHOD_GIT_COMMIT,
+            METHOD_GIT_FETCH,
+            METHOD_GIT_PULL,
+            METHOD_GIT_PUSH,
+            METHOD_GIT_BRANCH_CREATE,
+            METHOD_GIT_TAG_CREATE,
+            METHOD_GIT_TAG_DELETE,
+            METHOD_GIT_TAG_CHECKOUT,
+            METHOD_GIT_TAG_PUSH,
+            METHOD_GIT_TAG_APPLY_FETCH,
+            METHOD_GIT_BRANCH_SWITCH,
+            METHOD_GIT_BRANCH_RENAME,
+            METHOD_GIT_BRANCH_DELETE,
+            METHOD_GIT_WORKTREE_REMOVE,
+            METHOD_GIT_STASH_PUSH,
+            METHOD_GIT_STASH_PUSH_SELECTED,
+            METHOD_GIT_STASH_APPLY,
+            METHOD_GIT_STASH_POP_TARGET,
+            METHOD_GIT_STASH_DROP,
+            METHOD_GIT_STASH_BRANCH,
+            METHOD_GIT_STASH_POP,
+        ];
+        let read = [
+            METHOD_SERVER_GET_INFO,
+            METHOD_SERVER_GET_STATUS,
+            METHOD_REPOSITORIES_LIST,
+            METHOD_REPOSITORIES_GET_SNAPSHOT,
+            METHOD_REPOSITORIES_GET_GRAPH,
+            METHOD_REPOSITORIES_REFRESH,
+            METHOD_GIT_STATUS,
+            METHOD_GIT_TAG_DETAILS,
+            METHOD_GIT_HUNK_PREVIEW,
+            METHOD_GIT_DISCARD_PREVIEW,
+            METHOD_GIT_AMEND_INFO,
+            METHOD_GIT_COMMIT_FILES,
+            gitgui_protocol::METHOD_GIT_COMMIT_WORKING_TREE_FILES,
+            gitgui_protocol::METHOD_GIT_COMMIT_WORKING_TREE_FILE_DIFF,
+            METHOD_GIT_COMMIT_FILE_DIFF,
+            METHOD_GIT_WORKING_TREE_FILE_DIFF,
+            METHOD_GIT_PREFETCH_COMMIT_FILES,
+            METHOD_GIT_PREFETCH_COMMIT_DIFFS,
+            METHOD_GIT_STASH_FILES,
+            METHOD_GIT_STASH_FILE_DIFF,
+            METHOD_GIT_BRANCH_LIST,
+        ];
+        let mut reviewed = std::collections::HashSet::new();
+        for (scope, methods) in [
+            (SCOPE_REPOSITORY_MANAGE, manage.as_slice()),
+            (SCOPE_REPOSITORY_OPERATE, operate.as_slice()),
+            (SCOPE_REPOSITORY_READ, read.as_slice()),
+        ] {
+            for &method in methods {
+                assert!(reviewed.insert(method), "duplicate scope for {method}");
+                assert_eq!(required_scope_for_method(method), Some(scope), "{method}");
+            }
+        }
+        let registered: std::collections::HashSet<_> =
+            gitgui_protocol::WS_METHOD_NAMES.iter().copied().collect();
+        assert_eq!(reviewed, registered, "review every RPC's scope");
+
+        let session = AuthSession {
+            session_id: "test".into(),
+            environment_id: "test".into(),
+            scopes: gitgui_protocol::ADMIN_SCOPES
+                .iter()
+                .map(|scope| (*scope).into())
+                .collect(),
+            expires_at_unix_ms: u64::MAX,
+        };
+        assert_eq!(
+            authorization_error("unmapped.future.method", &session)
+                .unwrap()
+                .code,
+            error_codes::METHOD_NOT_FOUND
+        );
+        for method in registered {
+            assert!(authorization_error(method, &session).is_none(), "{method}");
+            let mut denied = session.clone();
+            denied
+                .scopes
+                .retain(|scope| Some(scope.as_str()) != required_scope_for_method(method));
+            assert_eq!(
+                authorization_error(method, &denied).unwrap().code,
+                error_codes::FORBIDDEN,
+                "{method}"
             );
         }
     }

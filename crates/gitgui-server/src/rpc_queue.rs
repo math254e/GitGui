@@ -167,6 +167,33 @@ mod tests {
     }
 
     #[test]
+    fn mutations_and_locking_previews_use_repository_ordering() {
+        for method in gitgui_protocol::WS_METHOD_NAMES {
+            if matches!(
+                super::super::required_scope_for_method(method),
+                Some(SCOPE_REPOSITORY_OPERATE | SCOPE_REPOSITORY_MANAGE)
+            ) {
+                assert_eq!(
+                    lane(&request("id", method, "repo")),
+                    Lane::Ordered("repo".into()),
+                    "{method}"
+                );
+            }
+        }
+        for method in ["git.hunk_preview", "git.discard_preview", "git.amend_info"] {
+            assert_eq!(
+                lane(&request("id", method, "repo")),
+                Lane::Ordered("repo".into()),
+                "{method}"
+            );
+        }
+        let mut diff = request("id", "git.working_tree_file_diff", "repo");
+        assert_eq!(lane(&diff), Lane::Read);
+        diff.params["prepareHunks"] = json!(true);
+        assert_eq!(lane(&diff), Lane::Ordered("repo".into()));
+    }
+
+    #[test]
     fn independent_reads_and_repositories_bypass_ordered_work() {
         let mut q = RequestQueue::default();
         for (id, method, repo) in [
