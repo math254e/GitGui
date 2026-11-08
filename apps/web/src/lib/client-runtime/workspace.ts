@@ -711,12 +711,13 @@ export class ClientWorkspace {
       const id = assertRepositoryId(repositoryId);
       if (!this._state.openRepositoryIds.includes(id)) return this.state;
 
-      // The mutation snapshot includes changes that caused watcher events while
-      // the mutation was running. Supersede older reads and consume those events.
+      // The server snapshot has no observation watermark. An external change
+      // may have been observed and refreshed after capture but before this
+      // response, so neither queued nor already-drained events prove freshness.
       this.beginRequest(id);
-      this.pendingChanges.delete(id);
-      this.clearUpdateTimerIfIdle();
       this.updateRepository(id, () => ({ repository, snapshot, loading: false, refreshing: false }));
+      this.pendingChanges.set(id, "snapshot");
+      this.scheduleChanges();
       return this.state;
     });
   }

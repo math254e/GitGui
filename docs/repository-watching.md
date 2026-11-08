@@ -52,9 +52,13 @@ The route no longer owns polling or focus listeners.
 Mutation refreshes follow the same invalidation scope. Hunk stage/unstage and
 discard use a status read and promote to a complete snapshot if HEAD or the
 current branch changed. Whole-file stage/unstage adopts the snapshot returned
-by the mutation RPC. Adopting that snapshot supersedes older reads and consumes
-watcher invalidations already queued for the repository, since the server
-computed the snapshot after applying the mutation under its repository lock.
+by the mutation RPC, superseding older reads. It then schedules a full snapshot
+refresh and retains queued file paths: an external Git process or editor can
+change the repository after the server captured its snapshot but before the
+client receives it, even if a watcher-triggered refresh already completed. The
+wire response has no observation watermark to distinguish those cases. This adds
+one full read after each snapshot-returning mutation in exchange for eventual
+convergence; targeted paths also invalidate file content.
 Mutation failures and failures while refreshing after a successful mutation
 remain separate outcomes.
 

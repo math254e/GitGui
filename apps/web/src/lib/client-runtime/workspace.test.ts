@@ -273,22 +273,71 @@ describe("repository invalidations", () => {
     f.workspace.dispose();
   });
 
-  it("adopts mutation snapshots and consumes queued watcher invalidations", async () => {
+  it("revalidates a mutation snapshot when a later filesystem change is observed before its response", async () => {
     const f = await fixture();
     const changed = {
       ...f.snapshot,
       status: { ...f.snapshot.status, changedFiles: [{ path: "staged.txt", originalPath: null, indexStatus: "A", worktreeStatus: "." }] },
     };
-    f.emit("status");
+    const latest = { ...changed, status: { ...changed.status, changedFiles: [...changed.status.changedFiles, {
+      path: "external.txt", originalPath: null, indexStatus: ".", worktreeStatus: "M",
+    }] } };
+    f.client.refreshRepositories.mockResolvedValueOnce({ repositories: [{
+      repositoryId: "repo-one", repository: f.workspace.state.repositories["repo-one"].repository, snapshot: latest,
+    }] });
+    // The server already captured `changed`; an external edit is reported
+    // before the mutation response reaches the workspace.
+    f.emit("status", "repo-one", ["external.txt"]);
     await f.workspace.applyMutationSnapshot(
       "repo-one",
       f.workspace.state.repositories["repo-one"].repository,
       changed,
     );
+    expect(f.workspace.state.repositories["repo-one"].snapshot).toBe(changed);
     await vi.advanceTimersByTimeAsync(100);
     expect(f.client.getGitStatus).not.toHaveBeenCalled();
-    expect(f.client.refreshRepositories).not.toHaveBeenCalled();
-    expect(f.workspace.state.repositories["repo-one"].snapshot).toBe(changed);
+    expect(f.client.refreshRepositories).toHaveBeenCalledTimes(1);
+    expect(f.workspace.state.repositories["repo-one"].snapshot).toEqual(latest);
+    expect(f.workspace.state.fileContentRevisions["repo-one"]).toEqual({ "external.txt": 1 });
+    f.workspace.dispose();
+  });
+
+  it("retains full snapshot invalidations across mutation results", async () => {
+    const f = await fixture();
+    const repository = f.workspace.state.repositories["repo-one"].repository;
+    f.emit("snapshot");
+    await f.workspace.applyMutationSnapshot("repo-one", repository, { ...f.snapshot });
+    await vi.advanceTimersByTimeAsync(100);
+    expect(f.client.refreshRepositories).toHaveBeenCalledExactlyOnceWith(["repo-one"], expect.any(AbortSignal));
+    expect(f.workspace.state.repositories["repo-one"].snapshot).toBe(f.snapshot);
+    f.workspace.dispose();
+  });
+
+  it("revalidates after a watcher refresh completed before the mutation response", async () => {
+    const f = await fixture();
+    const repository = f.workspace.state.repositories["repo-one"].repository;
+    const latest = { ...f.snapshot, status: { ...f.snapshot.status, currentBranch: "external" } };
+    f.client.refreshRepositories.mockResolvedValue({ repositories: [{ repositoryId: "repo-one", repository, snapshot: latest }] });
+    // The external change is refreshed before an older mutation response arrives.
+    f.emit("snapshot");
+    await vi.advanceTimersByTimeAsync(100);
+    expect(f.workspace.state.repositories["repo-one"].snapshot).toBe(latest);
+    await f.workspace.applyMutationSnapshot("repo-one", repository, f.snapshot);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(f.client.refreshRepositories).toHaveBeenCalledTimes(2);
+    expect(f.workspace.state.repositories["repo-one"].snapshot).toBe(latest);
+    f.workspace.dispose();
+  });
+
+  it("preserves the mutation snapshot and exposes a failed follow-up refresh", async () => {
+    const f = await fixture();
+    const repository = f.workspace.state.repositories["repo-one"].repository;
+    const applied = { ...f.snapshot };
+    f.client.refreshRepositories.mockRejectedValueOnce(new Error("refresh unavailable"));
+    await f.workspace.applyMutationSnapshot("repo-one", repository, applied);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(f.workspace.state.repositories["repo-one"].snapshot).toBe(applied);
+    expect(f.workspace.state.repositories["repo-one"].error?.message).toContain("refresh unavailable");
     f.workspace.dispose();
   });
 
