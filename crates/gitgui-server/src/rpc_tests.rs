@@ -26,6 +26,10 @@ async fn stash_listing_failure_reports_error_and_preserves_applied_mutation() {
     oversized.push(b'\n');
     fs::write(&reflog, oversized).unwrap();
     assert!(gitgui_core::git::repository::load_repository(root.path().to_str().unwrap()).is_err());
+    assert!(
+        gitgui_core::git::repository::load_repository_graph(root.path().to_str().unwrap(), &[])
+            .is_err()
+    );
 
     let state = state(root.path());
     let id = state.repositories.read().await[0].summary.id.clone();

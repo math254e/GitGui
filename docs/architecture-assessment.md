@@ -258,22 +258,17 @@ Regression tests cover replacement owners, waiters and independent repositories.
 
 ### Filtered graph work is not bounded by visible graph size
 
-**Confirmed behavior, performance concern pending measurement.**
-`load_repository_graph` first invokes `load_repository`, which reads status,
-worktrees, refs, stashes and full reachable commit history and builds the full
-graph, before selecting reachable commits and building the filtered graph. The
-client requests this when refs are hidden. The frontend virtualizes graph rows
-and indexes visible edges, but that controls rendering cost, not this server
-computation or payload. Profile representative large repositories before
-optimizing.
+**Partially optimized; real-repository profiling remains useful.** Filtered
+requests previously built the full graph before selecting commits and laying
+out the smaller graph. Snapshot and filtered paths now share repository
+preparation, but each builds only the graph it returns. Filtering still reads
+and parses the full reachable history. The client requests this path when refs
+are hidden; frontend virtualization controls rendering, not server work.
 
-An exploratory local debug-build measurement used an isolated synthetic linear
-history of 10,000 commits, selecting an ancestor with 1,000 reachable commits.
-Three `load_repository_graph` calls took 277, 270, and 273 ms. This confirms
-measurable work in that fixture, but is not a production benchmark: it omits
-network and UI costs, uses a warm local repository and a debug build, and does
-not model merge-heavy history. Measure release builds on representative real
-repositories before choosing an optimization.
+Release-build synthetic fixtures showed lower filtered-request times after the
+change; see `docs/graph-engine.md` for the measurements and their limitations.
+They omit network, UI and stash costs. Profile representative real repositories
+before further optimization.
 
 ### Cross-session and linked-worktree coordination
 

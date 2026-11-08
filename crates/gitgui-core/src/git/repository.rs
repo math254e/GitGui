@@ -148,7 +148,32 @@ pub fn load_repository_for_display(path: &str) -> Result<RepositorySnapshot, Git
     load_repository_impl(path, true)
 }
 
+// The common, fully prepared repository data is shared by both snapshot and
+// filtered-graph readers. Only the former needs a layout of the full history.
+struct PreparedRepository {
+    info: RepositoryInfo,
+    status: RepositoryStatus,
+    commits: Vec<CommitInfo>,
+    refs: Vec<CommitRef>,
+    stashes: Vec<StashInfo>,
+    worktrees: Vec<WorktreeInfo>,
+}
+
 fn load_repository_impl(path: &str, display: bool) -> Result<RepositorySnapshot, GitError> {
+    let prepared = prepare_repository(path, display)?;
+    let graph = build_commit_graph(&prepared.commits, prepared.status.head_oid.as_deref());
+    Ok(RepositorySnapshot {
+        info: prepared.info,
+        status: prepared.status,
+        commits: prepared.commits,
+        graph,
+        refs: prepared.refs,
+        stashes: prepared.stashes,
+        worktrees: prepared.worktrees,
+    })
+}
+
+fn prepare_repository(path: &str, display: bool) -> Result<PreparedRepository, GitError> {
     let info = detect_repository(path)?;
     let root = Path::new(&info.root);
     let status = repository_status(root)?;
@@ -229,11 +254,8 @@ fn load_repository_impl(path: &str, display: bool) -> Result<RepositorySnapshot,
             })
             .collect(),
     );
-    let graph = build_commit_graph(&commits, status.head_oid.as_deref());
-
-    Ok(RepositorySnapshot {
+    Ok(PreparedRepository {
         status,
-        graph,
         refs,
         stashes,
         worktrees,
@@ -249,9 +271,9 @@ pub fn load_repository_graph(
     path: &str,
     target_hashes: &[String],
 ) -> Result<RepositoryGraph, GitError> {
-    let snapshot = load_repository(path)?;
-    let commits = reachable_commits(&snapshot.commits, target_hashes);
-    let graph = build_commit_graph(&commits, snapshot.status.head_oid.as_deref());
+    let prepared = prepare_repository(path, false)?;
+    let commits = reachable_commits(&prepared.commits, target_hashes);
+    let graph = build_commit_graph(&commits, prepared.status.head_oid.as_deref());
 
     Ok(RepositoryGraph { commits, graph })
 }
@@ -1274,6 +1296,52 @@ mod tests {
         TestRepository(root)
     }
 
+    fn assert_filtered_matches_snapshot(
+        root: &Path,
+        snapshot: &RepositorySnapshot,
+        targets: &[String],
+    ) -> RepositoryGraph {
+        // This is the previous filtered-graph algorithm: load the complete
+        // snapshot, select its reachable commits, and lay out that selection.
+        let expected = reachable_commits(&snapshot.commits, targets);
+        let graph = build_commit_graph(&expected, snapshot.status.head_oid.as_deref());
+        let actual = load_repository_graph(root.to_str().unwrap(), targets).unwrap();
+        let info = |commits: &[CommitInfo]| {
+            commits
+                .iter()
+                .map(|item| {
+                    (
+                        item.hash.clone(),
+                        item.parents.clone(),
+                        item.author.clone(),
+                        item.timestamp,
+                        item.message.clone(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(info(&actual.commits), info(&expected));
+        assert_eq!(actual.graph.width, graph.width);
+        assert_eq!(actual.graph.head_lane, graph.head_lane);
+        let positions = |graph: &CommitGraph| {
+            graph
+                .commits
+                .iter()
+                .map(|item| (item.hash.clone(), item.row, item.lane))
+                .collect::<Vec<_>>()
+        };
+        let edges = |graph: &CommitGraph| {
+            graph
+                .edges
+                .iter()
+                .map(|edge| (edge.from.clone(), edge.to.clone(), edge.edge_type.clone()))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(positions(&actual.graph), positions(&graph));
+        assert_eq!(edges(&actual.graph), edges(&graph));
+        actual
+    }
+
     #[test]
     fn graph_history_uses_public_refs_and_detached_worktree_heads() {
         let repository = new_test_repository();
@@ -1360,6 +1428,23 @@ mod tests {
                 annotated_tag
             );
         }
+        // Separate visible branch, detached HEAD, and detached linked worktree
+        // roots should retain the same history and graph as the full snapshot.
+        for target in [&branch, &remote, &detached, &linked_head] {
+            let filtered = assert_filtered_matches_snapshot(root, &snapshot, &[target.clone()]);
+            assert_eq!(filtered.commits.len(), 2);
+        }
+        let filtered =
+            assert_filtered_matches_snapshot(root, &snapshot, &[branch.clone(), remote.clone()]);
+        assert_eq!(filtered.commits.len(), 3);
+        assert!(
+            assert_filtered_matches_snapshot(root, &snapshot, &["not-a-known-object".into()])
+                .commits
+                .is_empty()
+        );
+        assert!(assert_filtered_matches_snapshot(root, &snapshot, &[])
+            .commits
+            .is_empty());
         let actual: HashSet<String> = snapshot
             .commits
             .iter()
@@ -1401,6 +1486,15 @@ mod tests {
 
         let snapshot = load_repository(root.to_str().unwrap()).unwrap();
         assert_eq!(snapshot.stashes.len(), 2);
+        for stash in &snapshot.stashes {
+            let filtered = assert_filtered_matches_snapshot(root, &snapshot, &[stash.hash.clone()]);
+            let hashes: HashSet<_> = filtered
+                .commits
+                .iter()
+                .map(|commit| commit.hash.as_str())
+                .collect();
+            assert_eq!(hashes, HashSet::from([base.as_str(), stash.hash.as_str()]));
+        }
         let actual: HashSet<&str> = snapshot
             .commits
             .iter()
@@ -1423,6 +1517,9 @@ mod tests {
         assert!(snapshot.status.head_oid.is_none());
         assert!(snapshot.commits.is_empty());
         assert!(snapshot.graph.commits.is_empty());
+        let graph = assert_filtered_matches_snapshot(root, &snapshot, &["unknown".into()]);
+        assert!(graph.commits.is_empty());
+        assert!(load_repository_graph(root.join("missing").to_str().unwrap(), &[]).is_err());
     }
 
     #[test]

@@ -50,6 +50,21 @@ installed Git -> Rust commit parser -> Rust graph engine -> protocol snapshot
 - `apps/web/src/lib/git-graph/canvas-renderer.ts` turns graph coordinates into pixels. It
   does not assign rows or lanes.
 
+Full snapshots and filtered graphs share the same repository preparation:
+status, refs, worktrees, stash projection, and sorted visible history. A full
+snapshot lays out all prepared commits. A filtered graph selects reachable
+commits first and lays out only that selection; it does not construct the full
+graph as an intermediate. Filtering still reads the full reachable history, so
+its Git and parsing costs depend on repository size.
+
+A local release-build experiment on warm synthetic histories measured six
+requests per case, each returning about 1,000 commits. Median filtered request
+times before and after this change were 104 → 79 ms for 10,000 linear commits,
+100 → 80 ms for 10,001 frequent-merge commits, 289 → 226 ms for 30,000 linear
+commits, and 304 → 239 ms for 30,001 frequent-merge commits. Fixtures contained
+one file and no stashes; measurements omit network and UI, and are not a
+substitute for profiling real repositories.
+
 The canvas is deliberately presentational. Moving topology back into Svelte
 would create a second graph engine and can make rows, refs, HEAD, and edges
 disagree with the server.
