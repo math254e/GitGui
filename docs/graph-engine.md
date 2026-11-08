@@ -1,9 +1,7 @@
 # Git Graph Engine
 
 > Architecture note: this is a GitGui-owned domain design and is independent of
-> the desktop shell and connection runtime. Source paths in this document refer
-> to the current tree and should move mechanically when the Svelte client moves
-> under `apps/web`.
+> the desktop shell and connection runtime.
 
 This document describes the current commit-graph architecture and the behavior
 that future graph changes must preserve.
@@ -47,9 +45,9 @@ installed Git -> Rust commit parser -> Rust graph engine -> protocol snapshot
   classification, graph width, and the actual HEAD lane.
 - `RepositorySnapshot.graph` carries those decisions through the existing
   protocol. No client-side topology is authoritative.
-- `src/lib/components/GitGraph.svelte` joins graph positions to commit and ref
+- `apps/web/src/lib/components/GitGraph.svelte` joins graph positions to commit and ref
   metadata and owns selection, hover state, scrolling, and column sizing.
-- `src/lib/git-graph/canvas-renderer.ts` turns graph coordinates into pixels. It
+- `apps/web/src/lib/git-graph/canvas-renderer.ts` turns graph coordinates into pixels. It
   does not assign rows or lanes.
 
 The canvas is deliberately presentational. Moving topology back into Svelte
