@@ -383,6 +383,13 @@ descriptor, and rejects startup if that child exits during the descriptor
 request. A later connection attempt can then start a replacement. Process
 liveness checks account for both normal and signal-based exits.
 
+Concurrent restarts share one operation. A restart waits for any in-flight
+startup, stops that exact child, and waits for its exit before starting a
+replacement; connection requests wait for the replacement. Quit or update
+preparation interrupts a restart before it can launch another child. If the
+owned child does not exit after termination and force-kill, startup remains
+blocked until that child exits, rather than risking a second local server.
+
 ## Security invariants
 
 - Treat repository paths, Git output, protocol input, and persisted metadata as untrusted.

@@ -13,40 +13,72 @@ interface RunningBackend {
   child: ChildProcessWithoutNullStreams;
   connection: DesktopPreparedConnection;
   control: BackendControl;
+  stopping: boolean;
 }
 
 export class BackendManager {
   private running?: RunningBackend;
   private starting?: Promise<RunningBackend>;
+  private restarting?: Promise<RunningBackend>;
+  private unstoppedChild?: ChildProcessWithoutNullStreams;
   private stopping = false;
   private updateReserved = false;
   private updateShutdownRequested = false;
 
   async getConnection(): Promise<DesktopPreparedConnection> {
-    if (this.updateReserved) throw new Error("The local server is preparing for an app update.");
-    if (this.stopping) throw new Error("The local server is stopping.");
+    this.assertConnectionAdmitted();
+    if (this.restarting) {
+      const running = await this.restarting;
+      this.assertConnectionAdmitted();
+      return running.connection;
+    }
     if (this.running && isChildRunning(this.running.child)) return this.running.connection;
-    return (await this.ensureStarted()).connection;
+    const running = await this.ensureStarted();
+    this.assertConnectionAdmitted();
+    // A restart may have begun while this caller was awaiting initial startup.
+    const restarting = this.restartInFlight();
+    if (restarting) {
+      const replacement = await restarting;
+      this.assertConnectionAdmitted();
+      return replacement.connection;
+    }
+    return running.connection;
   }
+
+  private restartInFlight(): Promise<RunningBackend> | undefined { return this.restarting; }
 
   async restart(): Promise<DesktopPreparedConnection> {
     if (this.updateReserved) throw new Error("The local server is preparing for an app update.");
     if (this.stopping) throw new Error("The local server is stopping.");
-    await this.shutdownCurrent();
-    return (await this.ensureStarted()).connection;
+    const pending = this.restarting ??= this.restartBackend();
+    try {
+      const running = await pending;
+      this.assertConnectionAdmitted();
+      return running.connection;
+    } finally {
+      if (this.restarting === pending) this.restarting = undefined;
+    }
   }
 
   async shutdown(): Promise<void> {
     this.stopping = true;
+    try { await this.restarting; } catch { /* A quit supersedes the restart. */ }
     // A ready/descriptor result can arrive after quit was requested. Retain the
     // startup promise until it publishes (or cleans up) its exact owned child.
     try { await this.starting; } catch { /* Failed startup already owns cleanup. */ }
     await this.shutdownCurrent();
+    if (this.unstoppedChild) await this.stopChild(this.unstoppedChild);
   }
 
   async shutdownForUpdate(): Promise<void> {
     this.updateReserved = true;
+    try { await this.restarting; } catch (error) {
+      // Only the admission interruption is expected; a failure to stop the
+      // exact child must prevent installation.
+      if (!(error instanceof RestartInterruptedError)) throw error;
+    }
     if (this.starting) await this.starting;
+    this.assertNoUnstoppedChild();
     const running = this.running;
     if (!running || !isChildRunning(running.child)) return;
     await running.control.request("prepare-update");
@@ -72,12 +104,52 @@ export class BackendManager {
 
   private async ensureStarted(): Promise<RunningBackend> {
     if (this.stopping) throw new Error("The local server is stopping.");
+    this.assertNoUnstoppedChild();
     if (this.starting) return this.starting;
     this.starting = this.startBackend();
     try {
       return await this.starting;
     } finally {
       this.starting = undefined;
+    }
+  }
+
+  private async restartBackend(): Promise<RunningBackend> {
+    // Own and stop the startup that was already in flight, rather than return
+    // that same child as the result of a restart.
+    if (this.starting) await this.starting;
+    this.assertRestartAdmitted();
+    if (this.unstoppedChild) await this.stopChild(this.unstoppedChild);
+    await this.shutdownCurrent();
+    this.assertRestartAdmitted();
+    return this.ensureStarted();
+  }
+
+  private assertRestartAdmitted(): void {
+    if (this.stopping || this.updateReserved) throw new RestartInterruptedError();
+  }
+
+  private assertConnectionAdmitted(): void {
+    if (this.updateReserved) throw new Error("The local server is preparing for an app update.");
+    if (this.stopping) throw new Error("The local server is stopping.");
+    this.assertNoUnstoppedChild();
+  }
+
+  private assertNoUnstoppedChild(): void {
+    if (this.unstoppedChild && isChildRunning(this.unstoppedChild)) {
+      throw new Error("The previous local server has not stopped.");
+    }
+    this.unstoppedChild = undefined;
+  }
+
+  private async stopChild(child: ChildProcessWithoutNullStreams): Promise<void> {
+    try {
+      await stopOwnedChild(child);
+      if (this.unstoppedChild === child) this.unstoppedChild = undefined;
+    } catch (error) {
+      // A timed-out child is still owned; never start another over it.
+      this.unstoppedChild = child;
+      throw error;
     }
   }
 
@@ -113,13 +185,14 @@ export class BackendManager {
       if (!isChildRunning(child)) throw new Error("GitGui server exited before readiness completed.");
     } catch (error) {
       control.dispose();
-      terminate(child);
+      await this.stopChild(child);
       throw error;
     }
     const httpUrl = `http://${address}`;
     const running: RunningBackend = {
       child,
       control,
+      stopping: false,
       connection: {
         httpUrl,
         descriptor,
@@ -128,7 +201,7 @@ export class BackendManager {
     };
     child.once("exit", () => {
       if (this.running === running) this.running = undefined;
-      if (!this.stopping) console.error("[gitgui] managed server exited unexpectedly");
+      if (!this.stopping && !running.stopping) console.error("[gitgui] managed server exited unexpectedly");
     });
     this.running = running;
     return running;
@@ -136,16 +209,16 @@ export class BackendManager {
 
   private async shutdownCurrent(): Promise<void> {
     const running = this.running;
-    this.running = undefined;
     if (!running || !isChildRunning(running.child)) return;
+    running.stopping = true;
     running.control.dispose();
-    terminate(running.child);
-    await Promise.race([
-      new Promise<void>((resolve) => running.child.once("exit", () => resolve())),
-      new Promise<void>((resolve) => setTimeout(resolve, 5_000)),
-    ]);
-    if (isChildRunning(running.child)) running.child.kill("SIGKILL");
+    await this.stopChild(running.child);
+    if (this.running === running) this.running = undefined;
   }
+}
+
+class RestartInterruptedError extends Error {
+  constructor() { super("The local server restart was interrupted by shutdown or update preparation."); }
 }
 
 function locateServerExecutable(): string {
@@ -206,6 +279,19 @@ function isChildRunning(child: ChildProcessWithoutNullStreams): boolean {
 
 function terminate(child: ChildProcessWithoutNullStreams): void {
   if (isChildRunning(child) && !child.killed) child.kill();
+}
+
+async function stopOwnedChild(child: ChildProcessWithoutNullStreams): Promise<void> {
+  if (!isChildRunning(child)) return;
+  terminate(child);
+  try {
+    await waitForBackendExit(child, 5_000);
+  } catch {
+    if (!isChildRunning(child)) return;
+    child.kill("SIGKILL");
+    try { await waitForBackendExit(child, 5_000); }
+    catch { throw new Error("The local server did not stop."); }
+  }
 }
 
 function redact(value: string): string {
