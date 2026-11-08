@@ -396,6 +396,11 @@ and transient failures do not trigger another exchange. Cached primary sessions
 are likewise validated before reuse, recovering rejected sessions through the
 current primary grant after a Rust server restart.
 
+The adapted SSH manager's bounded cleanup-journal scan advances independently
+per resolved transport route. This GitGui-specific ownership recovery prevents
+malformed or unrelated records in an earlier batch from starving later cleanup;
+the 1,024-entry and 15-second limits and matching-route checks remain in force.
+
 A development environment that was started without a bootstrap credential does
 not require authentication. The browser client reaches it with no credential at
 all: the primary environment auth yields an empty bearer, and

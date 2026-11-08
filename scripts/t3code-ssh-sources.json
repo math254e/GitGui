@@ -78,7 +78,7 @@
         {
           "target": "packages/ssh/src/tunnel.ts",
           "mode": "adapted",
-          "sha256": "88c813f6856ff1e9b0d0685e5422ec3faffae9f6ddfe39a656ea7a7533198f73",
+          "sha256": "2013e22f2d871aa560ee762670e46e48a0229f786f9f116bfb5bca21d54034ac",
           "tests": [
             "packages/ssh/src/manager-lifecycle.test.ts"
           ]

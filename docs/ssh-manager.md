@@ -59,8 +59,13 @@ A subsequent successful SSH connection reconciles matching transport routes
 using each record's original locator/acquisition/instance. Other routes and live
 acquisitions are skipped. Size/schema/UUID checks precede use. Oversized/malformed
 records remain for explicit reconciliation. Each pass examines at most 1024
-directory entries with a 15-second total budget; unfinished records remain for
-the next connection. Pending IDs cannot overwrite their journal after restart.
+directory entries with a 15-second total budget. A per-route round-robin cursor
+advances before each record so timeout, malformed records, or unrelated entries
+cannot permanently starve later cleanup; repeated connections on a stable
+directory eventually inspect every entry. Concurrent passes for the same route
+do not race the cursor. The cursor is in memory and its map is bounded by the
+manager's 8,192 acquisition-ID limit. Unfinished records remain for a later
+connection. Pending IDs cannot overwrite their journal after restart.
 Cancellation by a known ID after restart reports `cleanup-pending` while that
 journal survives; an absent live scope is not evidence of remote exit.
 

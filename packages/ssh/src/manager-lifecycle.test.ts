@@ -238,6 +238,77 @@ describe("SSH manager scoped resource ownership", () => {
     expect(await readdir(join(f.directory, "cleanup"))).not.toContain(`${op.id}.json`);
   });
 
+  it("advances recovery independently for alternating routes past malformed journal batches", async () => {
+    const f = await setup();
+    const pendingId = "ffffffff-ffff-4fff-afff-ffffffffffff";
+    const pending = f.acquire("first", pendingId);
+    await pending.promise;
+    f.state.onHost = operation => operation === "cancel" ? Effect.fail(failure()) : undefined;
+    expect(await f.run(f.manager.cancelConnection(pendingId))).toBe("cleanup-pending");
+    const directory = join(f.directory, "cleanup");
+    // Valid IDs but malformed records must be retained and cannot permanently
+    // prevent a later recovery record from being inspected.
+    // Together with the pending and current records, there are exactly two
+    // batches. A global cursor would send the other route to the second batch
+    // and repeatedly send this route back to the first.
+    for (let start = 0; start < 2046; start += 128) {
+      await Promise.all(Array.from({ length: Math.min(128, 2046 - start) }, (_, index) => {
+        const suffix = (start + index).toString(16).padStart(12, "0");
+        return writeFile(join(directory, `00000000-0000-4000-8000-${suffix}.json`), "{}");
+      }));
+    }
+    f.state.onHost = undefined;
+    const first = f.acquire();
+    await first.promise;
+    await f.run(f.manager.cancelConnection(first.id));
+    const other = f.acquire("second");
+    await other.promise;
+    await f.run(f.manager.cancelConnection(other.id));
+    expect(f.state.hostCalls.filter(call => call.operation === "cancel" && call.request.acquisitionId === pendingId)).toHaveLength(1);
+    await f.acquire().promise;
+    expect(f.state.hostCalls.filter(call => call.operation === "cancel" && call.request.acquisitionId === pendingId)).toHaveLength(2);
+    expect(await readdir(directory)).not.toContain(`${pendingId}.json`);
+    expect(await readFile(join(directory, "00000000-0000-4000-8000-000000000000.json"), "utf8")).toBe("{}");
+  });
+
+  it("resumes after the last attempted journal when a helper times out", async () => {
+    const f = await setup();
+    const ids = [1, 2, 3].map(n => `00000000-0000-4000-8000-${n.toString().padStart(12, "0")}`);
+    const pending = f.acquire("first", ids[0]);
+    await pending.promise;
+    f.state.onHost = operation => operation === "cancel" ? Effect.fail(failure()) : undefined;
+    expect(await f.run(f.manager.cancelConnection(ids[0]))).toBe("cleanup-pending");
+    const directory = join(f.directory, "cleanup");
+    const record = JSON.parse(await readFile(join(directory, `${ids[0]}.json`), "utf8"));
+    for (const id of ids.slice(1)) {
+      await writeFile(join(directory, `${id}.json`), JSON.stringify({ ...record, request: { ...record.request, acquisitionId: id } }));
+    }
+    const entered = Deferred.makeUnsafe<void>();
+    let stalled = false;
+    f.state.onHost = (operation, request) => {
+      if (operation === "cancel" && request.acquisitionId === ids[0] && !stalled) {
+        stalled = true;
+        return Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never));
+      }
+      return undefined;
+    };
+    f.state.hostCalls.length = 0;
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const first = f.acquire("first", "ffffffff-ffff-4fff-afff-fffffffffff1");
+      await f.run(Deferred.await(entered));
+      await vi.advanceTimersByTimeAsync(15_000);
+      await first.promise;
+      const next = f.acquire("first", "ffffffff-ffff-4fff-afff-fffffffffff2");
+      await next.promise;
+      expect(f.state.hostCalls.filter(call => call.operation === "cancel").map(call => call.request.acquisitionId))
+        .toEqual([ids[0], ids[1], ids[2], ids[0]]);
+      expect(await readdir(directory)).not.toContain(`${ids[0]}.json`);
+      expect(await readdir(directory)).not.toContain(`${ids[1]}.json`);
+      expect(await readdir(directory)).not.toContain(`${ids[2]}.json`);
+    } finally { vi.useRealTimers(); }
+  });
+
   it("rejects a different environment returned by the helper before starting a forward", async () => {
     const f = await setup(); const id = randomUUID();
     await expect(f.run(f.manager.ensureEnvironment({ kind: "ssh", host: "first" }, { operationId: id, expectedEnvironmentId: secondEnvironmentId }))).rejects.toMatchObject({ category: "identity" });

@@ -1,7 +1,8 @@
 // Adapted from T3 Code 70cd258d8aac43ea57494527b00bf36de3efa6c0 packages/ssh/src/tunnel.ts.
 // Keeps Deferred pending entries, entry scopes and scoped auth secrets. GitGui's
-// per-waiter Rust acquisitions, tombstones and durable cleanup journal are deliberate
-// ownership corrections. Direct HTTP remains the client boundary. See docs/ssh-manager.md.
+// per-waiter Rust acquisitions, tombstones and durable cleanup journal with bounded
+// round-robin recovery are deliberate ownership corrections. Direct HTTP remains
+// the client boundary. See docs/ssh-manager.md.
 // Historical EnvironmentIds stay opaque across ensure, claim and cleanup journals.
 import { isValidEnvironmentId } from "@gitgui/contracts/environment";
 import type { DesktopCredential, DesktopPreparedConnection, DesktopSshCleanup, DesktopSshRequest, DesktopSshTarget } from "@gitgui/contracts/desktop";
@@ -98,6 +99,10 @@ export const makeSshEnvironmentManager = Effect.fn("ssh.manager.make")(function*
   const journalDirectory = path.join(options.stateDirectory, "cleanup");
   let closed = false;
   let closing: Deferred.Deferred<void> | undefined;
+  // Each resolved route advances independently; alternating hosts must not
+  // repeatedly inspect disjoint halves of the same recovery directory.
+  const journalCursors = new Map<string, number>();
+  const reconcilingRoutes = new Set<string>();
   const assertOpen = () => closed ? Effect.fail(cancelled()) : Effect.void;
   const assertActive = (op: Acquisition) => closed || op.cancelled ? Effect.fail(cancelled()) : Effect.void;
   const reserveId = (id: string) => Effect.suspend(() => {
@@ -222,36 +227,53 @@ export const makeSshEnvironmentManager = Effect.fn("ssh.manager.make")(function*
     return { ...tunnel, descriptor };
   }));
 
-  const reconcile = (target: ResolvedSshTarget) => Effect.gen(function* () {
-    if (!(yield* fs.exists(journalDirectory))) return;
-    const files = yield* fs.readDirectory(journalDirectory);
-    for (const file of files.slice(0, 1024)) {
-      const id = file.slice(0, -5);
-      if (!file.endsWith(".json") || !UUID.test(id) || (acquisitions.has(id) && !acquisitions.get(id)!.cancelled)) continue;
-      const stat = yield* fs.stat(journalFile(id));
-      if (stat.size > 32 * 1024) continue;
-      const bytes = yield* fs.readFileString(journalFile(id)).pipe(Effect.orElseSucceed(() => ""));
-      if (Buffer.byteLength(bytes) > 32 * 1024) continue;
-      let record: JournalRecord;
-      try {
-        record = JSON.parse(bytes);
-        const request = Schema.decodeUnknownSync(journalRequestSchema, { onExcessProperty: "error" })(record.request);
-        record.request = request;
-        if (record.version !== 1 || typeof record.claimAttempted !== "boolean" || record.request.acquisitionId !== id || !record.target || remoteStateKey({ ...record.target, remoteLocator: undefined }) !== remoteStateKey({ ...target, remoteLocator: undefined }) ||
-            (record.request.instanceId !== null && !UUID.test(record.request.instanceId)) || (record.request.expectedEnvironmentId !== null && !isValidEnvironmentId(record.request.expectedEnvironmentId))) continue;
-        const locator = record.request.locator;
-        if (locator.kind !== "default" && (!isValidEnvironmentId(locator.environmentId) || locator.environmentId !== record.request.expectedEnvironmentId ||
-          (locator.kind === "directory" ? !locator.path.startsWith("/") || /[\x00-\x1f]/.test(locator.path) : !/^[A-Za-z0-9_-]{1,48}$/.test(locator.stateKey)))) continue;
-      } catch { continue; }
-      const result = yield* dependencies.host(target, record.claimAttempted && record.request.instanceId ? "release" : "cancel", record.request, authOptions(target)).pipe(
-        Effect.map(cleanupOutcome), Effect.catch(() => Effect.succeed("cleanup-pending" as const)),
-      );
-      if (result !== "cleanup-pending") {
-        yield* fs.remove(journalFile(id)).pipe(Effect.ignore);
-        if (retired.has(id)) retired.set(id, result);
+  const reconcile = (target: ResolvedSshTarget) => Effect.suspend(() => {
+    const route = remoteStateKey({ ...target, remoteLocator: undefined });
+    if (reconcilingRoutes.has(route)) return Effect.void;
+    reconcilingRoutes.add(route);
+    return Effect.gen(function* () {
+      if (!(yield* fs.exists(journalDirectory))) return;
+      const files = (yield* fs.readDirectory(journalDirectory)).sort();
+      if (!files.length) return;
+      const start = (journalCursors.get(route) ?? 0) % files.length;
+      const count = Math.min(files.length, 1024);
+      for (let offset = 0; offset < count; offset++) {
+        const index = (start + offset) % files.length;
+        const file = files[index];
+        // Persist progress before each potentially blocking read or helper call;
+        // a timed-out pass must not skip the unvisited part of its batch.
+        journalCursors.set(route, (index + 1) % files.length);
+        const id = file.slice(0, -5);
+        if (!file.endsWith(".json") || !UUID.test(id) || (acquisitions.has(id) && !acquisitions.get(id)!.cancelled)) continue;
+        const stat = yield* fs.stat(journalFile(id));
+        if (stat.size > 32 * 1024) continue;
+        const bytes = yield* fs.readFileString(journalFile(id)).pipe(Effect.orElseSucceed(() => ""));
+        if (Buffer.byteLength(bytes) > 32 * 1024) continue;
+        let record: JournalRecord;
+        try {
+          record = JSON.parse(bytes);
+          const request = Schema.decodeUnknownSync(journalRequestSchema, { onExcessProperty: "error" })(record.request);
+          record.request = request;
+          if (record.version !== 1 || typeof record.claimAttempted !== "boolean" || record.request.acquisitionId !== id || !record.target || remoteStateKey({ ...record.target, remoteLocator: undefined }) !== remoteStateKey({ ...target, remoteLocator: undefined }) ||
+              (record.request.instanceId !== null && !UUID.test(record.request.instanceId)) || (record.request.expectedEnvironmentId !== null && !isValidEnvironmentId(record.request.expectedEnvironmentId))) continue;
+          const locator = record.request.locator;
+          if (locator.kind !== "default" && (!isValidEnvironmentId(locator.environmentId) || locator.environmentId !== record.request.expectedEnvironmentId ||
+            (locator.kind === "directory" ? !locator.path.startsWith("/") || /[\x00-\x1f]/.test(locator.path) : !/^[A-Za-z0-9_-]{1,48}$/.test(locator.stateKey)))) continue;
+        } catch { continue; }
+        const result = yield* dependencies.host(target, record.claimAttempted && record.request.instanceId ? "release" : "cancel", record.request, authOptions(target)).pipe(
+          Effect.map(cleanupOutcome), Effect.catch(() => Effect.succeed("cleanup-pending" as const)),
+        );
+        if (result !== "cleanup-pending") {
+          yield* fs.remove(journalFile(id)).pipe(Effect.ignore);
+          if (retired.has(id)) retired.set(id, result);
+        }
       }
-    }
-  }).pipe(Effect.timeoutOrElse({ duration: 15_000, orElse: () => Effect.void }), Effect.ignore);
+    }).pipe(
+      Effect.timeoutOrElse({ duration: 15_000, orElse: () => Effect.void }),
+      Effect.ensuring(Effect.sync(() => { reconcilingRoutes.delete(route); })),
+      Effect.ignore,
+    );
+  });
 
   const prepare = (op: Acquisition) => Effect.gen(function* () {
     yield* assertActive(op);
