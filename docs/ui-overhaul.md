@@ -189,5 +189,46 @@ the final corrected dark screen was captured again. Browser checks confirmed
 keyboard focus and Escape returning focus to Create theme. Nine focused tests
 passed after that correction. The full frontend suite before the modal focus
 fix passed 560 tests, with seven opt-in live tests skipped. The follow-up visual
-pass was stopped before another narrow-screen or live remote/SSH walkthrough;
-the earlier validation above records the broader baseline coverage.
+pass initially stopped before another narrow-screen walkthrough. The repository
+pass below records the subsequent checks. Live remote/SSH verification remains
+outside this pass.
+
+## Repository workspace polish
+
+- Sidebar disclosure rows have a centered 36px header, flat, square hover
+  highlights reaching the separators, and a separate right-aligned count
+  column. Collapsed sections contain only the header; content spacing applies
+  only while expanded. Local/remote branches, tags,
+  worktrees, stashes, and locations keep their existing order, trees, and saved
+  expansion state. All sidebar disclosures expose their expansion state and
+  controlled region to assistive technology.
+- Commit details retain their accent-colored leading icon and themed borders. The
+  message resize handle remains available with pointer and keyboard interaction;
+  its accessibility orientation now matches its vertical resize operation.
+- Stage and Unstage actions share readable 12px labels and retain their original
+  accent/red colors, fills, and borders. The commit form uses neutral resting
+  borders on its fields and button while retaining colored fills, including the
+  original disabled fill. Focused text fields use a subdued accent border without
+  an outer glow. Authorization, staging, commit,
+  and amend behavior are unchanged. Branch labels expose their full value in a
+  tooltip.
+- Home catalog messages, missing badges, and Create/Browse controls retain their
+  original colors and borders, along with host labels, paths, offline/missing
+  text, retry actions, and disabled reasons.
+
+Inspected the real workspace in T3 light and Grove dark at 1440×900 and 900×700,
+including keyboard sidebar toggles, the commit context menu, and host-path and
+theme dialogs. No page-level horizontal overflow was observed. The existing
+development stack was reused throughout. Isolated browser contexts kept the
+user's workspace and appearance storage separate from verification.
+
+Rendered the real staging component before/after with representative changed
+files. Fixture Stage/Unstage callbacks still fire, and an empty summary still
+disables Commit; no Git mutation was performed. Rendered the real home with
+local/remote, offline/missing and unavailable-action fixtures at 900×700:
+local machine names stay omitted, remote paths/names remain readable, and
+remote Open/Create stay disabled with reasons. These fixtures are presentation
+checks, not live remote-host tests. Focused sidebar, location, reader, workspace,
+discard, and home tests pass; disclosure semantics are covered by a regression
+assertion. `npm run check`, `npm run build`, and `git diff --check` pass, with
+the existing WorkingTreeFileList accessibility and Rollup/chunk-size warnings.
