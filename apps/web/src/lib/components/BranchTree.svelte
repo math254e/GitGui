@@ -27,6 +27,11 @@
     checkedOutBranches?: ReadonlySet<string>;
     onRenameBranch?: (branch: CommitRef) => void;
     onDeleteBranch?: (branch: CommitRef) => void;
+    canIntegrate?: boolean;
+    canRebase?: boolean;
+    onIntegrateBranch?: (branch: CommitRef, action: "merge" | "rebase") => void;
+    canRewritePush?: boolean;
+    onRewritePush?: () => void;
     worktrees?: WorktreeInfo[];
     canRemoveWorktree?: boolean;
     onRemoveWorktree?: (worktree: WorktreeInfo, deleteBranch: boolean) => void;
@@ -50,6 +55,11 @@
     checkedOutBranches = new Set<string>(),
     onRenameBranch,
     onDeleteBranch,
+    canIntegrate,
+    canRebase,
+    onIntegrateBranch,
+    canRewritePush,
+    onRewritePush,
     worktrees = [],
     canRemoveWorktree = false,
     onRemoveWorktree,
@@ -429,7 +439,7 @@
   }
 
   function openBranchContextMenu(row: HTMLElement, position: { x: number; y: number }) {
-    if (refType !== "localBranch") return;
+    if (refType !== "localBranch" && !onIntegrateBranch) return;
     const branch = branchByPath.get(normalizePath(row.getAttribute("data-item-path") ?? ""));
     if (!branch) return;
     const key = contextKey;
@@ -440,6 +450,10 @@
       checkedOut: currentBranch === branch.shortName || checkedOutBranches.has(branch.shortName),
       worktree,
       canRemoveWorktree,
+      canIntegrate,
+      canRebase,
+      isCurrent: refType === "localBranch" && currentBranch === branch.shortName,
+      canRewritePush,
     }), position, contextMenuOwner, worktree?.isMain === false ? { width: 320 } : undefined);
     // Keep the menu target visible through refreshes and virtualized row replacements.
     const treePath = row.dataset.itemPath ?? "";
@@ -455,6 +469,9 @@
       if (key !== contextKey) return;
       if (selected === `rename:${branch.name}`) onRenameBranch?.(branch);
       if (selected === `delete:${branch.name}`) onDeleteBranch?.(branch);
+      if (selected === `merge:${branch.name}`) onIntegrateBranch?.(branch, "merge");
+      if (selected === `rebase:${branch.name}`) onIntegrateBranch?.(branch, "rebase");
+      if (selected === `rewrite-push:${branch.name}`) onRewritePush?.();
       if (worktree && selected === `remove-worktree:${branch.name}`) onRemoveWorktree?.(worktree, false);
       if (worktree && selected === `remove-worktree-branch:${branch.name}`) onRemoveWorktree?.(worktree, true);
     });
@@ -462,7 +479,7 @@
 
   function handleContextMenu(event: MouseEvent) {
     const row = contextMenuRow(event);
-    if (!row || refType !== "localBranch") return;
+    if (!row || (refType !== "localBranch" && !onIntegrateBranch)) return;
     event.preventDefault();
     openBranchContextMenu(row, { x: event.clientX, y: event.clientY });
   }
@@ -470,7 +487,7 @@
   function handleContextMenuKey(event: KeyboardEvent) {
     if (event.key !== "ContextMenu" && event.key !== "Apps" && !(event.shiftKey && event.key === "F10")) return;
     const row = contextMenuRow(event) ?? host?.querySelector<HTMLElement>('[data-item-focused="true"][data-item-type="file"]');
-    if (!row || refType !== "localBranch") return;
+    if (!row || (refType !== "localBranch" && !onIntegrateBranch)) return;
     event.preventDefault();
     event.stopPropagation();
     const rect = row.getBoundingClientRect();

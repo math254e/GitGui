@@ -1,8 +1,50 @@
 # Branch context menus
 
+## Merge and rebase
+
+The branch sidebar offers merge into the current branch and rebase of the
+current branch onto a selected local or remote-tracking ref. A graph commit's
+context menu can rebase the current branch onto that exact commit, even when
+no branch points to it. Rebase starts directly without a confirmation dialog;
+merge retains its review dialog. The `git.integration.commit_target` capability
+keeps rebase disabled on older servers that cannot accept commit IDs. The server rechecks the current branch and
+target before invoking Git and refuses a dirty tracked worktree. Git merges with
+fast-forward enabled or creates a merge commit. Rebase uses linear replay,
+without autostash, autosquash, or updating other branches. Rebase can skip
+already-applied commits and rewrite published history.
+
+The server inspects the checkout's own Git metadata and unmerged index, including
+for externally started operations. An in-progress row in the graph has a
+context menu with Continue, Abort, and, for rebase, Skip; it remains available
+even when no files are changed. Users resolve files externally and stage them in
+GitGui or outside it. Repository status invalidations re-inspect Git state.
+Abort and Skip require confirmation. Unknown
+sequencer states are displayed without recovery actions. Git hooks and signing
+remain enabled; editors are suppressed. Git command execution currently has no
+hard deadline for a hook or signing program that hangs, so an operation can
+continue after a client request times out. Refresh before deciding what to do;
+never repeat an operation solely because its response was lost.
+
+An optional **Push rewritten branch…** action on the current branch's context
+menu checks the current branch's
+configured remote upstream directly and requires a separate confirmation. It
+supports one matching fetch and push destination; ambiguous or different URLs
+must be configured before use. The dialog displays the remote branch and tips,
+and reports affected commit counts when the local object database can calculate
+them. The server rechecks the review and pushes the reviewed local commit with
+an explicit expected-tip `--force-with-lease`. Concurrent remote updates are
+rejected; a lease cannot protect collaborators who already used old history.
+GitGui does not record a pre-rebase remote baseline, so it cannot report whether
+the remote changed during the rebase itself. External configuration changes can
+race the final validation and Git invocation, as with other external Git
+operations; avoid changing remote configuration concurrently. Credentials are
+not included in the review payload or shown in the dialog.
+
+Squash merge, interactive rebase, and an in-app conflict editor remain deferred.
+
 Local branches in the sidebar and branch badges in the graph expose **Rename
 branch…** and **Delete branch…**. A commit's context menu exposes **Create branch
-here…**, plus submenus for the local branches pointing to that commit. Folder
+here…**, plus sections for the local branches pointing to that commit. Folder
 rows and remote refs do not offer local rename/delete actions.
 
 Creation uses the selected commit's object ID, rather than whichever commit is

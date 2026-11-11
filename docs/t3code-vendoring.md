@@ -273,6 +273,10 @@ messages, with requests addressed by `id`, `method`, and `params`.
 - Tag checkout/push, bounded annotation details, and reviewed fetch replacements
   extend that same table. Main fetch/push responses add optional conflict/warning
   fields; no session, reconnect, or transport behavior changes.
+- GitGui's integration methods extend the same table with inspection, review,
+  start, and recovery for Git-owned merge and rebase operations, plus a
+  reviewed, lease-protected rewrite push. They do not
+  change session, reconnect, or transport behavior.
 - `rpc/session.ts` multiplexes requests, responses, and events over
   `effect/socket` instead of building an `RpcClient.Protocol`.
 - `rpc/client.ts` exposes one `request` and one `subscribeEvents` instead of a

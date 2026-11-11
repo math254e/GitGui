@@ -41,6 +41,12 @@ export const WS_METHOD_NAMES = [
   "git.fetch",
   "git.pull",
   "git.push",
+  "git.integration.inspect",
+  "git.integration.review",
+  "git.integration.start",
+  "git.integration.recover",
+  "git.rewrite_push.review",
+  "git.rewrite_push.execute",
   "git.branch.list",
   "git.branch.create",
   "git.tag.create",
@@ -74,6 +80,38 @@ export const STASH_FEATURE_METHOD_NAMES = [
   "git.stash.files",
   "git.stash.file_diff",
 ] as const;
+
+export type GitIntegrationKind = "merge" | "rebase" | "unknown";
+
+export type GitIntegrationState = { kind: GitIntegrationKind, unresolvedPaths: Array<string>, };
+
+export type GitIntegrationReview = { currentRef: string, headOid: string,
+/**
+ * Literal branch ref or full commit object ID for rebase.
+ */
+targetRef: string, targetOid: string, };
+
+export type GitIntegrationAction = "merge" | "rebase";
+
+export type GitIntegrationRecovery = "continue" | "abort" | "skip";
+
+export type GitIntegrationReviewParams = { repositoryId: string,
+/**
+ * Literal branch ref or full commit object ID for rebase.
+ */
+targetRef: string, };
+
+export type GitIntegrationStartParams = { repositoryId: string, review: GitIntegrationReview, action: GitIntegrationAction, };
+
+export type GitIntegrationRecoverParams = { repositoryId: string, kind: GitIntegrationKind, action: GitIntegrationRecovery, };
+
+export type GitIntegrationFailure = { message: string, stderr: string, status: number | null, };
+
+export type GitIntegrationOutcome = { state: GitIntegrationState | null, failure: GitIntegrationFailure | null, };
+
+export type GitRewritePushReview = { currentRef: string, localOid: string, remote: string, destinationRef: string, remoteOid: string, destinationFingerprint: string, commitsRemoved: number | null, };
+
+export type GitRewritePushParams = { repositoryId: string, pushReview: GitRewritePushReview, };
 
 export type SshEnvironmentLocator = { "kind": "default" } | { "kind": "directory", path: string, environmentId: string, } | { "kind": "legacy", stateKey: string, environmentId: string, };
 

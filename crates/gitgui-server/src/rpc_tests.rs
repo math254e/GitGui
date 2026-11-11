@@ -12,6 +12,110 @@ pub(super) type Client = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
 pub(super) const GIT_FIXTURE_DEADLINE: Duration = Duration::from_secs(120);
 
 #[tokio::test]
+async fn integration_rebase_replays_a_clean_branch_over_the_websocket() {
+    let root = repository();
+    git(root.path(), &["restore", "file.txt"]);
+    git(root.path(), &["switch", "-c", "feature"]);
+    fs::write(root.path().join("feature.txt"), "feature\n").unwrap();
+    git(root.path(), &["add", "feature.txt"]);
+    git(root.path(), &["commit", "-m", "feature"]);
+    git(root.path(), &["switch", "main"]);
+    fs::write(root.path().join("main.txt"), "main\n").unwrap();
+    git(root.path(), &["add", "main.txt"]);
+    git(root.path(), &["commit", "-m", "main"]);
+    let main_tip = git(root.path(), &["rev-parse", "HEAD"]);
+    git(root.path(), &["switch", "feature"]);
+    let state = state(root.path());
+    assert!(state
+        .info
+        .capabilities
+        .iter()
+        .any(|item| item == gitgui_protocol::CAPABILITY_GIT_INTEGRATION_COMMIT_TARGET));
+    let id = state.repositories.read().await[0].summary.id.clone();
+    let (mut client, _, server) = socket(
+        state,
+        vec![
+            SCOPE_REPOSITORY_READ.into(),
+            SCOPE_REPOSITORY_OPERATE.into(),
+        ],
+    )
+    .await;
+    send(
+        &mut client,
+        "review",
+        gitgui_protocol::METHOD_GIT_INTEGRATION_REVIEW,
+        json!({"repositoryId": id, "targetRef": main_tip}),
+    )
+    .await;
+    let reviewed = receive(&mut client).await;
+    assert_eq!(reviewed["ok"], true, "{reviewed}");
+    send(
+        &mut client,
+        "start",
+        gitgui_protocol::METHOD_GIT_INTEGRATION_START,
+        json!({"repositoryId": id, "review": reviewed["result"], "action": "rebase"}),
+    )
+    .await;
+    let result = receive(&mut client).await;
+    assert_eq!(result["ok"], true, "{result}");
+    assert!(result["result"]["failure"].is_null(), "{result}");
+    assert!(result["result"]["state"].is_null(), "{result}");
+    assert_eq!(git(root.path(), &["rev-parse", "HEAD^"]), main_tip);
+    client.close(None).await.unwrap();
+    server.abort();
+}
+
+#[tokio::test]
+async fn integration_review_and_mutations_enforce_scopes() {
+    let root = repository();
+    git(root.path(), &["restore", "file.txt"]);
+    git(root.path(), &["branch", "feature"]);
+    let state = state(root.path());
+    let id = state.repositories.read().await[0].summary.id.clone();
+    let (mut reader, _, reader_server) =
+        socket(state.clone(), vec![SCOPE_REPOSITORY_READ.into()]).await;
+    send(
+        &mut reader,
+        "review",
+        gitgui_protocol::METHOD_GIT_INTEGRATION_REVIEW,
+        json!({"repositoryId": id, "targetRef": "refs/heads/feature"}),
+    )
+    .await;
+    let reviewed = receive(&mut reader).await;
+    assert_eq!(reviewed["ok"], true, "{reviewed}");
+    let review = reviewed["result"].clone();
+    let params = json!({"repositoryId": id, "review": review, "action": "merge"});
+    send(
+        &mut reader,
+        "denied",
+        gitgui_protocol::METHOD_GIT_INTEGRATION_START,
+        params.clone(),
+    )
+    .await;
+    assert_eq!(
+        receive(&mut reader).await["error"]["code"],
+        error_codes::FORBIDDEN
+    );
+    reader.close(None).await.unwrap();
+    reader_server.abort();
+
+    let (mut operator, _, server) = socket(state, vec![SCOPE_REPOSITORY_OPERATE.into()]).await;
+    send(
+        &mut operator,
+        "start",
+        gitgui_protocol::METHOD_GIT_INTEGRATION_START,
+        params,
+    )
+    .await;
+    let result = receive(&mut operator).await;
+    assert_eq!(result["ok"], true, "{result}");
+    assert!(result["result"]["failure"].is_null());
+    assert!(result["result"]["state"].is_null());
+    operator.close(None).await.unwrap();
+    server.abort();
+}
+
+#[tokio::test]
 async fn stash_listing_failure_reports_error_and_preserves_applied_mutation() {
     let root = repository();
     git(root.path(), &["stash", "push", "-m", "saved"]);
@@ -26,10 +130,11 @@ async fn stash_listing_failure_reports_error_and_preserves_applied_mutation() {
     oversized.push(b'\n');
     fs::write(&reflog, oversized).unwrap();
     assert!(gitgui_core::git::repository::load_repository(root.path().to_str().unwrap()).is_err());
-    assert!(
-        gitgui_core::git::repository::load_repository_graph(root.path().to_str().unwrap(), &[])
-            .is_err()
-    );
+    assert!(gitgui_core::git::repository::load_repository_graph(
+        root.path().to_str().unwrap(),
+        &[]
+    )
+    .is_err());
 
     let state = state(root.path());
     let id = state.repositories.read().await[0].summary.id.clone();

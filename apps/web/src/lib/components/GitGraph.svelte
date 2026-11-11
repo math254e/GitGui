@@ -3,6 +3,8 @@
   import { onDestroy, tick, untrack } from "svelte";
   import { dismissContextMenu, showContextMenu, type ContextMenuItem } from "$lib/contextMenu";
   import { branchMenuItems } from "$lib/workspace/branch-menu";
+  import { integrationRecoveryMenuItems } from "$lib/workspace/integration-menu";
+  import type { GitIntegrationRecovery, GitIntegrationState } from "@gitgui/contracts";
   import { GraphRenderIndex, visibleRowRange, captureHistoryAnchor, restoreHistoryAnchor } from "$lib/git-graph/viewport";
   import { drawGitGraphCanvas } from "$lib/git-graph/canvas-renderer";
   import { buildRefBadges } from "$lib/git-graph/ref-badges";
@@ -50,6 +52,15 @@
     canCreateTag?: boolean;
     onRenameBranch?: (branch: CommitRef) => void;
     onDeleteBranch?: (branch: CommitRef) => void;
+    canIntegrate?: boolean;
+    canRebase?: boolean;
+    onIntegrateBranch?: (branch: CommitRef, action: "merge" | "rebase") => void;
+    onRebaseCommit?: (commit: CommitInfo) => void;
+    canRewritePush?: boolean;
+    onRewritePush?: () => void;
+    integrationState?: GitIntegrationState | null;
+    canRecoverIntegration?: boolean;
+    onIntegrationRecovery?: (action: GitIntegrationRecovery) => void;
     canRenameBranch?: boolean;
     canDeleteBranch?: boolean;
     pending?: boolean;
@@ -84,6 +95,15 @@
     canCreateTag = false,
     onRenameBranch,
     onDeleteBranch,
+    canIntegrate,
+    canRebase,
+    onIntegrateBranch,
+    onRebaseCommit,
+    canRewritePush,
+    onRewritePush,
+    integrationState = null,
+    canRecoverIntegration = false,
+    onIntegrationRecovery,
     canRenameBranch = false,
     canDeleteBranch = false,
     pending = false,
@@ -168,6 +188,9 @@
       canRename: canRenameBranch,
       canDelete: canDeleteBranch,
       canRemoveWorktree,
+      canIntegrate,
+      isCurrent: snapshot?.status.currentBranch === branch.shortName,
+      canRewritePush,
       worktree: snapshot?.worktrees.find((entry) => entry.branch === branch.shortName),
       checkedOut: snapshot?.status.currentBranch === branch.shortName || (snapshot?.worktrees.some((worktree) => worktree.branch === branch.shortName) ?? false),
     });
@@ -175,11 +198,10 @@
       { id: "create", label: "Branch...", icon: "git-branch", disabled: pending || !onCreateBranch },
       { id: "createTag", label: "Tag...", icon: "tag", disabled: pending || !canCreateTag || !onCreateTag },
       { id: "compare", label: "Compare to working tree", icon: "git-branch" },
+      { id: "rebase-commit", label: "Rebase current branch onto this commit", icon: "git-branch", disabled: !canRebase || !onRebaseCommit || snapshot?.status.headOid === commit.hash },
     ];
-    if (clickedBranch) {
-      items.push({ id: "branch-heading", label: clickedBranch.shortName, header: true, separatorBefore: true }, ...actionsFor(clickedBranch));
-    } else {
-      items.push(...branches.map((branch) => ({ id: branch.name, label: branch.shortName, icon: "git-branch", children: actionsFor(branch) })));
+    for (const branch of branches) {
+      items.push({ id: `branch-heading:${branch.name}`, label: branch.shortName, header: true, separatorBefore: true }, ...actionsFor(branch).filter((item) => item.id !== `rebase:${branch.name}`));
     }
     const menu = showContextMenu(
       items,
@@ -197,9 +219,12 @@
       }
       if (selected === "create") onCreateBranch?.(commit);
       if (selected === "createTag") onCreateTag?.(commit);
+      if (selected === "rebase-commit") onRebaseCommit?.(commit);
       for (const branch of branches) {
         if (selected === `rename:${branch.name}`) onRenameBranch?.(branch);
         if (selected === `delete:${branch.name}`) onDeleteBranch?.(branch);
+        if (selected === `merge:${branch.name}`) onIntegrateBranch?.(branch, "merge");
+        if (selected === `rewrite-push:${branch.name}`) onRewritePush?.();
         const worktree = snapshot?.worktrees.find((entry) => entry.branch === branch.shortName);
         if (worktree && selected === `remove-worktree:${branch.name}`) onRemoveWorktree?.(worktree, false);
         if (worktree && selected === `remove-worktree-branch:${branch.name}`) onRemoveWorktree?.(worktree, true);
@@ -212,6 +237,26 @@
     const branchName = event.target instanceof Element ? event.target.closest("[data-local-branch]")?.getAttribute("data-local-branch") : null;
     const branch = branchName ? snapshot?.refs.find((ref) => ref.refType === "localBranch" && ref.name === branchName) : undefined;
     openCommitContextMenu(commit, { x: event.clientX, y: event.clientY }, branch);
+  }
+
+  function openIntegrationContextMenu(position: { x: number; y: number }) {
+    if (!integrationState || integrationState.kind === "unknown") return;
+    const key = contextKey;
+    const items = integrationRecoveryMenuItems(integrationState, canRecoverIntegration);
+    void showContextMenu(items, position, contextMenuOwner).then((action) => {
+      if (destroyed || key !== contextKey) return;
+      if (action === "continue" || action === "abort" || action === "skip") onIntegrationRecovery?.(action);
+    });
+  }
+
+  function handleWorkingTreeKeydown(event: KeyboardEvent) {
+    if (integrationState && integrationState.kind !== "unknown" && (event.key === "ContextMenu" || event.key === "Apps" || (event.shiftKey && event.key === "F10"))) {
+      event.preventDefault();
+      const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+      openIntegrationContextMenu({ x: rect.left, y: rect.bottom });
+      return;
+    }
+    navigateHistory(event, null);
   }
 
   function handleCommitKeydown(event: KeyboardEvent, commit: CommitInfo) {
@@ -323,7 +368,7 @@
     return () => observer.disconnect();
   });
 
-  const hasChanges = $derived(Boolean(snapshot?.status.changedFiles.length));
+  const hasChanges = $derived(Boolean(snapshot?.status.changedFiles.length || integrationState));
   const visibleColumns = $derived(columns.filter((column) => column.visible));
   // Status-only snapshots retain history identity so file edits do not rebuild labels/layout indexes.
   const historySnapshot = $derived(stableHistory(snapshot));
@@ -1107,7 +1152,8 @@
             <li>
               <button
                 data-working-tree
-                onkeydown={(event) => navigateHistory(event, null)}
+                onkeydown={handleWorkingTreeKeydown}
+                oncontextmenu={(event) => { if (integrationState && integrationState.kind !== "unknown") { event.preventDefault(); openIntegrationContextMenu({ x: event.clientX, y: event.clientY }); } }}
                 class={`grid w-full items-center border-b border-[var(--app-theme-border-subtle)] text-left transition focus-visible:outline-2 focus-visible:outline-[var(--app-theme-focus)] ${
                   changesSelected ? "bg-[var(--app-theme-row-selected-subtle)]" : "bg-[var(--app-theme-surface)] hover:bg-[var(--app-theme-row-hover-subtle)]"
                 }`}
@@ -1125,7 +1171,7 @@
                 <span class="relative h-full" aria-hidden="true"></span>
                 <span class="relative z-30 flex h-full min-w-0 items-center pl-2 pr-1" style="background-color: inherit;">
                   <span class="block truncate text-[13px] font-semibold text-[var(--app-theme-text)]">
-                    Changed files
+                    {integrationState?.kind === "merge" ? "Merge in progress" : integrationState?.kind === "rebase" ? "Rebase in progress" : integrationState ? "Git operation in progress" : "Changed files"}
                     <span class="ml-0.5 text-[11px] font-medium text-[var(--app-theme-text-muted)]">{snapshot.status.changedFiles.length} files</span>
                   </span>
                 </span>

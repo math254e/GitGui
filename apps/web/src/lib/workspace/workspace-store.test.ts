@@ -91,6 +91,76 @@ afterEach(async () => {
   document.body.replaceChildren();
 });
 
+describe("integration review RPC inputs", () => {
+  it("rebases onto a commit immediately after checking it, without opening a dialog", async () => {
+    const f = await setup();
+    await f.display("a");
+    f.services.a.client.serverWelcome.capabilities.push("git.integration.start", "git.integration.commit_target");
+    const target = "b".repeat(40);
+    const review = { currentRef: "refs/heads/main", headOid: "a".repeat(40), targetRef: target, targetOid: target };
+    const reviewIntegration = vi.fn(async () => review);
+    const startIntegration = vi.fn(async (input: unknown) => { structuredClone(input); return { state: null, failure: null }; });
+    Object.assign(f.services.a.client, { reviewIntegration, startIntegration });
+    await f.store.openIntegrationReview(target, "rebase");
+    expect(f.store.integrationReview).toBeNull();
+    await vi.waitFor(() => expect(startIntegration).toHaveBeenCalledWith({ repositoryId: "same", review, action: "rebase" }));
+    await vi.waitFor(() => expect(f.store.gitActionPending).toBe(false));
+  });
+
+  it("requires confirmation before skipping a rebase and scopes the action to the checkout", async () => {
+    const f = await setup();
+    await f.display("a");
+    f.services.a.client.serverWelcome.capabilities.push("git.integration.start");
+    const recoverIntegration = vi.fn(async (input: unknown) => { structuredClone(input); return { state: null, failure: null }; });
+    Object.assign(f.services.a.client, { recoverIntegration });
+    f.store.integrationError = "";
+    f.store.integrationState = { kind: "rebase", unresolvedPaths: ["conflict.txt"] };
+    f.store.requestIntegrationRecovery("continue");
+    expect(recoverIntegration).not.toHaveBeenCalled();
+    f.store.requestIntegrationRecovery("skip");
+    expect(f.store.integrationRecoveryDialog?.action).toBe("skip");
+    expect(recoverIntegration).not.toHaveBeenCalled();
+    f.store.confirmIntegrationRecovery();
+    await vi.waitFor(() => expect(recoverIntegration).toHaveBeenCalledWith({ repositoryId: "same", kind: "rebase", action: "skip" }));
+    await vi.waitFor(() => expect(f.store.gitActionPending).toBe(false));
+  });
+
+  it.each(["merge", "rebase"] as const)("sends a cloneable reviewed %s request", async (action) => {
+    const f = await setup();
+    await f.display("a");
+    f.services.a.client.serverWelcome.capabilities.push("git.integration.start");
+    const startIntegration = vi.fn(async (input: unknown) => {
+      structuredClone(input);
+      return { state: null, failure: null };
+    });
+    Object.assign(f.services.a.client, { startIntegration });
+    const review = { currentRef: "refs/heads/main", headOid: "a".repeat(40), targetRef: "refs/heads/topic", targetOid: "b".repeat(40) };
+    f.store.integrationReview = { repositoryId: "same", environmentId: "a", review, action };
+    expect(() => structuredClone(f.store.integrationReview!.review)).toThrow();
+    f.store.confirmIntegration();
+    await vi.waitFor(() => expect(startIntegration).toHaveBeenCalledOnce());
+    expect(startIntegration).toHaveBeenCalledWith({ repositoryId: "same", review, action });
+    await vi.waitFor(() => expect(f.store.gitActionPending).toBe(false));
+    expect(notifications.error).not.toHaveBeenCalled();
+  });
+
+  it("sends a cloneable reviewed rewrite push", async () => {
+    const f = await setup();
+    await f.display("a");
+    f.services.a.client.serverWelcome.capabilities.push("git.integration.start");
+    const pushRewrite = vi.fn(async (input: unknown) => { structuredClone(input); return null; });
+    Object.assign(f.services.a.client, { pushRewrite });
+    const review = { currentRef: "refs/heads/main", localOid: "a".repeat(40), remote: "origin", destinationRef: "refs/heads/main", remoteOid: "b".repeat(40), destinationFingerprint: "c".repeat(64), commitsRemoved: 1 };
+    f.store.rewritePushReview = { repositoryId: "same", environmentId: "a", review };
+    expect(() => structuredClone(f.store.rewritePushReview!.review)).toThrow();
+    f.store.confirmRewritePush();
+    await vi.waitFor(() => expect(pushRewrite).toHaveBeenCalledOnce());
+    expect(pushRewrite).toHaveBeenCalledWith({ repositoryId: "same", pushReview: review });
+    await vi.waitFor(() => expect(f.store.gitActionPending).toBe(false));
+    expect(notifications.error).not.toHaveBeenCalled();
+  });
+});
+
 describe("workspace switch navigation lifetime", () => {
   it("distinguishes same-name, same-branch local clone tabs by their paths", async () => {
     const f = await setup(true); await f.display("a", "same"); await f.display("a", "copy");

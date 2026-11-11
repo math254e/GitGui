@@ -6,6 +6,7 @@
 
 mod auth;
 mod environment_label;
+mod integration;
 pub mod local_control;
 mod repository_metadata;
 mod rpc_queue;
@@ -1166,6 +1167,9 @@ fn required_scope_for_method(method: &str) -> Option<&'static str> {
         | METHOD_GIT_FETCH
         | METHOD_GIT_PULL
         | METHOD_GIT_PUSH
+        | gitgui_protocol::METHOD_GIT_INTEGRATION_START
+        | gitgui_protocol::METHOD_GIT_INTEGRATION_RECOVER
+        | gitgui_protocol::METHOD_GIT_REWRITE_PUSH_EXECUTE
         | METHOD_GIT_BRANCH_CREATE
         | METHOD_GIT_TAG_CREATE
         | METHOD_GIT_TAG_DELETE
@@ -1190,6 +1194,9 @@ fn required_scope_for_method(method: &str) -> Option<&'static str> {
         | METHOD_REPOSITORIES_GET_GRAPH
         | METHOD_REPOSITORIES_REFRESH
         | METHOD_GIT_STATUS
+        | gitgui_protocol::METHOD_GIT_INTEGRATION_INSPECT
+        | gitgui_protocol::METHOD_GIT_INTEGRATION_REVIEW
+        | gitgui_protocol::METHOD_GIT_REWRITE_PUSH_REVIEW
         | METHOD_GIT_TAG_DETAILS
         | METHOD_GIT_HUNK_PREVIEW
         | METHOD_GIT_DISCARD_PREVIEW
@@ -1259,6 +1266,14 @@ async fn dispatch(request: RequestEnvelope, state: &ServerState) -> ResponseEnve
         METHOD_GIT_FETCH => git_fetch(request.id, request.params, state).await,
         METHOD_GIT_PULL => git_pull(request.id, request.params, state).await,
         METHOD_GIT_PUSH => git_push(request.id, request.params, state).await,
+        gitgui_protocol::METHOD_GIT_INTEGRATION_INSPECT
+        | gitgui_protocol::METHOD_GIT_INTEGRATION_REVIEW
+        | gitgui_protocol::METHOD_GIT_INTEGRATION_START
+        | gitgui_protocol::METHOD_GIT_INTEGRATION_RECOVER
+        | gitgui_protocol::METHOD_GIT_REWRITE_PUSH_REVIEW
+        | gitgui_protocol::METHOD_GIT_REWRITE_PUSH_EXECUTE => {
+            integration::dispatch(request.id, &request.method, request.params, state).await
+        }
         METHOD_GIT_BRANCH_LIST => git_branch_list(request.id, request.params, state).await,
         METHOD_GIT_BRANCH_CREATE => git_branch_create(request.id, request.params, state).await,
         METHOD_GIT_TAG_CREATE => git_tag_create(request.id, request.params, state).await,
@@ -2400,7 +2415,7 @@ async fn git_branch_mutation(
     params: Value,
     state: &ServerState,
 ) -> ResponseEnvelope {
-    use gitgui_core::git::operations::{BranchDeleteOutcome, delete_branch, rename_branch};
+    use gitgui_core::git::operations::{delete_branch, rename_branch, BranchDeleteOutcome};
     let result: Result<Value, ProtocolError> = async {
         if method == METHOD_GIT_BRANCH_RENAME {
             let p = parse_params::<gitgui_protocol::GitBranchRenameParams>(params, method)?;
@@ -2440,7 +2455,7 @@ async fn git_worktree_remove(
     params: Value,
     state: &ServerState,
 ) -> ResponseEnvelope {
-    use gitgui_core::git::worktrees::{RemoveOutcome, remove};
+    use gitgui_core::git::worktrees::{remove, RemoveOutcome};
     use gitgui_protocol::{GitWorktreeRemoveParams, GitWorktreeRemoveResult};
     let result: Result<GitWorktreeRemoveResult, ProtocolError> = async {
         let p = parse_params::<GitWorktreeRemoveParams>(params, METHOD_GIT_WORKTREE_REMOVE)?;
@@ -3588,7 +3603,8 @@ impl ServerState {
                 existing.summary.root = candidate.summary.root.clone();
                 existing.summary.is_worktree = candidate.summary.is_worktree;
                 existing.summary.missing = candidate.summary.missing;
-                existing.summary.repository_identity = candidate.summary.repository_identity.clone();
+                existing.summary.repository_identity =
+                    candidate.summary.repository_identity.clone();
                 existing.summary.worktree_family = candidate.summary.worktree_family.clone();
                 existing.summary.metadata_stale = candidate.summary.metadata_stale;
                 existing.operation_path = candidate.operation_path.clone();
@@ -3656,8 +3672,10 @@ impl ServerState {
         // Hydration can finish while the catalog is being persisted. Preserve
         // its latest hints for registrations that this mutation did not replace.
         for repository in &mut repositories {
-            if let Some(existing) = current.iter().find(|existing|
-                Arc::ptr_eq(&existing.metadata, &repository.metadata)) {
+            if let Some(existing) = current
+                .iter()
+                .find(|existing| Arc::ptr_eq(&existing.metadata, &repository.metadata))
+            {
                 repository.summary = existing.summary.clone();
             }
         }
@@ -4219,6 +4237,13 @@ fn implemented_capabilities() -> Vec<String> {
         CAPABILITY_GIT_FETCH,
         CAPABILITY_GIT_PULL,
         CAPABILITY_GIT_PUSH,
+        gitgui_protocol::METHOD_GIT_INTEGRATION_INSPECT,
+        gitgui_protocol::METHOD_GIT_INTEGRATION_REVIEW,
+        gitgui_protocol::METHOD_GIT_INTEGRATION_START,
+        gitgui_protocol::METHOD_GIT_INTEGRATION_RECOVER,
+        gitgui_protocol::CAPABILITY_GIT_INTEGRATION_COMMIT_TARGET,
+        gitgui_protocol::METHOD_GIT_REWRITE_PUSH_REVIEW,
+        gitgui_protocol::METHOD_GIT_REWRITE_PUSH_EXECUTE,
         CAPABILITY_GIT_BRANCH_LIST,
         CAPABILITY_GIT_BRANCH_CREATE,
         CAPABILITY_GIT_TAG_CREATE,
@@ -4538,12 +4563,10 @@ fn native_patch_and_complete_content_survive_cache_and_wire_conversion() {
     assert!(serialized.get("omittedContent").is_none());
     let mut legacy = serialized;
     legacy.as_object_mut().unwrap().remove("patch");
-    assert!(
-        serde_json::from_value::<ProtocolCommitFileDiff>(legacy)
-            .unwrap()
-            .patch
-            .is_none()
-    );
+    assert!(serde_json::from_value::<ProtocolCommitFileDiff>(legacy)
+        .unwrap()
+        .patch
+        .is_none());
 }
 
 fn core_changed_file_to_commit_file(file: &CoreChangedFile) -> CoreCommitFile {
@@ -4596,10 +4619,11 @@ fn load_commit_files_cached(
         cache.file_list_epoch(repo_root)
     };
     let files = load_core_commit_files(repo_root, commit_hash)?;
-    let inserted = cache
-        .lock()
-        .map_err(cache_error)?
-        .insert_recent_if_current(key, files.clone(), &epoch);
+    let inserted =
+        cache
+            .lock()
+            .map_err(cache_error)?
+            .insert_recent_if_current(key, files.clone(), &epoch);
     if !inserted {
         return Err(cache_load_evicted());
     }
@@ -4623,10 +4647,11 @@ fn load_commit_file_diff_cached(
         CommitFileDiffLookup::Loading(in_flight) => wait_for_diff_load(in_flight),
         CommitFileDiffLookup::StartLoad(owner) => {
             let result = load_core_commit_file_diff(repo_root, commit_hash, parent_hash, file);
-            let finished = cache
-                .lock()
-                .map_err(cache_error)?
-                .finish_diff_load(&key, &owner, result.clone());
+            let finished =
+                cache
+                    .lock()
+                    .map_err(cache_error)?
+                    .finish_diff_load(&key, &owner, result.clone());
             if finished {
                 result
             } else {
@@ -4821,14 +4846,12 @@ mod tests {
         let environment_id = server.state.info.environment_id.clone();
         server.shutdown().await.unwrap();
         std::fs::remove_file(root.path().join("auth.sqlite3")).unwrap();
-        assert!(
-            start(ServerConfig {
-                bootstrap_token: None,
-                ..config
-            })
-            .await
-            .is_err()
-        );
+        assert!(start(ServerConfig {
+            bootstrap_token: None,
+            ..config
+        })
+        .await
+        .is_err());
         let identity: PersistedServerIdentity =
             serde_json::from_slice(&std::fs::read(root.path().join("server.json")).unwrap())
                 .unwrap();
@@ -5010,6 +5033,9 @@ mod tests {
             METHOD_GIT_FETCH,
             METHOD_GIT_PULL,
             METHOD_GIT_PUSH,
+            gitgui_protocol::METHOD_GIT_INTEGRATION_START,
+            gitgui_protocol::METHOD_GIT_INTEGRATION_RECOVER,
+            gitgui_protocol::METHOD_GIT_REWRITE_PUSH_EXECUTE,
             METHOD_GIT_BRANCH_CREATE,
             METHOD_GIT_TAG_CREATE,
             METHOD_GIT_TAG_DELETE,
@@ -5036,6 +5062,9 @@ mod tests {
             METHOD_REPOSITORIES_GET_GRAPH,
             METHOD_REPOSITORIES_REFRESH,
             METHOD_GIT_STATUS,
+            gitgui_protocol::METHOD_GIT_INTEGRATION_INSPECT,
+            gitgui_protocol::METHOD_GIT_INTEGRATION_REVIEW,
+            gitgui_protocol::METHOD_GIT_REWRITE_PUSH_REVIEW,
             METHOD_GIT_TAG_DETAILS,
             METHOD_GIT_HUNK_PREVIEW,
             METHOD_GIT_DISCARD_PREVIEW,

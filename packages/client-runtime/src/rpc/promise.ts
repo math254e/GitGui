@@ -9,6 +9,7 @@
  * consumes Effect directly.
  */
 import type {
+  GitIntegrationReviewParams, GitIntegrationStartParams, GitIntegrationRecoverParams, GitRewritePushParams,
   CommitFileDiffParams,
   CommitFilesParams,
   CommitWorkingTreeFilesParams,
@@ -407,6 +408,30 @@ export class GitGuiClient {
 
   renameBranch(params: GitBranchRenameParams) {
     return this.call("git.branch.rename", { ...params, repositoryId: assertRepositoryId(params.repositoryId) });
+  }
+
+  inspectIntegration(repositoryId: string) {
+    return this.call("git.integration.inspect", { repositoryId: assertRepositoryId(repositoryId) });
+  }
+
+  reviewIntegration(params: GitIntegrationReviewParams) {
+    return this.call("git.integration.review", { ...params, repositoryId: assertRepositoryId(params.repositoryId) });
+  }
+
+  startIntegration(params: GitIntegrationStartParams) {
+    return this.call("git.integration.start", { ...params, repositoryId: assertRepositoryId(params.repositoryId) });
+  }
+
+  recoverIntegration(params: GitIntegrationRecoverParams) {
+    return this.call("git.integration.recover", { ...params, repositoryId: assertRepositoryId(params.repositoryId) });
+  }
+
+  reviewRewritePush(repositoryId: string) {
+    return this.call("git.rewrite_push.review", { repositoryId: assertRepositoryId(repositoryId) });
+  }
+
+  pushRewrite(params: GitRewritePushParams) {
+    return this.call("git.rewrite_push.execute", { ...params, repositoryId: assertRepositoryId(params.repositoryId) });
   }
 
   deleteBranch(params: GitBranchDeleteParams) {

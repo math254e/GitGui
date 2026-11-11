@@ -37,6 +37,11 @@
     canDeleteBranch?: boolean;
     onRenameBranch?: (branch: CommitRef) => void;
     onDeleteBranch?: (branch: CommitRef) => void;
+    canIntegrate?: boolean;
+    canRebase?: boolean;
+    onIntegrateBranch?: (branch: CommitRef, action: "merge" | "rebase") => void;
+    canRewritePush?: boolean;
+    onRewritePush?: () => void;
     canDeleteTag?: boolean;
     onDeleteTag?: (tag: CommitRef) => void;
     canCheckoutTag?: boolean;
@@ -82,6 +87,11 @@
     canDeleteBranch = false,
     onRenameBranch,
     onDeleteBranch,
+    canIntegrate,
+    canRebase,
+    onIntegrateBranch,
+    canRewritePush,
+    onRewritePush,
     canDeleteTag = false,
     onDeleteTag,
     canCheckoutTag = false, canPushTag = false, onCheckoutTag, onPushTag, loadTagDetails,
@@ -186,6 +196,7 @@
         <div id="gitgui-local-branches-section" class="min-h-0 flex-1 overflow-auto">
           {#if localBranches.length}
             <BranchTree
+              {canIntegrate} {canRebase} {onIntegrateBranch} {canRewritePush} {onRewritePush}
               refs={localBranches}
               refType="localBranch"
               treeId="gitgui-local-branches"
@@ -228,6 +239,7 @@
         <div id="gitgui-remote-branches-section" class="min-h-0 flex-1 overflow-auto">
           {#if remoteBranches.length}
             <BranchTree
+              {canIntegrate} {canRebase} {onIntegrateBranch}
               refs={remoteBranches}
               refType="remoteBranch"
               treeId="gitgui-remote-branches"

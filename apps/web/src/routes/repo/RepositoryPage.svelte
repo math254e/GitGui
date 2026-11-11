@@ -13,6 +13,7 @@
   import Sidebar from "$lib/components/Sidebar.svelte";
   import StartView from "$lib/components/StartView.svelte";
   import WorkingTreePanel from "$lib/components/WorkingTreePanel.svelte";
+  import IntegrationPanel from "$lib/components/IntegrationPanel.svelte";
   import type { RepositoryPageModel } from "$lib/workspace/repository-routing";
 
   let { store }: { store: RepositoryPageModel } = $props();
@@ -26,6 +27,7 @@
 
 </script>
 
+{#if store.snapshot}<IntegrationPanel {store} />{/if}
 <div class={`grid h-full min-h-0 ${store.snapshot && store.repositoryDisconnected ? "grid-rows-[auto_minmax(0,1fr)]" : "grid-rows-[minmax(0,1fr)]"}`}>
 {#if store.snapshot && store.repositoryDisconnected}
   <div role="status" class="flex items-center gap-3 border-b border-[var(--app-theme-border)] bg-[var(--app-theme-surface-raised)] px-3 py-1.5 text-xs text-[var(--app-theme-text)]">
@@ -92,6 +94,11 @@
         onRemoveWorktree={(worktree, deleteBranch) => store.openRemoveWorktreeDialog(worktree, deleteBranch)}
         onRenameBranch={(ref) => store.openRenameBranchDialog(ref)}
         onDeleteBranch={(ref) => store.openDeleteBranchDialog(ref)}
+        canIntegrate={store.canStartIntegration && !store.integrationError && !store.integrationState}
+        canRebase={store.canRebaseCommit && !store.integrationError && !store.integrationState}
+        onIntegrateBranch={(ref, action) => void store.openIntegrationReview(action === "rebase" ? ref.target : ref.name, action)}
+        canRewritePush={store.client?.serverWelcome.capabilities.includes("git.rewrite_push.execute") ? store.canStartIntegration && !store.integrationError && !store.integrationState && !store.rewritePushReviewPending : undefined}
+        onRewritePush={() => void store.openRewritePushReview()}
         onSwitchBranch={(branchName) => store.switchBranch(branchName)}
         onSwitchWorktree={(path) => void store.switchWorktree(path)}
         onOpenWorktreeInNewTab={(path) => void store.openWorktreeInNewTab(path)}
@@ -142,6 +149,11 @@
         onRemoveWorktree={(worktree, deleteBranch) => store.openRemoveWorktreeDialog(worktree, deleteBranch)}
         onRenameBranch={(ref) => store.openRenameBranchDialog(ref)}
         onDeleteBranch={(ref) => store.openDeleteBranchDialog(ref)}
+        canIntegrate={store.canStartIntegration && !store.integrationError && !store.integrationState}
+        canRebase={store.canRebaseCommit && !store.integrationError && !store.integrationState}
+        onIntegrateBranch={(ref, action) => void store.openIntegrationReview(action === "rebase" ? ref.target : ref.name, action)}
+        canRewritePush={store.client?.serverWelcome.capabilities.includes("git.rewrite_push.execute") ? store.canStartIntegration && !store.integrationError && !store.integrationState && !store.rewritePushReviewPending : undefined}
+        onRewritePush={() => void store.openRewritePushReview()}
         onSwitchWorktree={(path) => void store.switchWorktree(path)}
         onOpenWorktreeInNewTab={(path) => void store.openWorktreeInNewTab(path)}
         onToggleRefs={(refs, visible) => store.toggleGraphRefs(refs, visible)}
@@ -161,6 +173,10 @@
         <div class="min-h-0 flex-1">
           {#key store.activeRepositoryId}
             <GitGraph
+              onRebaseCommit={(commit) => void store.openIntegrationReview(commit.hash, "rebase")}
+              integrationState={store.integrationState}
+              canRecoverIntegration={store.canIntegrate && !store.integrationError}
+              onIntegrationRecovery={(action) => store.requestIntegrationRecovery(action)}
               stashCapabilities={store.stashCapabilities}
               onSelectStash={(stash) => store.selectStash(stash)}
               onStashAction={(action, stash) => store.openStashAction(action, stash)}
@@ -186,6 +202,11 @@
               onRemoveWorktree={(worktree, deleteBranch) => store.openRemoveWorktreeDialog(worktree, deleteBranch)}
               onRenameBranch={(ref) => store.openRenameBranchDialog(ref)}
               onDeleteBranch={(ref) => store.openDeleteBranchDialog(ref)}
+              canIntegrate={store.canStartIntegration && !store.integrationError && !store.integrationState}
+              canRebase={store.canRebaseCommit && !store.integrationError && !store.integrationState}
+              onIntegrateBranch={(ref, action) => void store.openIntegrationReview(action === "rebase" ? ref.target : ref.name, action)}
+              canRewritePush={store.client?.serverWelcome.capabilities.includes("git.rewrite_push.execute") ? store.canStartIntegration && !store.integrationError && !store.integrationState && !store.rewritePushReviewPending : undefined}
+              onRewritePush={() => void store.openRewritePushReview()}
               pending={store.gitActionPending}
             />
           {/key}
@@ -289,6 +310,11 @@
             onRemoveWorktree={(worktree, deleteBranch) => store.openRemoveWorktreeDialog(worktree, deleteBranch)}
             onRenameBranch={(ref) => store.openRenameBranchDialog(ref)}
             onDeleteBranch={(ref) => store.openDeleteBranchDialog(ref)}
+            canIntegrate={store.canStartIntegration && !store.integrationError && !store.integrationState}
+            canRebase={store.canRebaseCommit && !store.integrationError && !store.integrationState}
+            onIntegrateBranch={(ref, action) => void store.openIntegrationReview(action === "rebase" ? ref.target : ref.name, action)}
+            canRewritePush={store.client?.serverWelcome.capabilities.includes("git.rewrite_push.execute") ? store.canStartIntegration && !store.integrationError && !store.integrationState && !store.rewritePushReviewPending : undefined}
+            onRewritePush={() => void store.openRewritePushReview()}
             onSwitchBranch={(branchName) => store.switchBranch(branchName)}
             onSwitchWorktree={(path) => void store.switchWorktree(path)}
             onOpenWorktreeInNewTab={(path) => void store.openWorktreeInNewTab(path)}
@@ -316,6 +342,10 @@
             <div class="min-h-0 flex-1">
               {#key store.activeRepositoryId}
                 <GitGraph
+              onRebaseCommit={(commit) => void store.openIntegrationReview(commit.hash, "rebase")}
+                  integrationState={store.integrationState}
+                  canRecoverIntegration={store.canIntegrate && !store.integrationError}
+                  onIntegrationRecovery={(action) => store.requestIntegrationRecovery(action)}
                   stashCapabilities={store.stashCapabilities}
                   onSelectStash={(stash) => store.selectStash(stash)}
                   onStashAction={(action, stash) => store.openStashAction(action, stash)}
@@ -341,6 +371,11 @@
                   onRemoveWorktree={(worktree, deleteBranch) => store.openRemoveWorktreeDialog(worktree, deleteBranch)}
                   onRenameBranch={(ref) => store.openRenameBranchDialog(ref)}
                   onDeleteBranch={(ref) => store.openDeleteBranchDialog(ref)}
+                  canIntegrate={store.canStartIntegration && !store.integrationError && !store.integrationState}
+                  canRebase={store.canRebaseCommit && !store.integrationError && !store.integrationState}
+                  onIntegrateBranch={(ref, action) => void store.openIntegrationReview(action === "rebase" ? ref.target : ref.name, action)}
+                  canRewritePush={store.client?.serverWelcome.capabilities.includes("git.rewrite_push.execute") ? store.canStartIntegration && !store.integrationError && !store.integrationState && !store.rewritePushReviewPending : undefined}
+                  onRewritePush={() => void store.openRewritePushReview()}
                   pending={store.gitActionPending}
                 />
               {/key}

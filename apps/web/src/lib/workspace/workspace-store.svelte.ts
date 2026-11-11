@@ -32,6 +32,8 @@ import type {
   GitTagDetails,
   GitFetchResult,
   GitPushResult,
+  GitIntegrationState, GitIntegrationReview, GitIntegrationAction, GitIntegrationRecovery, GitIntegrationOutcome,
+  GitRewritePushReview,
 } from "@gitgui/contracts";
 import { type ClientWorkspace, type ClientWorkspaceState } from "$lib/client-runtime";
 import { readDesktopBridge } from "$lib/connection/platform";
@@ -93,6 +95,145 @@ const clamp = (value: number, min: number, max: number) =>
   Math.min(max, Math.max(min, Math.round(value)));
 
 export class WorkspaceStore {
+  integrationState = $state<GitIntegrationState | null>(null);
+  integrationReview = $state<{ repositoryId: string; environmentId: string; review: GitIntegrationReview; action: GitIntegrationAction } | null>(null);
+  integrationError = $state("");
+  integrationRecoveryDialog = $state<{ repositoryId: string; environmentId: string; kind: GitIntegrationState["kind"]; action: "abort" | "skip" } | null>(null);
+  rewritePushReview = $state<{ repositoryId: string; environmentId: string; review: GitRewritePushReview } | null>(null);
+  rewritePushReviewPending = $state(false);
+  private integrationReadSequence = 0;
+  private integrationScopeKey: string | null = null;
+  get canIntegrate(): boolean { return !this.gitActionPending && (this.client?.serverWelcome.capabilities.includes("git.integration.start") ?? false); }
+  get canStartIntegration(): boolean { return this.canIntegrate && Boolean(this.snapshot?.status.currentBranch && this.snapshot?.status.headOid); }
+  get canRebaseCommit(): boolean { return this.canStartIntegration && (this.client?.serverWelcome.capabilities.includes("git.integration.commit_target") ?? false); }
+
+  async refreshIntegration(): Promise<void> {
+    const client = this.client, repositoryId = this.activeRepositoryId, environmentId = this.workspaceState?.environmentId;
+    const sequence = ++this.integrationReadSequence;
+    if (this.integrationReview && (this.integrationReview.repositoryId !== repositoryId || this.integrationReview.environmentId !== environmentId)) this.integrationReview = null;
+    if (this.rewritePushReview && (this.rewritePushReview.repositoryId !== repositoryId || this.rewritePushReview.environmentId !== environmentId)) this.rewritePushReview = null;
+    const scopeKey = repositoryId && environmentId ? JSON.stringify([environmentId, repositoryId]) : null;
+    if (scopeKey !== this.integrationScopeKey) {
+      this.integrationScopeKey = scopeKey;
+      this.integrationState = null;
+      this.integrationRecoveryDialog = null;
+    }
+    this.integrationError = "Checking Git operation state…";
+    if (!client || !repositoryId || !environmentId || !client.serverWelcome.capabilities.includes("git.integration.inspect")) {
+      this.integrationState = null; this.integrationError = ""; return;
+    }
+    try {
+      const state = await client.inspectIntegration(repositoryId);
+      if (sequence === this.integrationReadSequence && this.client === client && this.activeRepositoryId === repositoryId && this.workspaceState?.environmentId === environmentId) {
+        this.integrationState = state;
+        if (this.integrationRecoveryDialog && this.integrationRecoveryDialog.kind !== state?.kind) this.integrationRecoveryDialog = null;
+        this.integrationError = "";
+      }
+    } catch (error) {
+      if (sequence === this.integrationReadSequence) {
+        this.integrationState = null;
+        this.integrationRecoveryDialog = null;
+        this.integrationError = summarizeGitError(error);
+      }
+    }
+  }
+
+  async openIntegrationReview(targetRef: string, action: GitIntegrationAction): Promise<void> {
+    const client = this.client, repositoryId = this.activeRepositoryId, environmentId = this.workspaceState?.environmentId;
+    if (!client || !repositoryId || !environmentId || !this.canStartIntegration || (action === "rebase" && !this.canRebaseCommit) || this.integrationError || this.integrationState) return;
+    try {
+      const review = await client.reviewIntegration({ repositoryId, targetRef });
+      if (this.client === client && this.activeRepositoryId === repositoryId && this.workspaceState?.environmentId === environmentId) {
+        if (action === "rebase") {
+          if (!this.canStartIntegration || this.integrationError || this.integrationState) return;
+          this.startReviewedIntegration(review, action);
+        } else {
+          this.integrationReview = { repositoryId, environmentId, review, action };
+        }
+      }
+    } catch (error) { toast.error("Could not review operation", { description: summarizeGitError(error) }); }
+  }
+
+  confirmIntegration(): void {
+    const pending = this.integrationReview;
+    if (!pending || pending.repositoryId !== this.activeRepositoryId || pending.environmentId !== this.workspaceState?.environmentId || !this.canIntegrate) return;
+    // The runtime snapshots RPC inputs with structuredClone; Svelte's nested
+    // state proxies must be converted to plain data before crossing that boundary.
+    const review = { ...pending.review };
+    const action = pending.action;
+    this.integrationReview = null;
+    this.startReviewedIntegration(review, action);
+  }
+
+  private startReviewedIntegration(review: GitIntegrationReview, action: GitIntegrationAction): void {
+    const inputReview = { ...review };
+    this.requestGitAction({ kind: "integration", label: action === "merge" ? "Merging" : "Rebasing",
+      action: (repositoryId, client) => client.startIntegration({ repositoryId, review: inputReview, action }),
+      onApplied: () => { void this.refreshIntegration(); },
+      onSucceeded: (value) => this.handleIntegrationOutcome(value as GitIntegrationOutcome),
+      onFailed: () => { void this.refreshIntegration(); return false; },
+    });
+  }
+
+  recoverIntegration(action: GitIntegrationRecovery): void {
+    const state = this.integrationState;
+    if (!state || state.kind === "unknown" || !this.canIntegrate) return;
+    this.requestGitAction({ kind: "integration", label: `${action} ${state.kind}`,
+      action: (repositoryId, client) => client.recoverIntegration({ repositoryId, kind: state.kind, action }),
+      onApplied: () => { void this.refreshIntegration(); },
+      onSucceeded: (value) => this.handleIntegrationOutcome(value as GitIntegrationOutcome),
+      onFailed: () => { void this.refreshIntegration(); return false; },
+    });
+  }
+
+  requestIntegrationRecovery(action: GitIntegrationRecovery): void {
+    const state = this.integrationState, repositoryId = this.activeRepositoryId, environmentId = this.workspaceState?.environmentId;
+    if (!state || state.kind === "unknown" || !repositoryId || !environmentId || !this.canIntegrate || this.integrationError) return;
+    if (action === "continue") { if (!state.unresolvedPaths.length) this.recoverIntegration(action); return; }
+    if (action === "skip" && state.kind !== "rebase") return;
+    this.integrationRecoveryDialog = { repositoryId, environmentId, kind: state.kind, action };
+  }
+
+  confirmIntegrationRecovery(): void {
+    const dialog = this.integrationRecoveryDialog;
+    if (!dialog) return;
+    if (dialog.repositoryId !== this.activeRepositoryId || dialog.environmentId !== this.workspaceState?.environmentId || dialog.kind !== this.integrationState?.kind) {
+      this.integrationRecoveryDialog = null;
+      return;
+    }
+    if (this.integrationError || !this.canIntegrate) return;
+    this.integrationRecoveryDialog = null;
+    this.recoverIntegration(dialog.action);
+  }
+
+  private handleIntegrationOutcome(outcome: GitIntegrationOutcome): void {
+    void this.refreshIntegration();
+    if (outcome.failure && outcome.state?.unresolvedPaths.length) toast.warning("Git stopped for conflicts", { description: "Resolve and stage the conflicted files, then continue." });
+    else if (outcome.failure) toast.error("Git operation stopped", { description: outcome.failure.stderr || outcome.failure.message });
+    else if (outcome.state) toast.warning("Git operation is still in progress");
+    else toast.success("Git operation completed");
+  }
+
+  async openRewritePushReview(): Promise<void> {
+    const client = this.client, repositoryId = this.activeRepositoryId, environmentId = this.workspaceState?.environmentId;
+    if (!client || !repositoryId || !environmentId || !this.canIntegrate || this.integrationState || this.integrationError || this.rewritePushReviewPending || !client.serverWelcome.capabilities.includes("git.rewrite_push.execute")) return;
+    this.rewritePushReviewPending = true;
+    try {
+      const review = await client.reviewRewritePush(repositoryId);
+      if (this.client === client && this.activeRepositoryId === repositoryId && this.workspaceState?.environmentId === environmentId) this.rewritePushReview = { repositoryId, environmentId, review };
+    } catch (error) { toast.error("Could not review push", { description: summarizeGitError(error) }); }
+    finally { this.rewritePushReviewPending = false; }
+  }
+
+  confirmRewritePush(): void {
+    const pending = this.rewritePushReview;
+    if (!pending || pending.repositoryId !== this.activeRepositoryId || pending.environmentId !== this.workspaceState?.environmentId || !this.canIntegrate) return;
+    const pushReview = { ...pending.review };
+    this.rewritePushReview = null;
+    this.requestGitAction({ kind: "push", label: "Pushing rewritten branch", successMessage: "Pushed rewritten branch",
+      action: (repositoryId, client) => client.pushRewrite({ repositoryId, pushReview }),
+    });
+  }
   tagFetchReview = $state<TagFetchReview | null>(null);
   private readonly tagDetailsCache = new Map<string, Promise<GitTagDetails>>();
   private tagDetailsEnvironment: string | null = null;

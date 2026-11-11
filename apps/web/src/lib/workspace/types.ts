@@ -62,6 +62,7 @@ export type GitActionKind =
   | "fetch"
   | "pull"
   | "push"
+  | "integration"
   | "switchBranch"
   | "createBranch"
   | "createTag"

@@ -13,6 +13,10 @@ import type { WorkspaceStore } from "./workspace-store.svelte";
 
 /** Presentation only. An adapter can supply a scoped projection instead of a store. */
 export type RepositoryPageModel = Pick<WorkspaceStore,
+  | "integrationState" | "integrationReview" | "integrationError" | "canIntegrate" | "canStartIntegration" | "canRebaseCommit"
+  | "refreshIntegration" | "openIntegrationReview" | "confirmIntegration" | "recoverIntegration"
+  | "integrationRecoveryDialog" | "requestIntegrationRecovery" | "confirmIntegrationRecovery"
+  | "rewritePushReview" | "rewritePushReviewPending" | "openRewritePushReview" | "confirmRewritePush"
   | "activeCommitDraft"
   | "activeRepository"
   | "activeRepositoryId"

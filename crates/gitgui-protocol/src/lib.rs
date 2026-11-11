@@ -107,6 +107,14 @@ pub const METHOD_GIT_FETCH: &str = "git.fetch";
 pub const METHOD_GIT_PULL: &str = "git.pull";
 /// Canonical method for pushing the current configured branch.
 pub const METHOD_GIT_PUSH: &str = "git.push";
+pub const METHOD_GIT_INTEGRATION_INSPECT: &str = "git.integration.inspect";
+pub const METHOD_GIT_INTEGRATION_REVIEW: &str = "git.integration.review";
+pub const METHOD_GIT_INTEGRATION_START: &str = "git.integration.start";
+pub const METHOD_GIT_INTEGRATION_RECOVER: &str = "git.integration.recover";
+/// Integration review accepts a full commit ID as a rebase target.
+pub const CAPABILITY_GIT_INTEGRATION_COMMIT_TARGET: &str = "git.integration.commit_target";
+pub const METHOD_GIT_REWRITE_PUSH_REVIEW: &str = "git.rewrite_push.review";
+pub const METHOD_GIT_REWRITE_PUSH_EXECUTE: &str = "git.rewrite_push.execute";
 /// Canonical method for listing local branches.
 pub const METHOD_GIT_BRANCH_LIST: &str = "git.branch.list";
 /// Canonical method for creating a local branch.
@@ -186,6 +194,12 @@ pub const WS_METHOD_NAMES: &[&str] = &[
     METHOD_GIT_FETCH,
     METHOD_GIT_PULL,
     METHOD_GIT_PUSH,
+    METHOD_GIT_INTEGRATION_INSPECT,
+    METHOD_GIT_INTEGRATION_REVIEW,
+    METHOD_GIT_INTEGRATION_START,
+    METHOD_GIT_INTEGRATION_RECOVER,
+    METHOD_GIT_REWRITE_PUSH_REVIEW,
+    METHOD_GIT_REWRITE_PUSH_EXECUTE,
     METHOD_GIT_BRANCH_LIST,
     METHOD_GIT_BRANCH_CREATE,
     METHOD_GIT_TAG_CREATE,
@@ -958,6 +972,104 @@ pub struct RepositoryStatus {
 pub struct GitStatusResult {
     pub repository: RepositorySummary,
     pub status: RepositoryStatus,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum GitIntegrationKind {
+    Merge,
+    Rebase,
+    Unknown,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GitIntegrationState {
+    pub kind: GitIntegrationKind,
+    pub unresolved_paths: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GitIntegrationReview {
+    pub current_ref: String,
+    pub head_oid: String,
+    /// Literal branch ref or full commit object ID for rebase.
+    pub target_ref: String,
+    pub target_oid: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum GitIntegrationAction {
+    Merge,
+    Rebase,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum GitIntegrationRecovery {
+    Continue,
+    Abort,
+    Skip,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GitIntegrationReviewParams {
+    pub repository_id: String,
+    /// Literal branch ref or full commit object ID for rebase.
+    pub target_ref: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GitIntegrationStartParams {
+    pub repository_id: String,
+    pub review: GitIntegrationReview,
+    pub action: GitIntegrationAction,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GitIntegrationRecoverParams {
+    pub repository_id: String,
+    pub kind: GitIntegrationKind,
+    pub action: GitIntegrationRecovery,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GitIntegrationFailure {
+    pub message: String,
+    pub stderr: String,
+    pub status: Option<i32>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GitIntegrationOutcome {
+    pub state: Option<GitIntegrationState>,
+    pub failure: Option<GitIntegrationFailure>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GitRewritePushReview {
+    pub current_ref: String,
+    pub local_oid: String,
+    pub remote: String,
+    pub destination_ref: String,
+    pub remote_oid: String,
+    pub destination_fingerprint: String,
+    pub commits_removed: Option<u32>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GitRewritePushParams {
+    pub repository_id: String,
+    pub push_review: GitRewritePushReview,
 }
 
 /// Parameters shared by staging and unstaging operations.

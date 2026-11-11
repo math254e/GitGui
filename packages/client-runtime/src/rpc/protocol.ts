@@ -27,8 +27,13 @@
  * - Accepted stash feature contracts include selected capture, reviewed actions,
  *   and saved-object reads. The Rust feature list is a subset of its accepted
  *   registry; advertised capabilities still determine server availability.
+ * - GitGui integration methods inspect and mutate Git-owned merge/rebase state,
+ *   and a reviewed rewrite-push uses an explicit remote lease.
  */
 import type {
+  GitIntegrationState, GitIntegrationReview, GitIntegrationReviewParams,
+  GitIntegrationStartParams, GitIntegrationRecoverParams, GitIntegrationOutcome,
+  GitRewritePushReview, GitRewritePushParams,
   CommitFileDiffParams,
   CommitFilesParams,
   CommitFilesResult,
@@ -175,6 +180,12 @@ export interface GitGuiRpcMethods {
   "git.fetch": { readonly input: GitRepositoryParams; readonly output: GitFetchResult };
   "git.pull": { readonly input: GitRepositoryParams; readonly output: GitPullResult };
   "git.push": { readonly input: GitRepositoryParams; readonly output: GitPushResult };
+  "git.integration.inspect": { readonly input: GitRepositoryParams; readonly output: GitIntegrationState | null };
+  "git.integration.review": { readonly input: GitIntegrationReviewParams; readonly output: GitIntegrationReview };
+  "git.integration.start": { readonly input: GitIntegrationStartParams; readonly output: GitIntegrationOutcome };
+  "git.integration.recover": { readonly input: GitIntegrationRecoverParams; readonly output: GitIntegrationOutcome };
+  "git.rewrite_push.review": { readonly input: GitRepositoryParams; readonly output: GitRewritePushReview };
+  "git.rewrite_push.execute": { readonly input: GitRewritePushParams; readonly output: null };
   "git.branch.list": { readonly input: GitBranchListParams; readonly output: GitBranchListResult };
   "git.branch.create": {
     readonly input: GitBranchCreateParams;
@@ -241,6 +252,12 @@ export const WS_METHOD_NAMES = [
   "git.fetch",
   "git.pull",
   "git.push",
+  "git.integration.inspect",
+  "git.integration.review",
+  "git.integration.start",
+  "git.integration.recover",
+  "git.rewrite_push.review",
+  "git.rewrite_push.execute",
   "git.branch.list",
   "git.branch.create",
   "git.tag.create",
@@ -316,6 +333,12 @@ export const WS_METHODS = {
   gitTagApplyFetch: "git.tag.apply_fetch",
   gitBranchSwitch: "git.branch.switch",
   gitBranchRename: "git.branch.rename",
+  gitIntegrationInspect: "git.integration.inspect",
+  gitIntegrationReview: "git.integration.review",
+  gitIntegrationStart: "git.integration.start",
+  gitIntegrationRecover: "git.integration.recover",
+  gitRewritePushReview: "git.rewrite_push.review",
+  gitRewritePushExecute: "git.rewrite_push.execute",
   gitBranchDelete: "git.branch.delete",
   gitWorktreeRemove: "git.worktree.remove",
   gitStashPush: "git.stash.push",

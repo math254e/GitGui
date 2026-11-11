@@ -7,6 +7,7 @@ pub mod git {
     mod discard_measurement;
     pub mod graph;
     pub mod hunk_cache;
+    pub mod integration;
     pub mod operations;
     pub mod tag_operations;
     #[cfg(test)]

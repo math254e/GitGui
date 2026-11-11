@@ -352,17 +352,15 @@ export function showContextMenu<T extends string>(
 
       const menu = document.createElement("div");
       menu.className =
-        "gitgui-context-menu fixed z-[10000] w-60 min-w-60 max-w-60 overflow-hidden rounded-lg bg-clip-padding outline-none";
+        "gitgui-context-menu fixed z-[10000] w-80 min-w-80 max-w-80 overflow-hidden rounded-lg bg-clip-padding outline-none";
       menu.style.cssText =
-        "position:fixed;z-index:10000;width:15rem;min-width:15rem;max-width:15rem;overflow:hidden;border-radius:8px;background-clip:padding-box;background:var(--app-theme-surface-overlay);border:1px solid var(--app-theme-border);box-shadow:var(--app-theme-dialog-shadow);color:var(--app-theme-text);outline:none;pointer-events:auto;";
+        "position:fixed;z-index:10000;width:20rem;min-width:20rem;max-width:20rem;overflow:hidden;border-radius:8px;background-clip:padding-box;background:var(--app-theme-surface-overlay);border:1px solid var(--app-theme-border);box-shadow:var(--app-theme-dialog-shadow);color:var(--app-theme-text);outline:none;pointer-events:auto;";
       menu.style.left = `${preferredLeft}px`;
       menu.style.top = `${preferredTop}px`;
-      if (options) {
-        const width = `${Math.min(Math.max(208, options.width), window.innerWidth - 16)}px`;
-        menu.style.width = width;
-        menu.style.minWidth = width;
-        menu.style.maxWidth = width;
-      }
+      const width = `${Math.min(Math.max(320, options?.width ?? 320), Math.max(0, window.innerWidth - 16))}px`;
+      menu.style.width = width;
+      menu.style.minWidth = width;
+      menu.style.maxWidth = width;
       menu.dataset.level = String(level);
       menu.setAttribute("role", "menu");
       menu.tabIndex = -1;
@@ -371,8 +369,7 @@ export function showContextMenu<T extends string>(
       inner.className =
         "max-h-[min(24rem,70vh)] min-w-0 max-w-sm overflow-y-auto overflow-x-hidden p-1";
       inner.style.cssText =
-        "max-height:min(24rem,70vh);min-width:0;max-width:15rem;overflow-x:hidden;overflow-y:auto;padding:0.25rem;";
-      if (options) inner.style.maxWidth = "100%";
+        "max-height:min(24rem,70vh);min-width:0;max-width:100%;overflow-x:hidden;overflow-y:auto;padding:0.25rem;";
 
       for (const item of entries) {
         if (item.separatorBefore === true && inner.children.length > 0) {
@@ -387,8 +384,8 @@ export function showContextMenu<T extends string>(
 
         if (item.header === true) {
           const header = document.createElement("div");
-          header.className = "px-2 py-1.5 font-medium text-muted-foreground text-xs";
-          header.style.cssText = "padding:0.375rem 0.5rem;color:var(--app-theme-muted-foreground);font-size:0.75rem;font-weight:500;";
+          header.className = "px-2 py-1.5 font-medium text-muted-foreground text-[11px]";
+          header.style.cssText = "padding:0.375rem 0.5rem;color:var(--app-theme-muted-foreground);font-size:0.6875rem;font-weight:500;";
           header.textContent = item.label;
           inner.appendChild(header);
           continue;
@@ -406,14 +403,14 @@ export function showContextMenu<T extends string>(
         button.disabled = isDisabled;
         if (isDisabled) button.setAttribute("aria-disabled", "true");
         const rowBase =
-          "flex w-full cursor-default select-none items-center gap-2 rounded-sm px-2 py-1 text-left outline-none transition-colors sm:min-h-7 sm:text-sm min-h-8 text-base";
+          "flex w-full cursor-default select-none items-center gap-2 rounded-sm px-2 py-1 text-left text-xs outline-none transition-colors sm:min-h-7 min-h-8";
         button.className = isDisabled
           ? `${rowBase} pointer-events-none cursor-not-allowed text-muted-foreground opacity-64`
           : isLeafDestructive
             ? `${rowBase} text-[var(--app-theme-error)] hover:bg-destructive/10 hover:text-[var(--app-theme-error)]`
             : `${rowBase} text-foreground hover:bg-accent hover:text-accent-foreground`;
         button.style.cssText =
-          "display:flex;width:100%;min-height:1.75rem;align-items:center;gap:0.5rem;border:0;border-radius:4px;background:transparent;padding:0.25rem 0.5rem;color:var(--app-theme-text);font-family:inherit;font-size:0.875rem;line-height:1.25rem;text-align:left;cursor:default;";
+          "display:flex;width:100%;min-height:1.75rem;align-items:center;gap:0.5rem;border:0;border-radius:4px;background:transparent;padding:0.25rem 0.5rem;color:var(--app-theme-text);font-family:inherit;font-size:0.75rem;line-height:1.125rem;text-align:left;cursor:default;";
         if (isLeafDestructive) {
           // Error foreground is text on a filled error surface, not on the menu.
           button.style.color = "var(--app-theme-error)";

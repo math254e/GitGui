@@ -23,12 +23,22 @@ pub struct GitCommand;
 
 impl GitCommand {
     pub fn run(args: &[&str], cwd: Option<&Path>) -> Result<String, GitError> {
-        Self::run_command(args, cwd, None, false)
+        Self::run_command(args, cwd, None, false, false, false)
     }
 
     /// `diff --no-index` uses exit code 1 for a successfully produced diff.
     pub fn run_diff(args: &[&str], cwd: &Path) -> Result<String, GitError> {
-        Self::run_command(args, Some(cwd), None, true)
+        Self::run_command(args, Some(cwd), None, true, true, false)
+    }
+
+    /// Reads whose output identifies paths must never replace invalid UTF-8.
+    pub fn run_strict(args: &[&str], cwd: &Path) -> Result<String, GitError> {
+        Self::run_command(args, Some(cwd), None, false, true, false)
+    }
+
+    /// Integration commands must never open an editor in the server process.
+    pub fn run_integration(args: &[&str], cwd: &Path) -> Result<String, GitError> {
+        Self::run_command(args, Some(cwd), None, false, false, true)
     }
 
     pub fn run_owned(args: &[String], cwd: Option<&Path>) -> Result<String, GitError> {
@@ -41,7 +51,7 @@ impl GitCommand {
         cwd: Option<&Path>,
         stdin: &[u8],
     ) -> Result<String, GitError> {
-        Self::run_command(args, cwd, Some(stdin), false)
+        Self::run_command(args, cwd, Some(stdin), false, false, false)
     }
 
     fn run_command(
@@ -49,9 +59,16 @@ impl GitCommand {
         cwd: Option<&Path>,
         stdin: Option<&[u8]>,
         diff_exit_code: bool,
+        strict_utf8: bool,
+        integration: bool,
     ) -> Result<String, GitError> {
         let started = Instant::now();
         let mut command = git_command();
+        if integration {
+            command.env("GIT_EDITOR", "true");
+            command.env("GIT_SEQUENCE_EDITOR", "false");
+            command.env("GIT_MERGE_AUTOEDIT", "no");
+        }
         command.args(args);
         command.stdout(Stdio::piped()).stderr(Stdio::piped());
         if stdin.is_some() {
@@ -142,9 +159,14 @@ impl GitCommand {
             });
         }
 
-        if diff_exit_code {
+        if strict_utf8 {
             String::from_utf8(output.stdout).map_err(|_| GitError {
-                message: "Non-UTF-8 files use whole-file actions".to_string(),
+                message: if diff_exit_code {
+                    "Non-UTF-8 files use whole-file actions"
+                } else {
+                    "Git returned non-UTF-8 output"
+                }
+                .to_string(),
                 stderr: String::new(),
                 status: None,
             })
