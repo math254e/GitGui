@@ -184,7 +184,7 @@ pub fn review(root: &str, target_ref: &str) -> Result<IntegrationReview, GitErro
     })
 }
 
-/// Start only the exact branch tips the user reviewed.
+/// Recheck the reviewed refs, then let Git integrate the selected branch or commit.
 pub fn start(
     root: &str,
     expected: &IntegrationReview,
@@ -205,6 +205,15 @@ pub fn start(
     if !dirty.is_empty() {
         return Err(error("Commit or stash tracked changes before starting"));
     }
+    // Keep the fully-qualified ref unambiguous while giving the merge commit
+    // the readable branch name Git would use for a short ref.
+    let merge_message = if let Some(name) = expected.target_ref.strip_prefix("refs/heads/") {
+        format!("Merge branch '{name}'")
+    } else if let Some(name) = expected.target_ref.strip_prefix("refs/remotes/") {
+        format!("Merge remote-tracking branch '{name}'")
+    } else {
+        String::new()
+    };
     let args: Vec<&str> = match action {
         IntegrationAction::Merge => vec![
             "merge",
@@ -212,7 +221,9 @@ pub fn start(
             "--no-edit",
             "--no-squash",
             "--no-autostash",
-            &expected.target_oid,
+            "-m",
+            &merge_message,
+            &expected.target_ref,
         ],
         IntegrationAction::Rebase => vec![
             "-c",
@@ -222,7 +233,7 @@ pub fn start(
             "--no-autostash",
             "--no-autosquash",
             "--no-fork-point",
-            &expected.target_oid,
+            &expected.target_ref,
         ],
     };
     let failure = GitCommand::run_integration(&args, path).err();

@@ -94,10 +94,10 @@
         onRemoveWorktree={(worktree, deleteBranch) => store.openRemoveWorktreeDialog(worktree, deleteBranch)}
         onRenameBranch={(ref) => store.openRenameBranchDialog(ref)}
         onDeleteBranch={(ref) => store.openDeleteBranchDialog(ref)}
-        canIntegrate={store.canStartIntegration && !store.integrationError && !store.integrationState}
-        canRebase={store.canRebaseCommit && !store.integrationError && !store.integrationState}
-        onIntegrateBranch={(ref, action) => void store.openIntegrationReview(action === "rebase" ? ref.target : ref.name, action)}
-        canRewritePush={store.client?.serverWelcome.capabilities.includes("git.rewrite_push.execute") ? store.canStartIntegration && !store.integrationError && !store.integrationState && !store.rewritePushReviewPending : undefined}
+        canIntegrate={store.canStartIntegration && !store.integrationError && (store.integrationState?.kind === "merge" || !store.integrationState)}
+        canRebase={store.canRebaseCommit && !store.integrationError && (store.integrationState?.kind === "merge" || !store.integrationState)}
+        onIntegrateBranch={(ref, action) => void store.openIntegrationReview(ref.name, action, ref.target)}
+        canRewritePush={store.client?.serverWelcome.capabilities.includes("git.rewrite_push.execute") ? store.canStartIntegration && !store.integrationError && (store.integrationState?.kind === "merge" || !store.integrationState) && !store.rewritePushReviewPending : undefined}
         onRewritePush={() => void store.openRewritePushReview()}
         onSwitchBranch={(branchName) => store.switchBranch(branchName)}
         onSwitchWorktree={(path) => void store.switchWorktree(path)}
@@ -116,7 +116,7 @@
           contentRevision={store.workspaceState?.fileContentRevisions[store.activeRepositoryId!]?.[store.selectedFile.path] ?? 0}
           onClose={() => store.closeDiff()}
           onApplyHunks={(params) => store.applySelectedHunks(params)}
-          pending={store.gitActionPending}
+          pending={store.gitUiActionPending}
         />
       </div>
     {:else}
@@ -149,10 +149,10 @@
         onRemoveWorktree={(worktree, deleteBranch) => store.openRemoveWorktreeDialog(worktree, deleteBranch)}
         onRenameBranch={(ref) => store.openRenameBranchDialog(ref)}
         onDeleteBranch={(ref) => store.openDeleteBranchDialog(ref)}
-        canIntegrate={store.canStartIntegration && !store.integrationError && !store.integrationState}
-        canRebase={store.canRebaseCommit && !store.integrationError && !store.integrationState}
-        onIntegrateBranch={(ref, action) => void store.openIntegrationReview(action === "rebase" ? ref.target : ref.name, action)}
-        canRewritePush={store.client?.serverWelcome.capabilities.includes("git.rewrite_push.execute") ? store.canStartIntegration && !store.integrationError && !store.integrationState && !store.rewritePushReviewPending : undefined}
+        canIntegrate={store.canStartIntegration && !store.integrationError && (store.integrationState?.kind === "merge" || !store.integrationState)}
+        canRebase={store.canRebaseCommit && !store.integrationError && (store.integrationState?.kind === "merge" || !store.integrationState)}
+        onIntegrateBranch={(ref, action) => void store.openIntegrationReview(ref.name, action, ref.target)}
+        canRewritePush={store.client?.serverWelcome.capabilities.includes("git.rewrite_push.execute") ? store.canStartIntegration && !store.integrationError && (store.integrationState?.kind === "merge" || !store.integrationState) && !store.rewritePushReviewPending : undefined}
         onRewritePush={() => void store.openRewritePushReview()}
         onSwitchWorktree={(path) => void store.switchWorktree(path)}
         onOpenWorktreeInNewTab={(path) => void store.openWorktreeInNewTab(path)}
@@ -167,7 +167,7 @@
           onBranch={() => store.openBranchDialog()}
           onStash={() => store.openStashDialog()}
           onPop={() => store.popStash()}
-          pending={store.gitActionPending}
+          pending={store.gitUiActionPending}
           pendingKind={store.gitAction?.kind ?? null}
         />
         <div class="min-h-0 flex-1">
@@ -202,12 +202,12 @@
               onRemoveWorktree={(worktree, deleteBranch) => store.openRemoveWorktreeDialog(worktree, deleteBranch)}
               onRenameBranch={(ref) => store.openRenameBranchDialog(ref)}
               onDeleteBranch={(ref) => store.openDeleteBranchDialog(ref)}
-              canIntegrate={store.canStartIntegration && !store.integrationError && !store.integrationState}
-              canRebase={store.canRebaseCommit && !store.integrationError && !store.integrationState}
-              onIntegrateBranch={(ref, action) => void store.openIntegrationReview(action === "rebase" ? ref.target : ref.name, action)}
-              canRewritePush={store.client?.serverWelcome.capabilities.includes("git.rewrite_push.execute") ? store.canStartIntegration && !store.integrationError && !store.integrationState && !store.rewritePushReviewPending : undefined}
+              canIntegrate={store.canStartIntegration && !store.integrationError && (store.integrationState?.kind === "merge" || !store.integrationState)}
+              canRebase={store.canRebaseCommit && !store.integrationError && (store.integrationState?.kind === "merge" || !store.integrationState)}
+              onIntegrateBranch={(ref, action) => void store.openIntegrationReview(ref.name, action, ref.target)}
+              canRewritePush={store.client?.serverWelcome.capabilities.includes("git.rewrite_push.execute") ? store.canStartIntegration && !store.integrationError && (store.integrationState?.kind === "merge" || !store.integrationState) && !store.rewritePushReviewPending : undefined}
               onRewritePush={() => void store.openRewritePushReview()}
-              pending={store.gitActionPending}
+              pending={store.gitUiActionPending}
             />
           {/key}
         </div>
@@ -236,8 +236,8 @@
         onDraftChange={(draft) => store.changeCommitDraft(draft)}
         onAmendToggle={(enabled) => store.toggleAmend(enabled)}
         onDiscardPaths={(paths) => void store.openDiscard(paths)}
-        disabled={store.gitActionPending}
-        pending={store.gitActionPending}
+        disabled={store.gitUiActionPending}
+        pending={store.gitUiActionPending}
         commitPending={store.commitPending}
         stageActionRunning={store.stageActionRunning}
         stageQueueWaiting={store.stageQueueWaiting}
@@ -278,7 +278,7 @@
             contentRevision={store.workspaceState?.fileContentRevisions[store.activeRepositoryId!]?.[store.selectedFile.path] ?? 0}
             onClose={() => store.closeDiff()}
             onApplyHunks={(params) => store.applySelectedHunks(params)}
-            pending={store.gitActionPending}
+            pending={store.gitUiActionPending}
           />
         {:else}
           <Sidebar
@@ -310,10 +310,10 @@
             onRemoveWorktree={(worktree, deleteBranch) => store.openRemoveWorktreeDialog(worktree, deleteBranch)}
             onRenameBranch={(ref) => store.openRenameBranchDialog(ref)}
             onDeleteBranch={(ref) => store.openDeleteBranchDialog(ref)}
-            canIntegrate={store.canStartIntegration && !store.integrationError && !store.integrationState}
-            canRebase={store.canRebaseCommit && !store.integrationError && !store.integrationState}
-            onIntegrateBranch={(ref, action) => void store.openIntegrationReview(action === "rebase" ? ref.target : ref.name, action)}
-            canRewritePush={store.client?.serverWelcome.capabilities.includes("git.rewrite_push.execute") ? store.canStartIntegration && !store.integrationError && !store.integrationState && !store.rewritePushReviewPending : undefined}
+            canIntegrate={store.canStartIntegration && !store.integrationError && (store.integrationState?.kind === "merge" || !store.integrationState)}
+            canRebase={store.canRebaseCommit && !store.integrationError && (store.integrationState?.kind === "merge" || !store.integrationState)}
+            onIntegrateBranch={(ref, action) => void store.openIntegrationReview(ref.name, action, ref.target)}
+            canRewritePush={store.client?.serverWelcome.capabilities.includes("git.rewrite_push.execute") ? store.canStartIntegration && !store.integrationError && (store.integrationState?.kind === "merge" || !store.integrationState) && !store.rewritePushReviewPending : undefined}
             onRewritePush={() => void store.openRewritePushReview()}
             onSwitchBranch={(branchName) => store.switchBranch(branchName)}
             onSwitchWorktree={(path) => void store.switchWorktree(path)}
@@ -336,7 +336,7 @@
               onBranch={() => store.openBranchDialog()}
               onStash={() => store.openStashDialog()}
               onPop={() => store.popStash()}
-              pending={store.gitActionPending}
+              pending={store.gitUiActionPending}
               pendingKind={store.gitAction?.kind ?? null}
             />
             <div class="min-h-0 flex-1">
@@ -371,12 +371,12 @@
                   onRemoveWorktree={(worktree, deleteBranch) => store.openRemoveWorktreeDialog(worktree, deleteBranch)}
                   onRenameBranch={(ref) => store.openRenameBranchDialog(ref)}
                   onDeleteBranch={(ref) => store.openDeleteBranchDialog(ref)}
-                  canIntegrate={store.canStartIntegration && !store.integrationError && !store.integrationState}
-                  canRebase={store.canRebaseCommit && !store.integrationError && !store.integrationState}
-                  onIntegrateBranch={(ref, action) => void store.openIntegrationReview(action === "rebase" ? ref.target : ref.name, action)}
-                  canRewritePush={store.client?.serverWelcome.capabilities.includes("git.rewrite_push.execute") ? store.canStartIntegration && !store.integrationError && !store.integrationState && !store.rewritePushReviewPending : undefined}
+                  canIntegrate={store.canStartIntegration && !store.integrationError && (store.integrationState?.kind === "merge" || !store.integrationState)}
+                  canRebase={store.canRebaseCommit && !store.integrationError && (store.integrationState?.kind === "merge" || !store.integrationState)}
+                  onIntegrateBranch={(ref, action) => void store.openIntegrationReview(ref.name, action, ref.target)}
+                  canRewritePush={store.client?.serverWelcome.capabilities.includes("git.rewrite_push.execute") ? store.canStartIntegration && !store.integrationError && (store.integrationState?.kind === "merge" || !store.integrationState) && !store.rewritePushReviewPending : undefined}
                   onRewritePush={() => void store.openRewritePushReview()}
-                  pending={store.gitActionPending}
+                  pending={store.gitUiActionPending}
                 />
               {/key}
             </div>
@@ -408,8 +408,8 @@
             onDraftChange={(draft) => store.changeCommitDraft(draft)}
             onAmendToggle={(enabled) => store.toggleAmend(enabled)}
             onDiscardPaths={(paths) => void store.openDiscard(paths)}
-            disabled={store.gitActionPending}
-            pending={store.gitActionPending}
+            disabled={store.gitUiActionPending}
+            pending={store.gitUiActionPending}
             commitPending={store.commitPending}
             stageActionRunning={store.stageActionRunning}
             stageQueueWaiting={store.stageQueueWaiting}

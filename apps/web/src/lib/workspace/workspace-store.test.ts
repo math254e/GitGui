@@ -92,7 +92,49 @@ afterEach(async () => {
 });
 
 describe("integration review RPC inputs", () => {
-  it("rebases onto a commit immediately after checking it, without opening a dialog", async () => {
+  it("keeps integration available during a background state refresh", async () => {
+    const f = await setup();
+    await f.display("a");
+    f.services.a.client.serverWelcome.capabilities.push("git.integration.start", "git.integration.commit_target", "git.integration.inspect");
+    const inspection = deferred<null>();
+    const target = "b".repeat(40);
+    const review = { currentRef: "refs/heads/main", headOid: "a".repeat(40), targetRef: target, targetOid: target };
+    const startIntegration = vi.fn(async () => ({ state: null, failure: null }));
+    Object.assign(f.services.a.client, {
+      inspectIntegration: vi.fn(() => inspection.promise),
+      reviewIntegration: vi.fn(async () => review),
+      startIntegration,
+    });
+    const refreshing = f.store.refreshIntegration();
+    expect(f.store.integrationError).toBe("");
+    expect(f.store.canStartIntegration).toBe(true);
+    expect(f.store.canRebaseCommit).toBe(true);
+    await f.store.openIntegrationReview(target, "rebase");
+    await vi.waitFor(() => expect(startIntegration).toHaveBeenCalledOnce());
+    inspection.resolve(null);
+    await refreshing;
+    await vi.waitFor(() => expect(f.store.gitActionPending).toBe(false));
+  });
+
+  it.each(["pullRepository", "pushRepository"] as const)("rejects %s if the selected branch is no longer current", async (method) => {
+    const f = await setup();
+    await f.display("a");
+    f.store[method]("other-branch");
+    expect(notifications.error).toHaveBeenCalledWith("The current branch changed. Open the menu again.");
+    expect(f.store.gitActionPending).toBe(false);
+  });
+
+  it("refuses to merge if the selected branch moved after the menu opened", async () => {
+    const f = await setup();
+    await f.display("a");
+    f.services.a.client.serverWelcome.capabilities.push("git.integration.start");
+    const reviewIntegration = vi.fn(async () => ({ currentRef: "refs/heads/main", headOid: "a".repeat(40), targetRef: "refs/heads/topic", targetOid: "c".repeat(40) }));
+    Object.assign(f.services.a.client, { reviewIntegration });
+    await f.store.openIntegrationReview("refs/heads/topic", "merge", "b".repeat(40));
+    expect(notifications.error).toHaveBeenCalledWith("Could not review operation", expect.objectContaining({ description: expect.stringContaining("branch moved") }));
+  });
+
+  it.each(["merge", "rebase"] as const)("starts %s immediately after checking it, without opening a dialog", async (action) => {
     const f = await setup();
     await f.display("a");
     f.services.a.client.serverWelcome.capabilities.push("git.integration.start", "git.integration.commit_target");
@@ -101,9 +143,8 @@ describe("integration review RPC inputs", () => {
     const reviewIntegration = vi.fn(async () => review);
     const startIntegration = vi.fn(async (input: unknown) => { structuredClone(input); return { state: null, failure: null }; });
     Object.assign(f.services.a.client, { reviewIntegration, startIntegration });
-    await f.store.openIntegrationReview(target, "rebase");
-    expect(f.store.integrationReview).toBeNull();
-    await vi.waitFor(() => expect(startIntegration).toHaveBeenCalledWith({ repositoryId: "same", review, action: "rebase" }));
+    await f.store.openIntegrationReview(target, action);
+    await vi.waitFor(() => expect(startIntegration).toHaveBeenCalledWith({ repositoryId: "same", review, action }));
     await vi.waitFor(() => expect(f.store.gitActionPending).toBe(false));
   });
 
@@ -125,23 +166,19 @@ describe("integration review RPC inputs", () => {
     await vi.waitFor(() => expect(f.store.gitActionPending).toBe(false));
   });
 
-  it.each(["merge", "rebase"] as const)("sends a cloneable reviewed %s request", async (action) => {
+  it("blocks incompatible actions during a merge while allowing files to be staged", async () => {
     const f = await setup();
     await f.display("a");
-    f.services.a.client.serverWelcome.capabilities.push("git.integration.start");
-    const startIntegration = vi.fn(async (input: unknown) => {
-      structuredClone(input);
-      return { state: null, failure: null };
-    });
-    Object.assign(f.services.a.client, { startIntegration });
-    const review = { currentRef: "refs/heads/main", headOid: "a".repeat(40), targetRef: "refs/heads/topic", targetOid: "b".repeat(40) };
-    f.store.integrationReview = { repositoryId: "same", environmentId: "a", review, action };
-    expect(() => structuredClone(f.store.integrationReview!.review)).toThrow();
-    f.store.confirmIntegration();
-    await vi.waitFor(() => expect(startIntegration).toHaveBeenCalledOnce());
-    expect(startIntegration).toHaveBeenCalledWith({ repositoryId: "same", review, action });
-    await vi.waitFor(() => expect(f.store.gitActionPending).toBe(false));
-    expect(notifications.error).not.toHaveBeenCalled();
+    f.store.integrationState = { kind: "merge", unresolvedPaths: ["conflict.txt"] };
+    const pull = vi.fn();
+    Object.assign(f.services.a.client, { pull });
+    f.store.pullRepository();
+    f.store.switchBranch("topic");
+    await f.store.openIntegrationReview("topic", "merge");
+    expect(pull).not.toHaveBeenCalled();
+    expect(notifications.warning).toHaveBeenCalledTimes(3);
+    f.store.stagePaths(["conflict.txt"]);
+    await vi.waitFor(() => expect(f.services.a.client.stage).toHaveBeenCalledWith("same", ["conflict.txt"]));
   });
 
   it("sends a cloneable reviewed rewrite push", async () => {

@@ -60,6 +60,25 @@ fn merge_fast_forwards_and_rejects_dirty_worktree() {
 }
 
 #[test]
+fn merge_commit_uses_the_branch_name_without_conflicts() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    fixture(root);
+    git(root, &["switch", "-qc", "clean-feature", "HEAD~1"]);
+    fs::write(root.join("feature.txt"), "feature\n").unwrap();
+    git(root, &["add", "feature.txt"]);
+    git(root, &["commit", "-qm", "feature"]);
+    git(root, &["switch", "-q", "other"]);
+    let reviewed = review(root.to_str().unwrap(), "refs/heads/clean-feature").unwrap();
+    let outcome = start(root.to_str().unwrap(), &reviewed, IntegrationAction::Merge).unwrap();
+    assert!(outcome.failure.is_none(), "{:?}", outcome.failure);
+    assert_eq!(
+        git(root, &["log", "-1", "--format=%s"]),
+        "Merge branch 'clean-feature'"
+    );
+}
+
+#[test]
 fn skip_rebase_conflict_drops_only_the_current_replayed_commit() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
@@ -154,6 +173,15 @@ fn start_merge_and_continue_after_external_resolution() {
             .count(),
         3
     );
+    let message = git(root, &["log", "-1", "--format=%s"]);
+    assert!(
+        message.starts_with(&format!("Merge branch '{original}'")),
+        "unexpected merge message: {message}"
+    );
+    assert!(
+        !message.contains(&reviewed.target_oid),
+        "unexpected merge message: {message}"
+    );
 }
 
 #[test]
@@ -172,6 +200,10 @@ fn rejects_stale_review_and_aborts_rebase() {
     reviewed.head_oid = reviewed.target_oid.clone();
     assert!(start(root_str, &reviewed, IntegrationAction::Rebase).is_err());
     reviewed.head_oid = correct;
+    let target = reviewed.target_oid.clone();
+    reviewed.target_oid = reviewed.head_oid.clone();
+    assert!(start(root_str, &reviewed, IntegrationAction::Rebase).is_err());
+    reviewed.target_oid = target;
     let outcome = start(root_str, &reviewed, IntegrationAction::Rebase).unwrap();
     assert_eq!(outcome.state.unwrap().kind, IntegrationKind::Rebase);
     let outcome = recover(root_str, IntegrationKind::Rebase, RecoveryAction::Abort).unwrap();

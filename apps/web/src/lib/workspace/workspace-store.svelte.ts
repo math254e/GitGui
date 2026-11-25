@@ -96,7 +96,6 @@ const clamp = (value: number, min: number, max: number) =>
 
 export class WorkspaceStore {
   integrationState = $state<GitIntegrationState | null>(null);
-  integrationReview = $state<{ repositoryId: string; environmentId: string; review: GitIntegrationReview; action: GitIntegrationAction } | null>(null);
   integrationError = $state("");
   integrationRecoveryDialog = $state<{ repositoryId: string; environmentId: string; kind: GitIntegrationState["kind"]; action: "abort" | "skip" } | null>(null);
   rewritePushReview = $state<{ repositoryId: string; environmentId: string; review: GitRewritePushReview } | null>(null);
@@ -104,21 +103,20 @@ export class WorkspaceStore {
   private integrationReadSequence = 0;
   private integrationScopeKey: string | null = null;
   get canIntegrate(): boolean { return !this.gitActionPending && (this.client?.serverWelcome.capabilities.includes("git.integration.start") ?? false); }
-  get canStartIntegration(): boolean { return this.canIntegrate && Boolean(this.snapshot?.status.currentBranch && this.snapshot?.status.headOid); }
+  get canStartIntegration(): boolean { return !this.gitUiActionPending && (this.client?.serverWelcome.capabilities.includes("git.integration.start") ?? false) && Boolean(this.snapshot?.status.currentBranch && this.snapshot?.status.headOid); }
   get canRebaseCommit(): boolean { return this.canStartIntegration && (this.client?.serverWelcome.capabilities.includes("git.integration.commit_target") ?? false); }
 
   async refreshIntegration(): Promise<void> {
     const client = this.client, repositoryId = this.activeRepositoryId, environmentId = this.workspaceState?.environmentId;
     const sequence = ++this.integrationReadSequence;
-    if (this.integrationReview && (this.integrationReview.repositoryId !== repositoryId || this.integrationReview.environmentId !== environmentId)) this.integrationReview = null;
     if (this.rewritePushReview && (this.rewritePushReview.repositoryId !== repositoryId || this.rewritePushReview.environmentId !== environmentId)) this.rewritePushReview = null;
     const scopeKey = repositoryId && environmentId ? JSON.stringify([environmentId, repositoryId]) : null;
     if (scopeKey !== this.integrationScopeKey) {
       this.integrationScopeKey = scopeKey;
       this.integrationState = null;
+      this.integrationError = "";
       this.integrationRecoveryDialog = null;
     }
-    this.integrationError = "Checking Git operation state…";
     if (!client || !repositoryId || !environmentId || !client.serverWelcome.capabilities.includes("git.integration.inspect")) {
       this.integrationState = null; this.integrationError = ""; return;
     }
@@ -138,38 +136,25 @@ export class WorkspaceStore {
     }
   }
 
-  async openIntegrationReview(targetRef: string, action: GitIntegrationAction): Promise<void> {
+  async openIntegrationReview(targetRef: string, action: GitIntegrationAction, expectedTarget?: string): Promise<void> {
     const client = this.client, repositoryId = this.activeRepositoryId, environmentId = this.workspaceState?.environmentId;
+    if (this.blockDuringMerge()) return;
     if (!client || !repositoryId || !environmentId || !this.canStartIntegration || (action === "rebase" && !this.canRebaseCommit) || this.integrationError || this.integrationState) return;
     try {
       const review = await client.reviewIntegration({ repositoryId, targetRef });
       if (this.client === client && this.activeRepositoryId === repositoryId && this.workspaceState?.environmentId === environmentId) {
-        if (action === "rebase") {
-          if (!this.canStartIntegration || this.integrationError || this.integrationState) return;
-          this.startReviewedIntegration(review, action);
-        } else {
-          this.integrationReview = { repositoryId, environmentId, review, action };
-        }
+        if (expectedTarget && review.targetOid !== expectedTarget) throw new Error("The selected branch moved; refresh and try again.");
+        if (this.gitActionPending || !this.canStartIntegration || this.integrationError || this.integrationState) return;
+        this.startReviewedIntegration(review, action);
       }
     } catch (error) { toast.error("Could not review operation", { description: summarizeGitError(error) }); }
-  }
-
-  confirmIntegration(): void {
-    const pending = this.integrationReview;
-    if (!pending || pending.repositoryId !== this.activeRepositoryId || pending.environmentId !== this.workspaceState?.environmentId || !this.canIntegrate) return;
-    // The runtime snapshots RPC inputs with structuredClone; Svelte's nested
-    // state proxies must be converted to plain data before crossing that boundary.
-    const review = { ...pending.review };
-    const action = pending.action;
-    this.integrationReview = null;
-    this.startReviewedIntegration(review, action);
   }
 
   private startReviewedIntegration(review: GitIntegrationReview, action: GitIntegrationAction): void {
     const inputReview = { ...review };
     this.requestGitAction({ kind: "integration", label: action === "merge" ? "Merging" : "Rebasing",
       action: (repositoryId, client) => client.startIntegration({ repositoryId, review: inputReview, action }),
-      onApplied: () => { void this.refreshIntegration(); },
+      onApplied: () => this.refreshIntegration(),
       onSucceeded: (value) => this.handleIntegrationOutcome(value as GitIntegrationOutcome),
       onFailed: () => { void this.refreshIntegration(); return false; },
     });
@@ -422,13 +407,14 @@ export class WorkspaceStore {
   private graphHeadOid = $derived(this.snapshot?.status.headOid);
   repositoryCanOperate = $derived(!this.externalTabs || Boolean(this.connectionEnvironmentId && this.environmentViews[this.connectionEnvironmentId]?.sessionScopes?.includes("repository:operate")));
   gitActionPending = $derived(this.gitAction !== null || this.repositoryDisconnected || !this.repositoryCanOperate);
-  canRenameBranch = $derived(!this.gitActionPending && (this.client?.serverWelcome.capabilities.includes("git.branch.rename") ?? false));
-  canDeleteBranch = $derived(!this.gitActionPending && (this.client?.serverWelcome.capabilities.includes("git.branch.delete") ?? false));
-  canCreateTag = $derived(!this.gitActionPending && (this.client?.serverWelcome.capabilities.includes("git.tag.create") ?? false));
-  canDeleteTag = $derived(!this.gitActionPending && (this.client?.serverWelcome.capabilities.includes("git.tag.delete") ?? false));
-  canCheckoutTag = $derived(!this.gitActionPending && (this.client?.serverWelcome.capabilities.includes("git.tag.checkout") ?? false));
-  canPushTag = $derived(!this.gitActionPending && (this.client?.serverWelcome.capabilities.includes("git.tag.push") ?? false));
-  canRemoveWorktree = $derived(!this.gitActionPending && (this.client?.serverWelcome.capabilities.includes("git.worktree.remove") ?? false));
+  gitUiActionPending = $derived((this.gitAction !== null && this.gitAction.label !== "Merging") || this.repositoryDisconnected || !this.repositoryCanOperate);
+  canRenameBranch = $derived(!this.gitUiActionPending && (this.client?.serverWelcome.capabilities.includes("git.branch.rename") ?? false));
+  canDeleteBranch = $derived(!this.gitUiActionPending && (this.client?.serverWelcome.capabilities.includes("git.branch.delete") ?? false));
+  canCreateTag = $derived(!this.gitUiActionPending && (this.client?.serverWelcome.capabilities.includes("git.tag.create") ?? false));
+  canDeleteTag = $derived(!this.gitUiActionPending && (this.client?.serverWelcome.capabilities.includes("git.tag.delete") ?? false));
+  canCheckoutTag = $derived(!this.gitUiActionPending && (this.client?.serverWelcome.capabilities.includes("git.tag.checkout") ?? false));
+  canPushTag = $derived(!this.gitUiActionPending && (this.client?.serverWelcome.capabilities.includes("git.tag.push") ?? false));
+  canRemoveWorktree = $derived(!this.gitUiActionPending && (this.client?.serverWelcome.capabilities.includes("git.worktree.remove") ?? false));
   stashCapabilities = $derived({
     selected: this.supportsStash("selected"), apply: this.supportsStash("apply"),
     pop: this.supportsStash("pop"), drop: this.supportsStash("drop"), branch: this.supportsStash("branch"),
@@ -1836,7 +1822,14 @@ export class WorkspaceStore {
   /* Git actions                                                             */
   /* ---------------------------------------------------------------------- */
 
+  private blockDuringMerge(): boolean {
+    if (this.integrationState?.kind !== "merge" && this.gitAction?.label !== "Merging") return false;
+    toast.warning("Merge in progress", { description: "Finish or abort the merge before running this action." });
+    return true;
+  }
+
   private requestGitAction(request: GitActionRequest, queueWhenBusy = false): void {
+    if (["switchBranch", "pull", "checkoutTag", "amend", "stash", "stashPop"].includes(request.kind) && this.blockDuringMerge()) return;
     if (this.repositoryDisconnected || !this.repositoryCanOperate) return;
     const repositoryId = this.activeRepositoryId;
     const client = this.client, workspace = this.workspace, environmentId = this.connectionEnvironmentId;
@@ -1845,6 +1838,7 @@ export class WorkspaceStore {
     }
 
     if (this.pendingGitActions[scopedRepositoryKey({ environmentId, repositoryId })]) {
+      if (this.gitAction?.label === "Merging") { this.blockDuringMerge(); return; }
       if (queueWhenBusy) {
         this.queuedGitActions = [...this.queuedGitActions, { ...request, repositoryId, environmentId, client, workspace }];
       }
@@ -1984,6 +1978,7 @@ export class WorkspaceStore {
   }
 
   switchBranch(branchName: string): void {
+    if (this.blockDuringMerge()) return;
     if (!this.activeRepositoryId || !this.client || this.gitActionPending) {
       return;
     }
@@ -2020,7 +2015,11 @@ export class WorkspaceStore {
     });
   }
 
-  pullRepository(): void {
+  pullRepository(expectedBranch?: string): void {
+    if (expectedBranch && this.snapshot?.status.currentBranch !== expectedBranch) {
+      toast.error("The current branch changed. Open the menu again.");
+      return;
+    }
     this.requestGitAction({
       kind: "pull",
       label: "Pulling",
@@ -2029,7 +2028,11 @@ export class WorkspaceStore {
     });
   }
 
-  pushRepository(): void {
+  pushRepository(expectedBranch?: string): void {
+    if (expectedBranch && this.snapshot?.status.currentBranch !== expectedBranch) {
+      toast.error("The current branch changed. Open the menu again.");
+      return;
+    }
     this.requestGitAction({
       kind: "push",
       label: "Pushing",
@@ -2297,6 +2300,7 @@ export class WorkspaceStore {
   }
 
   private prepareGitNameDialog(kind: "branch" | "renameBranch" | "tag" | "stash"): boolean {
+    if ((kind === "branch" || kind === "stash" || this.gitAction?.label === "Merging") && this.blockDuringMerge()) return false;
     const repositoryId = this.activeRepositoryId;
     const environmentId = this.workspaceState?.environmentId;
     if (!repositoryId || !environmentId || !this.client || this.gitActionPending) return false;
@@ -2550,11 +2554,12 @@ export class WorkspaceStore {
   }
 
   private supportsStash(action: keyof typeof stashMethods): boolean {
-    return !this.gitActionPending && this.client?.serverWelcome.environment_id === this.connectionEnvironmentId &&
+    return !this.gitUiActionPending && this.client?.serverWelcome.environment_id === this.connectionEnvironmentId &&
       (this.client?.serverWelcome.capabilities.includes(stashMethods[action]) ?? false);
   }
 
   openSelectedStash(source: "staged" | "unstaged", files: ChangedFile[]): void {
+    if (this.blockDuringMerge()) return;
     const environmentId = this.workspaceState?.environmentId;
     const repositoryId = this.activeRepositoryId;
     const paths = selectedStashPaths(files);
@@ -2563,6 +2568,7 @@ export class WorkspaceStore {
   }
 
   openStashAction(action: StashAction, stash: StashInfo): void {
+    if (action !== "drop" && this.blockDuringMerge()) return;
     const environmentId = this.workspaceState?.environmentId;
     const repositoryId = this.activeRepositoryId;
     if (!environmentId || !repositoryId || !this.supportsStash(action) || !reconcileSelectedStash(stash, this.snapshot?.stashes ?? [])) return;
@@ -2602,6 +2608,7 @@ export class WorkspaceStore {
     mutate: (client: GitGuiClient) => Promise<StashReceipt>,
     branchName = "",
   ): Promise<void> {
+    if (action !== "drop" && this.blockDuringMerge()) return;
     // Resolve the current projected session once at execution, then retain that
     // environment's client/workspace across every await. Never route late work
     // through this.client after an environment switch.

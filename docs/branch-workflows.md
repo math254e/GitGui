@@ -5,19 +5,24 @@
 The branch sidebar offers merge into the current branch and rebase of the
 current branch onto a selected local or remote-tracking ref. A graph commit's
 context menu can rebase the current branch onto that exact commit, even when
-no branch points to it. Rebase starts directly without a confirmation dialog;
-merge retains its review dialog. The `git.integration.commit_target` capability
+no branch points to it. Merge and rebase start directly without a confirmation dialog. The `git.integration.commit_target` capability
 keeps rebase disabled on older servers that cannot accept commit IDs. The server rechecks the current branch and
 target before invoking Git and refuses a dirty tracked worktree. Git merges with
 fast-forward enabled or creates a merge commit. Rebase uses linear replay,
 without autostash, autosquash, or updating other branches. Rebase can skip
 already-applied commits and rewrite published history.
 
+Branch actions pass the selected fully qualified ref to Git after checking its
+tip. Merge commit messages use the readable branch name. Another process can
+still move a ref between that check and Git resolving it.
+
 The server inspects the checkout's own Git metadata and unmerged index, including
 for externally started operations. An in-progress row in the graph has a
 context menu with Continue, Abort, and, for rebase, Skip; it remains available
 even when no files are changed. Users resolve files externally and stage them in
 GitGui or outside it. Repository status invalidations re-inspect Git state.
+During a merge, incompatible actions are blocked with an explanation; staging
+remains available for conflict resolution.
 Abort and Skip require confirmation. Unknown
 sequencer states are displayed without recovery actions. Git hooks and signing
 remain enabled; editors are suppressed. Git command execution currently has no

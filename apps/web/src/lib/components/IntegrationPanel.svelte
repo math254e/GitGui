@@ -29,17 +29,6 @@
     </dialog>
 {/if}
 
-{#if store.integrationReview}
-    <dialog use:modal aria-label="Review Git operation" oncancel={(event) => { event.preventDefault(); store.integrationReview = null; }} class="m-auto w-[calc(100%_-_2rem)] max-w-lg space-y-3 border border-[var(--app-theme-border)] bg-[var(--app-theme-surface)] p-5 text-sm text-[var(--app-theme-text)] shadow-xl backdrop:bg-black/50">
-      <h2 class="font-semibold">{store.integrationReview.action === "merge" ? "Merge branch" : "Rebase branch"}</h2>
-      {#if store.integrationReview.action === "merge"}<p>Merge <strong>{store.integrationReview.review.targetRef}</strong> into <strong>{store.integrationReview.review.currentRef}</strong>.</p>{:else}<p>Rebase <strong>{store.integrationReview.review.currentRef}</strong> onto <strong>{store.integrationReview.review.targetRef}</strong>.</p>{/if}
-      <p class="break-all text-xs">Current: {store.integrationReview.review.headOid}<br />Target: {store.integrationReview.review.targetOid}</p>
-      {#if store.integrationReview.action === "rebase"}<p>Rebase rewrites commit IDs, may omit already-applied commits, and does not preserve merge commits. Published history and collaborators may be affected.</p>{/if}
-      <p>Avoid other Git operations while this runs.</p>
-      <div class="flex justify-end gap-3"><button onclick={() => store.integrationReview = null}>Cancel</button><button onclick={() => store.confirmIntegration()}>{store.integrationReview.action === "merge" ? "Merge" : "Rebase"}</button></div>
-    </dialog>
-{/if}
-
 {#if store.integrationRecoveryDialog}
     <dialog use:modal aria-label="Confirm Git recovery" oncancel={(event) => { event.preventDefault(); store.integrationRecoveryDialog = null; }} class="m-auto w-[calc(100%_-_2rem)] max-w-md space-y-3 border border-[var(--app-theme-border)] bg-[var(--app-theme-surface)] p-5 text-sm text-[var(--app-theme-text)] shadow-xl backdrop:bg-black/50">
       <h2 class="font-semibold">{store.integrationRecoveryDialog.action === "abort" ? "Abort operation?" : "Skip this commit?"}</h2>

@@ -13,7 +13,7 @@ function model(overrides: Record<string, unknown> = {}): RepositoryPageModel {
     client: { serverWelcome: { capabilities: ["git.integration.inspect", "git.rewrite_push.execute"] } },
     activeRepositoryId: "repo", activeEnvironmentGeneration: 1,
     refreshIntegration: vi.fn(), canIntegrate: true, integrationError: "", integrationState: null,
-    integrationReview: null, rewritePushReview: null, rewritePushReviewPending: false,
+    rewritePushReview: null, rewritePushReviewPending: false,
     integrationRecoveryDialog: null, confirmIntegrationRecovery: vi.fn(),
     recoverIntegration: vi.fn(), openIntegrationReview: vi.fn(), openRewritePushReview: vi.fn(),
     ...overrides,
@@ -38,14 +38,4 @@ describe("merge and rebase controls", () => {
     expect(store.confirmIntegrationRecovery).toHaveBeenCalledOnce();
   });
 
-  it("states the operation direction and warns about rewritten history", () => {
-    const store = model({ integrationReview: { repositoryId: "repo", environmentId: "env", action: "rebase", review: {
-      currentRef: "refs/heads/feature", targetRef: "refs/heads/main", headOid: "a".repeat(40), targetOid: "b".repeat(40),
-    } } });
-    component = mount(IntegrationPanel, { target: document.body, props: { store } });
-    flushSync();
-    const dialog = document.querySelector('dialog')!;
-    expect(dialog.textContent).toContain("Rebase refs/heads/feature onto refs/heads/main");
-    expect(dialog.textContent).toContain("rewrites commit IDs");
-  });
 });
