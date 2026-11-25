@@ -12,6 +12,27 @@ let component: ReturnType<typeof mount> | undefined;
 afterEach(async () => { if (component) await unmount(component); component = undefined; document.body.replaceChildren(); vi.clearAllMocks(); });
 
 describe("integration recovery in the graph", () => {
+  it.each(["checkout-commit", "checkout-branch:refs/remotes/origin/topic"])("routes %s to the selected graph target", async (action) => {
+    const hash = "a".repeat(40);
+    const commit = { hash, parents: [], author: "Author", timestamp: 1, message: "Commit" };
+    const remote = { name: "refs/remotes/origin/topic", shortName: "origin/topic", refType: "remoteBranch" as const, target: hash };
+    const snapshot: RepositorySnapshot = {
+      info: { path: "/repo", root: "/repo" }, status: { currentBranch: "main", headOid: "b".repeat(40), ahead: 0, behind: 0, changedFiles: [] },
+      commits: [commit], refs: [remote], stashes: [], worktrees: [], graph: { commits: [{ hash, row: 0, lane: 0 }], edges: [], headLane: 0, width: 1 },
+    };
+    const onCheckoutCommit = vi.fn(), onCheckoutRemoteBranch = vi.fn();
+    menu.show.mockResolvedValueOnce(action);
+    component = mount(GitGraph, { target: document.body, props: {
+      snapshot, repositoryId: "repo", getRestoredScrollTop: () => 0, selectedCommit: null,
+      changesSelected: false, scrollToCommit: null, onScrollTopChange: vi.fn(), onScrollCommandHandled: vi.fn(),
+      onSelectChanges: vi.fn(), onSelectCommit: vi.fn(), onCompareCommitToWorkingTree: vi.fn(),
+      canCheckoutCommit: true, canCheckoutRemoteBranch: true, onCheckoutCommit, onCheckoutRemoteBranch,
+    } });
+    flushSync();
+    document.querySelector<HTMLButtonElement>(`[data-commit-hash="${hash}"]`)!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+    if (action === "checkout-commit") await vi.waitFor(() => expect(onCheckoutCommit).toHaveBeenCalledWith(commit));
+    else await vi.waitFor(() => expect(onCheckoutRemoteBranch).toHaveBeenCalledWith(remote));
+  });
   it.each([
     ["merge-commit", "merge"],
     ["rebase-commit", "rebase"],

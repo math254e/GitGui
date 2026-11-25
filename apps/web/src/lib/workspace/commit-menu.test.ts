@@ -11,6 +11,21 @@ const options = {
 };
 
 describe("commit context menu", () => {
+  it("enables commit, local and remote checkout independently and explains worktree restrictions", () => {
+    const remote: CommitRef = { name: "refs/remotes/origin/topic", shortName: "origin/topic", refType: "remoteBranch", target: main.target };
+    const items = commitMenuItems({ ...options, branches: [main], worktreeBranches: [main, remote], canCheckoutCommit: true, canCheckoutRemoteBranch: true });
+    const checkout = items.find((item) => item.id === "checkout")!;
+    expect(checkout.disabled).toBe(false);
+    expect(checkout.children?.map((item) => [item.id, item.disabled])).toEqual([
+      ["checkout-commit", false], ["checkout-branch:refs/heads/main", false], ["checkout-branch:refs/remotes/origin/topic", false],
+    ]);
+    const busy = commitMenuItems({ ...options, branches: [main], worktrees: [{ path: "/other", branch: "main", current: false, isMain: false, headOid: main.target }], canCheckoutCommit: true });
+    expect(busy.find((item) => item.id === "checkout")?.children?.[1]).toMatchObject({ disabled: true, disabledReason: "This branch is already checked out in another worktree." });
+    const oldServer = commitMenuItems({ ...options, branches: [], canSwitchBranch: false });
+    expect(oldServer.find((item) => item.id === "checkout")?.disabled).toBe(true);
+    const current = commitMenuItems({ ...options, currentBranch: "main", canCheckoutCommit: true });
+    expect(current.find((item) => item.id === "checkout")?.children?.[1]).toMatchObject({ disabled: true, disabledReason: "This branch is already checked out in the current worktree." });
+  });
   it("uses the agreed order and greys unimplemented actions", () => {
     const items = commitMenuItems(options);
     expect(items.map((item) => item.id)).toEqual([

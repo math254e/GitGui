@@ -1996,6 +1996,14 @@ export class WorkspaceStore {
     });
   }
 
+  checkoutCommit(commit: CommitInfo): void {
+    const client = this.client;
+    if (!client?.serverWelcome.capabilities.includes("git.commit.checkout") || this.gitActionPending || !this.activeRepositoryId || this.blockDuringMerge()) return;
+    this.requestGitAction({ kind: "switchBranch", label: "Checking out commit",
+      successMessage: `Checked out ${commit.hash.slice(0, 8)} (detached HEAD)`,
+      action: (repositoryId) => client.checkoutCommit({ repositoryId, commitHash: commit.hash }) });
+  }
+
   fetchRepository(): void {
     const client = this.client, repositoryId = this.activeRepositoryId, environmentId = this.workspaceState?.environmentId;
     if (!client || !repositoryId || !environmentId) return;

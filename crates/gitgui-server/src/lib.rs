@@ -1179,6 +1179,7 @@ fn required_scope_for_method(method: &str) -> Option<&'static str> {
         | METHOD_GIT_TAG_PUSH
         | METHOD_GIT_TAG_APPLY_FETCH
         | METHOD_GIT_BRANCH_SWITCH
+        | gitgui_protocol::METHOD_GIT_COMMIT_CHECKOUT
         | METHOD_GIT_BRANCH_RENAME
         | METHOD_GIT_BRANCH_DELETE
         | METHOD_GIT_WORKTREE_REMOVE
@@ -1289,6 +1290,7 @@ async fn dispatch(request: RequestEnvelope, state: &ServerState) -> ResponseEnve
         }
         METHOD_GIT_TAG_APPLY_FETCH => git_tag_apply_fetch(request.id, request.params, state).await,
         METHOD_GIT_BRANCH_SWITCH => git_branch_switch(request.id, request.params, state).await,
+        gitgui_protocol::METHOD_GIT_COMMIT_CHECKOUT => git_commit_checkout(request.id, request.params, state).await,
         METHOD_GIT_BRANCH_RENAME | METHOD_GIT_BRANCH_DELETE => {
             git_branch_mutation(request.id, &request.method, request.params, state).await
         }
@@ -2418,6 +2420,22 @@ async fn git_tag_apply_fetch(
                 snapshot,
             },
         ),
+        Err(error) => ResponseEnvelope::error(request_id, error),
+    }
+}
+
+async fn git_commit_checkout(request_id: String, params: Value, state: &ServerState) -> ResponseEnvelope {
+    let params = match parse_params::<CommitFilesParams>(params, gitgui_protocol::METHOD_GIT_COMMIT_CHECKOUT) {
+        Ok(params) => params,
+        Err(error) => return ResponseEnvelope::error(request_id, error),
+    };
+    if let Err(error) = validate_repository_id(&params.repository_id).and_then(|_| validate_object_id(&params.commit_hash)) {
+        return ResponseEnvelope::error(request_id, error);
+    }
+    match run_git_action(state, &params.repository_id, move |root| {
+        gitgui_core::git::operations::checkout_commit(root, &params.commit_hash)
+    }).await {
+        Ok((repository, snapshot, _)) => response_success(request_id, GitBranchSwitchResult { repository, snapshot }),
         Err(error) => ResponseEnvelope::error(request_id, error),
     }
 }
@@ -4302,6 +4320,7 @@ fn implemented_capabilities() -> Vec<String> {
         CAPABILITY_GIT_TAG_DETAILS,
         CAPABILITY_GIT_TAG_APPLY_FETCH,
         CAPABILITY_GIT_BRANCH_SWITCH,
+        gitgui_protocol::CAPABILITY_GIT_COMMIT_CHECKOUT,
         CAPABILITY_GIT_BRANCH_RENAME,
         CAPABILITY_GIT_BRANCH_DELETE,
         gitgui_protocol::CAPABILITY_GIT_WORKTREE_REMOVE,
@@ -5095,6 +5114,7 @@ mod tests {
             METHOD_GIT_TAG_PUSH,
             METHOD_GIT_TAG_APPLY_FETCH,
             METHOD_GIT_BRANCH_SWITCH,
+            gitgui_protocol::METHOD_GIT_COMMIT_CHECKOUT,
             METHOD_GIT_BRANCH_RENAME,
             METHOD_GIT_BRANCH_DELETE,
             METHOD_GIT_WORKTREE_REMOVE,

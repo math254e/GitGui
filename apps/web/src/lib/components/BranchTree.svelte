@@ -20,6 +20,7 @@
     visibleRefKeys?: ReadonlySet<string>;
     onSelectRef?: (ref: CommitRef) => void;
     onSwitchBranch?: (branchName: string) => void;
+    canSwitchBranch?: boolean;
     canCreateLocalBranch?: boolean;
     onCreateLocalBranch?: (branch: CommitRef) => void;
     canCreateWorktree?: boolean;
@@ -52,6 +53,7 @@
     visibleRefKeys = new Set<string>(),
     onSelectRef,
     onSwitchBranch,
+    canSwitchBranch = false,
     canCreateLocalBranch = false,
     onCreateLocalBranch,
     canCreateWorktree = false,
@@ -414,7 +416,7 @@
 
   function handleTreeDoubleClick(event: MouseEvent) {
     const eventPath = event.composedPath();
-    if (refType !== "localBranch" || isDecorationEvent(eventPath)) {
+    if (refType !== "localBranch" || !canSwitchBranch || isDecorationEvent(eventPath)) {
       return;
     }
 
@@ -431,7 +433,7 @@
 
     const itemPath = normalizePath(item.getAttribute("data-item-path") ?? "");
     const ref = branchByPath.get(itemPath);
-    if (!ref) {
+    if (!ref || ref.shortName === currentBranch || checkedOutBranches.has(ref.shortName)) {
       return;
     }
 
@@ -464,6 +466,7 @@
       canRewritePush,
       canCreateLocalBranch,
       canCreateWorktree,
+      canSwitchBranch: canSwitchBranch && Boolean(onSwitchBranch),
     }), position, contextMenuOwner, worktree?.isMain === false ? { width: 320 } : undefined);
     // Keep the menu target visible through refreshes and virtualized row replacements.
     const treePath = row.dataset.itemPath ?? "";
@@ -479,6 +482,7 @@
       if (key !== contextKey) return;
       if (selected === `rename:${branch.name}`) onRenameBranch?.(branch);
       if (selected === `create-local:${branch.name}`) onCreateLocalBranch?.(branch);
+      if (selected === `checkout:${branch.name}`) onSwitchBranch?.(branch.shortName);
       if (selected === `create-worktree:${branch.name}`) onCreateWorktree?.(branch);
       if (selected === `delete:${branch.name}`) onDeleteBranch?.(branch);
       if (selected === `merge:${branch.name}`) onIntegrateBranch?.(branch, "merge");

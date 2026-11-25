@@ -8,6 +8,13 @@ const worktree: WorktreeInfo = { path: "/tmp/linked", branch: "issue/2", headOid
 const options = { canRename: true, canRemove: true, canDeleteBranch: true };
 
 describe("branch and worktree removal menus", () => {
+  it("allows checkout of an available local branch and explains checked out branches", () => {
+    const base = { canRename: true, canDelete: true, canSwitchBranch: true, checkedOut: false };
+    expect(branchMenuItems(branch, base).find((item) => item.id === `checkout:${branch.name}`)?.disabled).toBe(false);
+    expect(branchMenuItems(branch, { ...base, checkedOut: true, isCurrent: true }).find((item) => item.id === `checkout:${branch.name}`)).toMatchObject({ disabled: true, disabledReason: "This branch is already checked out in the current worktree." });
+    expect(branchMenuItems(branch, { ...base, checkedOut: true, worktree }).find((item) => item.id === `checkout:${branch.name}`)).toMatchObject({ disabled: true, disabledReason: "This branch is already checked out in another worktree." });
+    expect(branchMenuItems(branch, { ...base, canSwitchBranch: false }).find((item) => item.id === `checkout:${branch.name}`)?.disabled).toBe(true);
+  });
   it("offers integration for local, remote and linked-worktree branches while blocking the current branch", () => {
     const base = { canRename: true, canDelete: true, checkedOut: false, canIntegrate: true };
     for (const ref of [branch, { ...branch, name: "refs/remotes/origin/issue/2", refType: "remoteBranch" as const }]) {

@@ -16,6 +16,8 @@ type Options = {
   canPullOther?: boolean;
   canPushOther?: boolean;
   canSwitchBranch: boolean;
+  canCheckoutRemoteBranch?: boolean;
+  canCheckoutCommit?: boolean;
   canCreateBranch: boolean;
   canCreateWorktree?: boolean;
   canCreateTag: boolean;
@@ -33,10 +35,12 @@ export function commitMenuItems(options: Options): ContextMenuItem[] {
   const hideIntegration = currentSelected || options.isCurrentBranchContext === true;
   const headSelected = options.headOid === options.commitOid;
   const elsewhere = (branch: CommitRef) => options.worktrees.some((worktree) => worktree.branch === branch.shortName && !worktree.current);
-  const checkoutBranches: ContextMenuItem[] = branches.map((branch) => ({
+  const checkoutBranches: ContextMenuItem[] = (options.worktreeBranches ?? branches).map((branch) => ({
     id: `checkout-branch:${branch.name}`,
     label: branch.shortName,
-    disabled: pending || !options.canSwitchBranch || branch.refType !== "localBranch" || branch.shortName === currentBranch || elsewhere(branch),
+    disabled: pending || (branch.refType === "remoteBranch" ? !options.canCheckoutRemoteBranch : !options.canSwitchBranch || branch.shortName === currentBranch || elsewhere(branch)),
+    disabledReason: branch.refType === "localBranch" && branch.shortName === currentBranch ? "This branch is already checked out in the current worktree."
+      : branch.refType === "localBranch" && elsewhere(branch) ? "This branch is already checked out in another worktree." : undefined,
   }));
   const branchActions: ContextMenuItem[] = branches.flatMap((branch) => {
     const checkedOut = branch.refType !== "localBranch" || branch.shortName === currentBranch || options.worktrees.some((worktree) => worktree.branch === branch.shortName);
@@ -65,8 +69,8 @@ export function commitMenuItems(options: Options): ContextMenuItem[] {
       { id: "interactive-rebase", label: "Interactive rebase", disabled: true },
       { id: "squash", label: "Squash", disabled: true },
     ] : []),
-    { id: "checkout", label: "Checkout", icon: "git-branch", separatorBefore: true, disabled: checkoutBranches.every((item) => item.disabled), children: [
-      { id: "checkout-commit", label: "This commit", disabled: true },
+    { id: "checkout", label: "Checkout", icon: "git-branch", separatorBefore: true, disabled: (pending || !options.canCheckoutCommit) && checkoutBranches.every((item) => item.disabled), children: [
+      { id: "checkout-commit", label: "This commit", disabled: pending || !options.canCheckoutCommit },
       ...checkoutBranches,
     ] },
     ...(worktreeBranches.length === 0 ? [{ id: "worktree-commit", label: "Create worktree from this commit", icon: "folder", disabled: pending || !options.canCreateWorktree }] : [{ id: "worktree", label: "Create worktree", icon: "folder", disabled: pending || !options.canCreateWorktree, children: [

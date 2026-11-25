@@ -27,6 +27,7 @@ export function branchMenuItems(branch: CommitRef, options: {
   canRewritePush?: boolean;
   canCreateLocalBranch?: boolean;
   canCreateWorktree?: boolean;
+  canSwitchBranch?: boolean;
 }): ContextMenuItem[] {
   const integration: ContextMenuItem[] = options.canIntegrate === undefined || options.isCurrent ? [] : [
     { id: `merge:${branch.name}`, label: "Merge into current branch", icon: "git-branch", disabled: !options.canIntegrate || options.isCurrent },
@@ -38,6 +39,12 @@ export function branchMenuItems(branch: CommitRef, options: {
   const worktreeCreation: ContextMenuItem[] = options.canCreateWorktree === undefined ? [] : [
     { id: `create-worktree:${branch.name}`, label: "Create worktree", icon: "folder", disabled: !options.canCreateWorktree || options.checkedOut || Boolean(options.worktree) },
   ];
+  const checkout: ContextMenuItem[] = options.canSwitchBranch === undefined ? [] : [{
+    id: `checkout:${branch.name}`, label: "Checkout branch", icon: "git-branch",
+    disabled: !options.canSwitchBranch || options.checkedOut || Boolean(options.worktree),
+    disabledReason: options.isCurrent ? "This branch is already checked out in the current worktree."
+      : options.checkedOut || options.worktree ? "This branch is already checked out in another worktree." : undefined,
+  }];
   const management = branchManagementMenu(branch, {
     canRename: branch.refType === "localBranch" && options.canRename,
     canDelete: branch.refType === "localBranch" && options.canDelete && !options.checkedOut && !options.worktree,
@@ -57,7 +64,7 @@ export function branchMenuItems(branch: CommitRef, options: {
     label: item.id.startsWith("rename:") ? "Rename branch…" : item.id.startsWith("delete:") ? "Delete branch…" : "Solo",
   }));
   if (options.worktree?.isMain === false) {
-    return [...integration, ...currentActions, ...worktreeCreation, ...managementItems, ...worktreeMenuItems(options.worktree, {
+    return [...checkout, ...integration, ...currentActions, ...worktreeCreation, ...managementItems, ...worktreeMenuItems(options.worktree, {
       canRename: options.canRename,
       canRemove: options.canRemoveWorktree ?? false,
       canDeleteBranch: options.canDelete,
@@ -68,6 +75,7 @@ export function branchMenuItems(branch: CommitRef, options: {
     }))];
   }
   return [
+    ...checkout,
     ...integration,
     ...currentActions,
     ...worktreeCreation,

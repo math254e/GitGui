@@ -32,6 +32,7 @@
  * - GitGui integration methods inspect and mutate Git-owned merge/rebase state,
  *   and a reviewed rewrite-push uses an explicit remote lease.
  * - Branch-targeted pull and push carry an explicit local ref and expected tip.
+ * - Commit checkout accepts a full object ID and switches to detached HEAD.
  */
 import type {
   GitIntegrationState, GitIntegrationReview, GitIntegrationReviewParams,
@@ -202,6 +203,7 @@ export interface GitGuiRpcMethods {
     readonly input: GitBranchSwitchParams;
     readonly output: GitBranchSwitchResult;
   };
+  "git.commit.checkout": { readonly input: CommitFilesParams; readonly output: GitBranchSwitchResult };
   "git.tag.create": { readonly input: GitTagCreateParams; readonly output: GitTagCreateResult };
   "git.tag.delete": { readonly input: GitTagDeleteParams; readonly output: GitTagDeleteResult };
   "git.tag.checkout": { readonly input: GitTagTargetParams; readonly output: GitTagMutationResult };
@@ -277,6 +279,7 @@ export const WS_METHOD_NAMES = [
   "git.tag.details",
   "git.tag.apply_fetch",
   "git.branch.switch",
+  "git.commit.checkout",
   "git.branch.rename",
   "git.branch.delete",
   "git.worktree.remove",
@@ -345,6 +348,7 @@ export const WS_METHODS = {
   gitTagDetails: "git.tag.details",
   gitTagApplyFetch: "git.tag.apply_fetch",
   gitBranchSwitch: "git.branch.switch",
+  gitCommitCheckout: "git.commit.checkout",
   gitBranchRename: "git.branch.rename",
   gitIntegrationInspect: "git.integration.inspect",
   gitIntegrationReview: "git.integration.review",

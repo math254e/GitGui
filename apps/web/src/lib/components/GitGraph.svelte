@@ -52,6 +52,10 @@
     canPullOtherBranch?: boolean;
     canPushOtherBranch?: boolean;
     onSwitchBranch?: (branchName: string) => void;
+    onCheckoutRemoteBranch?: (branch: CommitRef) => void;
+    canCheckoutRemoteBranch?: boolean;
+    onCheckoutCommit?: (commit: CommitInfo) => void;
+    canCheckoutCommit?: boolean;
     canPullBranch?: boolean;
     canPushBranch?: boolean;
     canSwitchBranch?: boolean;
@@ -101,6 +105,10 @@
     canPullOtherBranch = false,
     canPushOtherBranch = false,
     onSwitchBranch,
+    onCheckoutRemoteBranch,
+    canCheckoutRemoteBranch = false,
+    onCheckoutCommit,
+    canCheckoutCommit = false,
     canPullBranch = false,
     canPushBranch = false,
     canSwitchBranch = false,
@@ -210,6 +218,8 @@
       isCurrentBranchContext: associatedBranch?.refType === "localBranch" && associatedBranch.shortName === snapshot?.status.currentBranch,
       commitOid: commit.hash, worktrees: snapshot?.worktrees ?? [], pending,
       canPull: canPullBranch && Boolean(onPullBranch), canPush: canPushBranch && Boolean(onPushBranch), canSwitchBranch: canSwitchBranch && Boolean(onSwitchBranch),
+      canCheckoutRemoteBranch: canCheckoutRemoteBranch && Boolean(onCheckoutRemoteBranch),
+      canCheckoutCommit: canCheckoutCommit && Boolean(onCheckoutCommit),
       canPullOther: canPullOtherBranch && Boolean(onPullBranch), canPushOther: canPushOtherBranch && Boolean(onPushBranch),
       canCreateBranch: Boolean(onCreateBranch), canCreateTag: canCreateTag && Boolean(onCreateTag),
       canCreateWorktree: canCreateWorktree && Boolean(onCreateWorktree),
@@ -226,6 +236,7 @@
         onCompareCommitToWorkingTree(commit);
       }
       if (selected === "create") onCreateBranch?.(commit);
+      if (selected === "checkout-commit") onCheckoutCommit?.(commit);
       if (selected === "worktree-commit") onCreateWorktree?.(commit);
       if (selected === "createTag") onCreateTag?.(commit);
       if (selected === "rebase-commit") {
@@ -237,9 +248,12 @@
       if (selected === "push" && selectedBranch) onPushBranch?.(selectedBranch);
       for (const branch of worktreeBranches) {
         if (selected === `worktree-branch:${branch.name}`) onCreateWorktree?.(branch);
+        if (selected === `checkout-branch:${branch.name}`) {
+          if (branch.refType === "remoteBranch") onCheckoutRemoteBranch?.(branch);
+          else onSwitchBranch?.(branch.shortName);
+        }
       }
       for (const branch of branches) {
-        if (selected === `checkout-branch:${branch.name}`) onSwitchBranch?.(branch.shortName);
         if (selected === `rename:${branch.name}`) onRenameBranch?.(branch);
         if (selected === `delete:${branch.name}`) onDeleteBranch?.(branch);
       }

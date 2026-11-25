@@ -171,6 +171,8 @@ The graph also offers worktree creation for a selected commit (detached HEAD)
 or branch. The local branch sidebar offers the same branch action. Local
 branches already checked out in a worktree are unavailable.
 Commit worktrees use the abbreviated object ID in the sibling folder name.
+The graph checkout menu can also check out the selected commit in the current
+worktree with detached HEAD. Git protects conflicting local changes.
 
 Right-clicking a linked-worktree branch in the sidebar or graph offers the same
 actions as its entry in the Worktrees list:

@@ -385,6 +385,10 @@ export class GitGuiClient {
     });
   }
 
+  checkoutCommit(params: CommitFilesParams) {
+    return this.call("git.commit.checkout", { ...params, repositoryId: assertRepositoryId(params.repositoryId) });
+  }
+
   createTag(params: GitTagCreateParams) {
     return this.call("git.tag.create", { ...params, repositoryId: assertRepositoryId(params.repositoryId) });
   }

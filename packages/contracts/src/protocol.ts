@@ -58,6 +58,7 @@ export const WS_METHOD_NAMES = [
   "git.tag.details",
   "git.tag.apply_fetch",
   "git.branch.switch",
+  "git.commit.checkout",
   "git.branch.rename",
   "git.branch.delete",
   "git.worktree.remove",

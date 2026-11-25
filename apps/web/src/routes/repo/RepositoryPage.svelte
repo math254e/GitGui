@@ -81,6 +81,7 @@
         stateKey={store.sidebarStateKey}
         visibleRefKeys={store.visibleGraphRefKeys}
         onSelectRef={(ref) => store.selectRef(ref)}
+        canSwitchBranch={!store.gitActionPending && Boolean(store.client?.serverWelcome.capabilities.includes("git.branch.switch"))}
         canCreateLocalBranch={!store.gitUiActionPending && (store.client?.serverWelcome.capabilities.includes("git.branch.create") ?? false)}
         onCreateLocalBranch={(ref) => store.openRemoteBranchDialog(ref)}
         canCreateWorktree={!store.gitUiActionPending && (store.client?.serverWelcome.capabilities.includes("git.worktree.create") ?? false)}
@@ -140,6 +141,8 @@
         stateKey={store.sidebarStateKey}
         visibleRefKeys={store.visibleGraphRefKeys}
         onSelectRef={(ref) => store.selectRef(ref)}
+        canSwitchBranch={!store.gitActionPending && Boolean(store.client?.serverWelcome.capabilities.includes("git.branch.switch"))}
+        onSwitchBranch={(branchName) => store.switchBranch(branchName)}
         canCreateLocalBranch={!store.gitUiActionPending && (store.client?.serverWelcome.capabilities.includes("git.branch.create") ?? false)}
         onCreateLocalBranch={(ref) => store.openRemoteBranchDialog(ref)}
         canCreateWorktree={!store.gitUiActionPending && (store.client?.serverWelcome.capabilities.includes("git.worktree.create") ?? false)}
@@ -186,6 +189,10 @@
               canPullOtherBranch={Boolean(store.client?.serverWelcome?.capabilities.includes("git.branch.pull"))}
               canPushOtherBranch={Boolean(store.client?.serverWelcome?.capabilities.includes("git.branch.push"))}
               canSwitchBranch={Boolean(store.client?.serverWelcome?.capabilities.includes("git.branch.switch") && (store.integrationState?.kind === "merge" || !store.integrationState) && !store.integrationError)}
+              canCheckoutRemoteBranch={Boolean(store.client?.serverWelcome.capabilities.includes("git.branch.create"))}
+              onCheckoutRemoteBranch={(branch) => store.openRemoteBranchDialog(branch)}
+              canCheckoutCommit={Boolean(store.client?.serverWelcome.capabilities.includes("git.commit.checkout"))}
+              onCheckoutCommit={(commit) => store.checkoutCommit(commit)}
               onPullBranch={(branch) => store.pullSelectedBranch(branch)}
               onPushBranch={(branch) => store.pushSelectedBranch(branch)}
               onSwitchBranch={(branch) => store.switchBranch(branch)}
@@ -311,6 +318,7 @@
             stateKey={store.sidebarStateKey}
             visibleRefKeys={store.visibleGraphRefKeys}
             onSelectRef={(ref) => store.selectRef(ref)}
+            canSwitchBranch={!store.gitActionPending && Boolean(store.client?.serverWelcome.capabilities.includes("git.branch.switch"))}
             canCreateLocalBranch={!store.gitUiActionPending && (store.client?.serverWelcome.capabilities.includes("git.branch.create") ?? false)}
             onCreateLocalBranch={(ref) => store.openRemoteBranchDialog(ref)}
             canCreateWorktree={!store.gitUiActionPending && (store.client?.serverWelcome.capabilities.includes("git.worktree.create") ?? false)}
@@ -365,6 +373,10 @@
                   canPullOtherBranch={Boolean(store.client?.serverWelcome?.capabilities.includes("git.branch.pull"))}
                   canPushOtherBranch={Boolean(store.client?.serverWelcome?.capabilities.includes("git.branch.push"))}
                   canSwitchBranch={Boolean(store.client?.serverWelcome?.capabilities.includes("git.branch.switch") && (store.integrationState?.kind === "merge" || !store.integrationState) && !store.integrationError)}
+                  canCheckoutRemoteBranch={Boolean(store.client?.serverWelcome.capabilities.includes("git.branch.create"))}
+                  onCheckoutRemoteBranch={(branch) => store.openRemoteBranchDialog(branch)}
+                  canCheckoutCommit={Boolean(store.client?.serverWelcome.capabilities.includes("git.commit.checkout"))}
+                  onCheckoutCommit={(commit) => store.checkoutCommit(commit)}
                   onPullBranch={(branch) => store.pullSelectedBranch(branch)}
                   onPushBranch={(branch) => store.pushSelectedBranch(branch)}
                   onSwitchBranch={(branch) => store.switchBranch(branch)}

@@ -239,6 +239,16 @@ pub fn switch_branch(root: &str, name: &str, merge: bool) -> Result<(), GitError
     GitCommand::run_owned(&args, Some(Path::new(root))).map(|_| ())
 }
 
+pub fn checkout_commit(root: &str, commit: &str) -> Result<(), GitError> {
+    if !super::stash::is_oid(commit) {
+        return Err(branch_error("A full commit object ID is required"));
+    }
+    if GitCommand::run(&["--no-replace-objects", "cat-file", "-t", commit], Some(Path::new(root)))?.trim() != "commit" {
+        return Err(branch_error("The selected object is not a commit"));
+    }
+    GitCommand::run(&["switch", "--detach", commit], Some(Path::new(root))).map(|_| ())
+}
+
 pub fn create_worktree(root: &str, source: &str, name: Option<&str>) -> Result<(), GitError> {
     let remote = source.starts_with("refs/remotes/");
     let local = source.strip_prefix("refs/heads/");
@@ -271,6 +281,17 @@ pub fn create_worktree(root: &str, source: &str, name: Option<&str>) -> Result<(
         return Err(branch_error("The worktree destination already exists"));
     }
     let path = path.to_str().ok_or_else(|| branch_error("The worktree path is not valid UTF-8"))?;
+    // Windows canonicalization yields verbatim paths, which Git for Windows
+    // does not consistently accept when creating a worktree.
+    #[cfg(windows)]
+    let git_path = if let Some(unc) = path.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{unc}")
+    } else {
+        path.strip_prefix(r"\\?\").unwrap_or(path).to_owned()
+    };
+    #[cfg(not(windows))]
+    let git_path = path.to_owned();
+    let path = git_path.as_str();
     let args = if remote {
         vec!["worktree", "add", "--track", "-b", name.expect("validated name"), "--", path, source]
     } else if let Some(branch) = local {
@@ -589,6 +610,54 @@ mod branch_tests {
         git(dir.path(), &["config", "core.autocrlf", "false"]);
         git(dir.path(), &["commit", "--allow-empty", "-qm", "base"]);
         dir
+    }
+
+    #[test]
+    fn creates_worktrees_for_local_remote_and_commit_targets_beside_main() {
+        let sandbox = tempfile::tempdir().unwrap();
+        let main = sandbox.path().join("repo with spaces");
+        std::fs::create_dir(&main).unwrap();
+        git(&main, &["init", "-q", "-b", "main"]);
+        git(&main, &["config", "user.name", "GitGui Test"]);
+        git(&main, &["config", "user.email", "test@example.com"]);
+        git(&main, &["commit", "--allow-empty", "-qm", "base"]);
+        let tip = git(&main, &["rev-parse", "HEAD"]);
+        let root = main.to_str().unwrap();
+        git(&main, &["branch", "local/topic"]);
+        create_worktree(root, "refs/heads/local/topic", None).unwrap();
+        let local = sandbox.path().join("repo with spaces-local-topic");
+        assert_eq!(git(&local, &["branch", "--show-current"]), "local/topic");
+        assert!(create_worktree(root, "refs/heads/local/topic", None).is_err());
+        git(&main, &["remote", "add", "origin", "https://example.invalid/repo.git"]);
+        git(&main, &["update-ref", "refs/remotes/origin/remote-topic", &tip]);
+        git(&main, &["config", "branch.autoSetupMerge", "false"]);
+        create_worktree(local.to_str().unwrap(), "refs/remotes/origin/remote-topic", Some("remote-topic")).unwrap();
+        let remote = sandbox.path().join("repo with spaces-remote-topic");
+        assert_eq!(git(&remote, &["branch", "--show-current"]), "remote-topic");
+        assert_eq!(git(&remote, &["rev-parse", "--abbrev-ref", "@{upstream}"]), "origin/remote-topic");
+        create_worktree(root, &tip, None).unwrap();
+        let detached = sandbox.path().join(format!("repo with spaces-{}", &tip[..8]));
+        assert_eq!(git(&detached, &["rev-parse", "HEAD"]), tip);
+        assert_eq!(git(&detached, &["branch", "--show-current"]), "");
+        assert!(create_worktree(root, "HEAD~1", None).is_err());
+        assert!(create_worktree(root, "refs/heads/main", None).is_err());
+    }
+
+    #[test]
+    fn checks_out_remote_tracking_branch_and_switches_local_branches() {
+        let repo = repository();
+        let root = repo.path().to_str().unwrap();
+        let tip = git(repo.path(), &["rev-parse", "HEAD"]);
+        git(repo.path(), &["remote", "add", "origin", "https://example.invalid/repo.git"]);
+        git(repo.path(), &["update-ref", "refs/remotes/origin/feature/topic", &tip]);
+        git(repo.path(), &["config", "branch.autoSetupMerge", "false"]);
+        create_branch(root, "feature/topic", Some("refs/remotes/origin/feature/topic"), true).unwrap();
+        assert_eq!(git(repo.path(), &["branch", "--show-current"]), "feature/topic");
+        assert_eq!(git(repo.path(), &["rev-parse", "--abbrev-ref", "@{upstream}"]), "origin/feature/topic");
+        switch_branch(root, "main", false).unwrap();
+        assert_eq!(git(repo.path(), &["branch", "--show-current"]), "main");
+        switch_branch(root, "feature/topic", false).unwrap();
+        assert_eq!(git(repo.path(), &["branch", "--show-current"]), "feature/topic");
     }
 
     #[test]

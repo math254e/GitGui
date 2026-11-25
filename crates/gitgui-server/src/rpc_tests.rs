@@ -12,6 +12,43 @@ pub(super) type Client = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
 pub(super) const GIT_FIXTURE_DEADLINE: Duration = Duration::from_secs(120);
 
 #[tokio::test]
+async fn commit_checkout_is_scoped_validated_and_preserves_conflicting_changes() {
+    let root = repository();
+    git(root.path(), &["restore", "file.txt"]);
+    let old = git(root.path(), &["rev-parse", "HEAD"]);
+    fs::write(root.path().join("file.txt"), "new committed contents\n").unwrap();
+    git(root.path(), &["commit", "-am", "new contents"]);
+    let tip = git(root.path(), &["rev-parse", "HEAD"]);
+    let state = state(root.path());
+    assert!(state.info.capabilities.iter().any(|item| item == gitgui_protocol::METHOD_GIT_COMMIT_CHECKOUT));
+    let id = state.repositories.read().await[0].summary.id.clone();
+    let method = gitgui_protocol::METHOD_GIT_COMMIT_CHECKOUT;
+    let (mut reader, _, reader_server) = socket(state.clone(), vec![SCOPE_REPOSITORY_READ.into()]).await;
+    send(&mut reader, "denied", method, json!({"repositoryId": id, "commitHash": old})).await;
+    assert_eq!(receive(&mut reader).await["error"]["code"], error_codes::FORBIDDEN);
+    reader.close(None).await.unwrap();
+    reader_server.abort();
+    let (mut client, _, server) = socket(state, vec![SCOPE_REPOSITORY_OPERATE.into()]).await;
+    send(&mut client, "invalid", method, json!({"repositoryId": id, "commitHash": "HEAD~1"})).await;
+    assert_eq!(receive(&mut client).await["ok"], false);
+    assert_eq!(git(root.path(), &["rev-parse", "HEAD"]), tip);
+    fs::write(root.path().join("file.txt"), "uncommitted contents\n").unwrap();
+    send(&mut client, "dirty", method, json!({"repositoryId": id, "commitHash": old})).await;
+    assert_eq!(receive(&mut client).await["ok"], false);
+    assert_eq!(git(root.path(), &["rev-parse", "HEAD"]), tip);
+    assert_eq!(fs::read_to_string(root.path().join("file.txt")).unwrap(), "uncommitted contents\n");
+    git(root.path(), &["restore", "file.txt"]);
+    send(&mut client, "checkout", method, json!({"repositoryId": id, "commitHash": old})).await;
+    let result = receive(&mut client).await;
+    assert_eq!(result["ok"], true, "{result}");
+    assert!(result["result"]["snapshot"]["status"]["currentBranch"].is_null());
+    assert_eq!(git(root.path(), &["rev-parse", "HEAD"]), old);
+    assert_eq!(git(root.path(), &["rev-parse", "refs/heads/main"]), tip);
+    client.close(None).await.unwrap();
+    server.abort();
+}
+
+#[tokio::test]
 async fn integration_rebase_replays_a_clean_branch_over_the_websocket() {
     let root = repository();
     git(root.path(), &["restore", "file.txt"]);

@@ -131,6 +131,8 @@ pub const METHOD_GIT_TAG_DETAILS: &str = "git.tag.details";
 pub const METHOD_GIT_TAG_APPLY_FETCH: &str = "git.tag.apply_fetch";
 /// Canonical method for switching the current branch.
 pub const METHOD_GIT_BRANCH_SWITCH: &str = "git.branch.switch";
+/// Check out a commit by full object ID with detached HEAD.
+pub const METHOD_GIT_COMMIT_CHECKOUT: &str = "git.commit.checkout";
 /// Canonical method for renaming a reviewed local branch.
 pub const METHOD_GIT_BRANCH_RENAME: &str = "git.branch.rename";
 /// Canonical method for deleting a reviewed local branch.
@@ -214,6 +216,7 @@ pub const WS_METHOD_NAMES: &[&str] = &[
     METHOD_GIT_TAG_DETAILS,
     METHOD_GIT_TAG_APPLY_FETCH,
     METHOD_GIT_BRANCH_SWITCH,
+    METHOD_GIT_COMMIT_CHECKOUT,
     METHOD_GIT_BRANCH_RENAME,
     METHOD_GIT_BRANCH_DELETE,
     METHOD_GIT_WORKTREE_REMOVE,
@@ -321,6 +324,7 @@ pub const CAPABILITY_GIT_TAG_DETAILS: &str = "git.tag.details";
 pub const CAPABILITY_GIT_TAG_APPLY_FETCH: &str = "git.tag.apply_fetch";
 /// Capability advertised when branch switching is available.
 pub const CAPABILITY_GIT_BRANCH_SWITCH: &str = "git.branch.switch";
+pub const CAPABILITY_GIT_COMMIT_CHECKOUT: &str = METHOD_GIT_COMMIT_CHECKOUT;
 pub const CAPABILITY_GIT_BRANCH_RENAME: &str = "git.branch.rename";
 pub const CAPABILITY_GIT_BRANCH_DELETE: &str = "git.branch.delete";
 pub const CAPABILITY_GIT_WORKTREE_REMOVE: &str = "git.worktree.remove";

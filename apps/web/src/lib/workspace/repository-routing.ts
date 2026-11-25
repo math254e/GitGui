@@ -38,6 +38,7 @@ export type RepositoryPageModel = Pick<WorkspaceStore,
   | "changeCommitDraft"
   | "changesSelected"
   | "checkoutTag"
+  | "checkoutCommit"
   | "chooseRepository"
   | "client"
   | "closeDiff"

@@ -105,6 +105,7 @@ catalog cleanup remains server-owned; the application workspace forgets entries
 the server has already removed without changing the connection runtime.
 The same table includes `git.worktree.create` for a branch ref or commit ID;
 Rust chooses the sibling path and returns a repository snapshot.
+It also includes `git.commit.checkout` for detached checkout of a full commit ID.
 
 Issue #4 extends the adapted `rpc/session.ts` request lifetime: interruption and
 timeout notify capable Rust servers using the generated `CancelRequest`, pending
