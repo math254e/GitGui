@@ -17,7 +17,7 @@ describe("branch and worktree removal menus", () => {
     const linked = branchMenuItems(branch, { ...base, worktree });
     expect(linked.some((item) => item.id === `merge:${branch.name}` && !item.disabled)).toBe(true);
     const current = branchMenuItems(branch, { ...base, isCurrent: true });
-    expect(current.filter((item) => item.id.startsWith("merge:") || item.id.startsWith("rebase:")).every((item) => item.disabled)).toBe(true);
+    expect(current.some((item) => item.id.startsWith("merge:") || item.id.startsWith("rebase:"))).toBe(false);
   });
 
   it("offers reviewed rewrite push only on the current branch", () => {
@@ -31,12 +31,35 @@ describe("branch and worktree removal menus", () => {
     expect(items[0]).toMatchObject({ id: "open-in-new-tab", label: "Open in new tab" });
     expect(items[0].disabled).not.toBe(true);
   });
-  it("offers the same three actions on a branch checked out in a linked worktree", () => {
-    const fromWorktree = worktreeMenuItems(worktree, options);
+  it("offers branch actions directly alongside linked worktree removal actions", () => {
     const fromBranch = branchMenuItems(branch, { canRename: true, canDelete: true, checkedOut: true, worktree, canRemoveWorktree: true });
-    expect(fromBranch.map((item) => item.label)).toEqual(fromWorktree.map((item) => item.label));
-    expect(fromBranch.every((item) => !item.disabled)).toBe(true);
+    expect(fromBranch.slice(0, 3).map((item) => [item.id, item.disabled])).toEqual([
+      [`rename:${branch.name}`, false], [`delete:${branch.name}`, true], [`solo:${branch.name}`, true],
+    ]);
+    expect(fromBranch.map((item) => item.label)).toEqual([
+      "Rename branch…", "Delete branch…", "Solo", "Remove worktree…", "Remove worktree and delete branch…",
+    ]);
+    expect(fromBranch.map((item) => item.id)).toContain(`remove-worktree:${branch.name}`);
     expect(fromBranch.map((item) => item.id)).toContain(`remove-worktree-branch:${branch.name}`);
+  });
+
+  it("shows unavailable branch actions directly as disabled items", () => {
+    const items = branchMenuItems(branch, { canRename: false, canDelete: false, checkedOut: false });
+    expect(items.map((item) => item.id)).toEqual([`rename:${branch.name}`, `delete:${branch.name}`, `solo:${branch.name}`]);
+    expect(items.every((item) => item.disabled)).toBe(true);
+    expect(items[1].disabledReason).toBe("Branch deletion is currently unavailable.");
+  });
+
+  it("explains why a checked-out branch cannot be deleted", () => {
+    const current = branchMenuItems(branch, { canRename: true, canDelete: true, checkedOut: true, isCurrent: true });
+    expect(current.find((item) => item.id === `delete:${branch.name}`)?.disabledReason).toBe("Cannot delete the currently checked-out branch.");
+    const linked = branchMenuItems(branch, { canRename: true, canDelete: true, checkedOut: true, worktree });
+    expect(linked.find((item) => item.id === `delete:${branch.name}`)?.disabledReason).toBe("Cannot delete a branch checked out in a worktree.");
+  });
+
+  it("uses branch-specific integration wording in the local sidebar", () => {
+    const items = branchMenuItems(branch, { canRename: true, canDelete: true, checkedOut: false, canIntegrate: true });
+    expect(items.find((item) => item.id === `rebase:${branch.name}`)?.label).toBe("Rebase onto this branch");
   });
 
   it("protects the main and currently open worktrees and older servers", () => {

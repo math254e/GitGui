@@ -1,8 +1,8 @@
 <script lang="ts">
   import { Cloud, Monitor, Tag } from "@lucide/svelte";
   import { onDestroy, tick, untrack } from "svelte";
-  import { dismissContextMenu, showContextMenu, type ContextMenuItem } from "$lib/contextMenu";
-  import { branchMenuItems } from "$lib/workspace/branch-menu";
+  import { dismissContextMenu, showContextMenu } from "$lib/contextMenu";
+  import { commitMenuItems } from "$lib/workspace/commit-menu";
   import { integrationRecoveryMenuItems } from "$lib/workspace/integration-menu";
   import type { GitIntegrationRecovery, GitIntegrationState } from "@gitgui/contracts";
   import { GraphRenderIndex, visibleRowRange, captureHistoryAnchor, restoreHistoryAnchor } from "$lib/git-graph/viewport";
@@ -10,7 +10,7 @@
   import { buildRefBadges } from "$lib/git-graph/ref-badges";
   import { tagName } from "$lib/types/tags";
   import { APP_THEME_VARIABLES, GRAPH_THEME_COLOR_ROLES } from "$lib/theme/types";
-  import type { CommitInfo, CommitRef, GraphCommit, RepositorySnapshot, StashInfo, WorktreeInfo } from "$lib/types/repository";
+  import type { CommitInfo, CommitRef, GraphCommit, RepositorySnapshot, StashInfo } from "$lib/types/repository";
 
   type ColumnId = "branch" | "graph" | "message";
   type HistoryColumn = {
@@ -47,6 +47,14 @@
     onSelectChanges: () => void;
     onSelectCommit: (commit: CommitInfo) => void;
     onCompareCommitToWorkingTree: (commit: CommitInfo) => void;
+    onPullBranch?: (branch: CommitRef) => void;
+    onPushBranch?: (branch: CommitRef) => void;
+    canPullOtherBranch?: boolean;
+    canPushOtherBranch?: boolean;
+    onSwitchBranch?: (branchName: string) => void;
+    canPullBranch?: boolean;
+    canPushBranch?: boolean;
+    canSwitchBranch?: boolean;
     onCreateBranch?: (commit: CommitInfo) => void;
     onCreateTag?: (commit: CommitInfo) => void;
     canCreateTag?: boolean;
@@ -56,8 +64,6 @@
     canRebase?: boolean;
     onIntegrateBranch?: (branch: CommitRef, action: "merge" | "rebase") => void;
     onRebaseCommit?: (commit: CommitInfo) => void;
-    canRewritePush?: boolean;
-    onRewritePush?: () => void;
     integrationState?: GitIntegrationState | null;
     canRecoverIntegration?: boolean;
     onIntegrationRecovery?: (action: GitIntegrationRecovery) => void;
@@ -65,8 +71,6 @@
     canDeleteBranch?: boolean;
     pending?: boolean;
     contextKey?: string | null;
-    canRemoveWorktree?: boolean;
-    onRemoveWorktree?: (worktree: WorktreeInfo, deleteBranch: boolean) => void;
   };
 
   const rowHeight = 34;
@@ -90,6 +94,14 @@
     onSelectChanges,
     onSelectCommit,
     onCompareCommitToWorkingTree,
+    onPullBranch,
+    onPushBranch,
+    canPullOtherBranch = false,
+    canPushOtherBranch = false,
+    onSwitchBranch,
+    canPullBranch = false,
+    canPushBranch = false,
+    canSwitchBranch = false,
     onCreateBranch,
     onCreateTag,
     canCreateTag = false,
@@ -99,8 +111,6 @@
     canRebase,
     onIntegrateBranch,
     onRebaseCommit,
-    canRewritePush,
-    onRewritePush,
     integrationState = null,
     canRecoverIntegration = false,
     onIntegrationRecovery,
@@ -108,8 +118,6 @@
     canDeleteBranch = false,
     pending = false,
     contextKey = null,
-    canRemoveWorktree = false,
-    onRemoveWorktree,
   }: Props = $props();
   let columns = $state<HistoryColumn[]>([
     { id: "branch", label: "Refs", width: 118, visible: true },
@@ -184,31 +192,22 @@
       return;
     }
     const branches = clickedBranch ? [clickedBranch] : snapshot?.refs.filter((ref) => ref.refType === "localBranch" && ref.target === commit.hash) ?? [];
-    const actionsFor = (branch: CommitRef) => branchMenuItems(branch, {
-      canRename: canRenameBranch,
-      canDelete: canDeleteBranch,
-      canRemoveWorktree,
-      canIntegrate,
-      isCurrent: snapshot?.status.currentBranch === branch.shortName,
-      canRewritePush,
-      worktree: snapshot?.worktrees.find((entry) => entry.branch === branch.shortName),
-      checkedOut: snapshot?.status.currentBranch === branch.shortName || (snapshot?.worktrees.some((worktree) => worktree.branch === branch.shortName) ?? false),
+    const selectedBranch = branches.length === 1 ? branches[0] : undefined;
+    // Use the same branch attribution shown in the graph for commits without a ref at their tip.
+    const associatedBranch = branches.length === 0
+      ? branchRefByLineCommit.get(commit.hash) ?? nearestDescendantRefs.get(commit.hash) ?? branchRefByMergeTargetCommit.get(commit.hash) ?? branchRefByLaneCommit.get(commit.hash) ?? branchRefByFirstParentCommit.get(commit.hash)
+      : undefined;
+    const items = commitMenuItems({
+      branches, currentBranch: snapshot?.status.currentBranch ?? null, headOid: snapshot?.status.headOid ?? null,
+      isCurrentBranchContext: associatedBranch?.refType === "localBranch" && associatedBranch.shortName === snapshot?.status.currentBranch,
+      commitOid: commit.hash, worktrees: snapshot?.worktrees ?? [], pending,
+      canPull: canPullBranch && Boolean(onPullBranch), canPush: canPushBranch && Boolean(onPushBranch), canSwitchBranch: canSwitchBranch && Boolean(onSwitchBranch),
+      canPullOther: canPullOtherBranch && Boolean(onPullBranch), canPushOther: canPushOtherBranch && Boolean(onPushBranch),
+      canCreateBranch: Boolean(onCreateBranch), canCreateTag: canCreateTag && Boolean(onCreateTag),
+      canMerge: Boolean(canIntegrate && onIntegrateBranch), canRebase: Boolean(canRebase && (selectedBranch ? onIntegrateBranch : onRebaseCommit)),
+      canRename: canRenameBranch && Boolean(onRenameBranch), canDelete: canDeleteBranch && Boolean(onDeleteBranch),
     });
-    const items: ContextMenuItem[] = [
-      { id: "create", label: "Branch...", icon: "git-branch", disabled: pending || !onCreateBranch },
-      { id: "createTag", label: "Tag...", icon: "tag", disabled: pending || !canCreateTag || !onCreateTag },
-      { id: "compare", label: "Compare to working tree", icon: "git-branch" },
-      { id: "rebase-commit", label: "Rebase current branch onto this commit", icon: "git-branch", disabled: !canRebase || !onRebaseCommit || snapshot?.status.headOid === commit.hash },
-    ];
-    for (const branch of branches) {
-      items.push({ id: `branch-heading:${branch.name}`, label: branch.shortName, header: true, separatorBefore: true }, ...actionsFor(branch).filter((item) => item.id !== `rebase:${branch.name}`));
-    }
-    const menu = showContextMenu(
-      items,
-      position,
-      contextMenuOwner,
-      branches.some((branch) => snapshot?.worktrees.some((entry) => entry.branch === branch.shortName && entry.isMain === false)) ? { width: 320 } : undefined,
-    );
+    const menu = showContextMenu(items, position, contextMenuOwner);
     const target = { hash: commit.hash };
     contextMenuTarget = target;
     void menu.then((selected) => {
@@ -219,23 +218,25 @@
       }
       if (selected === "create") onCreateBranch?.(commit);
       if (selected === "createTag") onCreateTag?.(commit);
-      if (selected === "rebase-commit") onRebaseCommit?.(commit);
+      if (selected === "rebase-commit") {
+        if (selectedBranch) onIntegrateBranch?.(selectedBranch, "rebase");
+        else if (branches.length === 0) onRebaseCommit?.(commit);
+      }
+      if (selected === "merge-commit" && selectedBranch) onIntegrateBranch?.(selectedBranch, "merge");
+      if (selected === "pull" && selectedBranch) onPullBranch?.(selectedBranch);
+      if (selected === "push" && selectedBranch) onPushBranch?.(selectedBranch);
       for (const branch of branches) {
+        if (selected === `checkout-branch:${branch.name}`) onSwitchBranch?.(branch.shortName);
         if (selected === `rename:${branch.name}`) onRenameBranch?.(branch);
         if (selected === `delete:${branch.name}`) onDeleteBranch?.(branch);
-        if (selected === `merge:${branch.name}`) onIntegrateBranch?.(branch, "merge");
-        if (selected === `rewrite-push:${branch.name}`) onRewritePush?.();
-        const worktree = snapshot?.worktrees.find((entry) => entry.branch === branch.shortName);
-        if (worktree && selected === `remove-worktree:${branch.name}`) onRemoveWorktree?.(worktree, false);
-        if (worktree && selected === `remove-worktree-branch:${branch.name}`) onRemoveWorktree?.(worktree, true);
       }
     });
   }
 
   function handleCommitContextMenu(event: MouseEvent, commit: CommitInfo) {
     event.preventDefault();
-    const branchName = event.target instanceof Element ? event.target.closest("[data-local-branch]")?.getAttribute("data-local-branch") : null;
-    const branch = branchName ? snapshot?.refs.find((ref) => ref.refType === "localBranch" && ref.name === branchName) : undefined;
+    const branchName = event.target instanceof Element ? event.target.closest("[data-branch-ref]")?.getAttribute("data-branch-ref") : null;
+    const branch = branchName ? snapshot?.refs.find((ref) => ref.refType !== "tag" && ref.name === branchName) : undefined;
     openCommitContextMenu(commit, { x: event.clientX, y: event.clientY }, branch);
   }
 
@@ -1214,7 +1215,7 @@
                     {#if !stash}
                       {#each refBadges?.refs ?? [] as ref (refKey(ref))}
                         <span
-                          data-local-branch={ref.refType === "localBranch" ? ref.name : undefined}
+                          data-branch-ref={ref.refType !== "tag" ? ref.name : undefined}
                           data-tag={ref.refType === "tag" ? ref.name : undefined}
                           title={ref.refType === "tag" ? `Tag: ${displayRefName(ref)}` : ref.name}
                           class="relative z-30 flex max-w-full items-center gap-0.5 rounded-sm border px-0.5 py-0 text-[11px] font-semibold leading-4 hover:z-[100] hover:max-w-none hover:whitespace-nowrap"

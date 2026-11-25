@@ -173,6 +173,12 @@
         <div class="min-h-0 flex-1">
           {#key store.activeRepositoryId}
             <GitGraph
+              canPullBranch={Boolean(store.client?.serverWelcome?.capabilities.includes("git.pull") && (store.integrationState?.kind === "merge" || !store.integrationState) && !store.integrationError)}
+              canPushBranch={Boolean(store.client?.serverWelcome?.capabilities.includes("git.push") && (store.integrationState?.kind === "merge" || !store.integrationState) && !store.integrationError)}
+              canSwitchBranch={Boolean(store.client?.serverWelcome?.capabilities.includes("git.branch.switch") && (store.integrationState?.kind === "merge" || !store.integrationState) && !store.integrationError)}
+              onPullBranch={(branch) => store.pullRepository(branch.shortName)}
+              onPushBranch={(branch) => store.pushRepository(branch.shortName)}
+              onSwitchBranch={(branch) => store.switchBranch(branch)}
               onRebaseCommit={(commit) => void store.openIntegrationReview(commit.hash, "rebase")}
               integrationState={store.integrationState}
               canRecoverIntegration={store.canIntegrate && !store.integrationError}
@@ -198,15 +204,11 @@
               canCreateTag={store.canCreateTag}
               canRenameBranch={store.canRenameBranch}
               canDeleteBranch={store.canDeleteBranch}
-              canRemoveWorktree={store.canRemoveWorktree}
-              onRemoveWorktree={(worktree, deleteBranch) => store.openRemoveWorktreeDialog(worktree, deleteBranch)}
               onRenameBranch={(ref) => store.openRenameBranchDialog(ref)}
               onDeleteBranch={(ref) => store.openDeleteBranchDialog(ref)}
               canIntegrate={store.canStartIntegration && !store.integrationError && (store.integrationState?.kind === "merge" || !store.integrationState)}
               canRebase={store.canRebaseCommit && !store.integrationError && (store.integrationState?.kind === "merge" || !store.integrationState)}
               onIntegrateBranch={(ref, action) => void store.openIntegrationReview(ref.name, action, ref.target)}
-              canRewritePush={store.client?.serverWelcome.capabilities.includes("git.rewrite_push.execute") ? store.canStartIntegration && !store.integrationError && (store.integrationState?.kind === "merge" || !store.integrationState) && !store.rewritePushReviewPending : undefined}
-              onRewritePush={() => void store.openRewritePushReview()}
               pending={store.gitUiActionPending}
             />
           {/key}
@@ -342,6 +344,12 @@
             <div class="min-h-0 flex-1">
               {#key store.activeRepositoryId}
                 <GitGraph
+                  canPullBranch={Boolean(store.client?.serverWelcome?.capabilities.includes("git.pull") && (store.integrationState?.kind === "merge" || !store.integrationState) && !store.integrationError)}
+                  canPushBranch={Boolean(store.client?.serverWelcome?.capabilities.includes("git.push") && (store.integrationState?.kind === "merge" || !store.integrationState) && !store.integrationError)}
+                  canSwitchBranch={Boolean(store.client?.serverWelcome?.capabilities.includes("git.branch.switch") && (store.integrationState?.kind === "merge" || !store.integrationState) && !store.integrationError)}
+                  onPullBranch={(branch) => store.pullRepository(branch.shortName)}
+                  onPushBranch={(branch) => store.pushRepository(branch.shortName)}
+                  onSwitchBranch={(branch) => store.switchBranch(branch)}
               onRebaseCommit={(commit) => void store.openIntegrationReview(commit.hash, "rebase")}
                   integrationState={store.integrationState}
                   canRecoverIntegration={store.canIntegrate && !store.integrationError}
@@ -367,15 +375,11 @@
                   canCreateTag={store.canCreateTag}
                   canRenameBranch={store.canRenameBranch}
                   canDeleteBranch={store.canDeleteBranch}
-                  canRemoveWorktree={store.canRemoveWorktree}
-                  onRemoveWorktree={(worktree, deleteBranch) => store.openRemoveWorktreeDialog(worktree, deleteBranch)}
                   onRenameBranch={(ref) => store.openRenameBranchDialog(ref)}
                   onDeleteBranch={(ref) => store.openDeleteBranchDialog(ref)}
                   canIntegrate={store.canStartIntegration && !store.integrationError && (store.integrationState?.kind === "merge" || !store.integrationState)}
                   canRebase={store.canRebaseCommit && !store.integrationError && (store.integrationState?.kind === "merge" || !store.integrationState)}
                   onIntegrateBranch={(ref, action) => void store.openIntegrationReview(ref.name, action, ref.target)}
-                  canRewritePush={store.client?.serverWelcome.capabilities.includes("git.rewrite_push.execute") ? store.canStartIntegration && !store.integrationError && (store.integrationState?.kind === "merge" || !store.integrationState) && !store.rewritePushReviewPending : undefined}
-                  onRewritePush={() => void store.openRewritePushReview()}
                   pending={store.gitUiActionPending}
                 />
               {/key}

@@ -2,6 +2,19 @@ import type { ContextMenuItem } from "$lib/contextMenu";
 import type { CommitRef, WorktreeInfo } from "$lib/types/repository";
 import { worktreeMenuItems } from "./worktree-menu";
 
+export function branchManagementMenu(branch: CommitRef, options: { canRename: boolean; canDelete: boolean; deleteDisabledReason?: string }): ContextMenuItem {
+  return {
+    id: `branch-menu:${branch.name}`,
+    label: branch.shortName,
+    icon: "git-branch",
+    children: [
+      { id: `rename:${branch.name}`, label: `Rename ${branch.shortName}…`, icon: "pencil", disabled: !options.canRename },
+      { id: `delete:${branch.name}`, label: `Delete ${branch.shortName}…`, icon: "trash", destructive: true, disabled: !options.canDelete, disabledReason: options.deleteDisabledReason },
+      { id: `solo:${branch.name}`, label: `Solo ${branch.shortName}`, disabled: true },
+    ],
+  };
+}
+
 export function branchMenuItems(branch: CommitRef, options: {
   canRename: boolean;
   canDelete: boolean;
@@ -13,25 +26,41 @@ export function branchMenuItems(branch: CommitRef, options: {
   isCurrent?: boolean;
   canRewritePush?: boolean;
 }): ContextMenuItem[] {
-  const integration: ContextMenuItem[] = options.canIntegrate === undefined ? [] : [
-    { id: `merge:${branch.name}`, label: "Merge into current branch…", icon: "git-branch", disabled: !options.canIntegrate || options.isCurrent },
-    { id: `rebase:${branch.name}`, label: "Rebase current branch onto this commit", icon: "git-branch", disabled: !(options.canRebase ?? options.canIntegrate) || options.isCurrent },
+  const integration: ContextMenuItem[] = options.canIntegrate === undefined || options.isCurrent ? [] : [
+    { id: `merge:${branch.name}`, label: "Merge into current branch", icon: "git-branch", disabled: !options.canIntegrate || options.isCurrent },
+    { id: `rebase:${branch.name}`, label: branch.refType === "localBranch" ? "Rebase onto this branch" : "Rebase current branch onto this commit", icon: "git-branch", disabled: !(options.canRebase ?? options.canIntegrate) || options.isCurrent },
   ];
   const currentActions: ContextMenuItem[] = options.isCurrent ? [
     ...(options.canRewritePush !== undefined ? [{ id: `rewrite-push:${branch.name}`, label: "Push rewritten branch…", icon: "upload", disabled: !options.canRewritePush }] : []),
   ] : [];
+  const management = branchManagementMenu(branch, {
+    canRename: branch.refType === "localBranch" && options.canRename,
+    canDelete: branch.refType === "localBranch" && options.canDelete && !options.checkedOut && !options.worktree,
+    deleteDisabledReason: options.isCurrent || options.worktree?.current
+      ? "Cannot delete the currently checked-out branch."
+      : options.checkedOut || options.worktree
+        ? "Cannot delete a branch checked out in a worktree."
+        : !options.canDelete ? "Branch deletion is currently unavailable." : undefined,
+  });
   if (branch.refType === "remoteBranch") return integration;
+  const managementItems = (management.children ?? []).map((item) => ({
+    ...item,
+    label: item.id.startsWith("rename:") ? "Rename branch…" : item.id.startsWith("delete:") ? "Delete branch…" : "Solo",
+  }));
   if (options.worktree?.isMain === false) {
-    return [...integration, ...currentActions, ...worktreeMenuItems(options.worktree, {
+    return [...integration, ...currentActions, ...managementItems, ...worktreeMenuItems(options.worktree, {
       canRename: options.canRename,
       canRemove: options.canRemoveWorktree ?? false,
       canDeleteBranch: options.canDelete,
-    }).map((item) => ({ ...item, id: `${item.id}:${branch.name}` }))];
+    }).filter((item) => item.id !== "rename").map((item) => ({
+      ...item,
+      id: `${item.id}:${branch.name}`,
+      label: item.id === "remove-worktree" ? "Remove worktree…" : item.id === "remove-worktree-branch" ? "Remove worktree and delete branch…" : item.label,
+    }))];
   }
   return [
     ...integration,
     ...currentActions,
-    { id: `rename:${branch.name}`, label: "Rename branch…", icon: "pencil", disabled: !options.canRename },
-    { id: `delete:${branch.name}`, label: options.checkedOut ? "Delete branch (checked out)" : "Delete branch…", icon: "trash", disabled: !options.canDelete || options.checkedOut },
+    ...managementItems,
   ];
 }

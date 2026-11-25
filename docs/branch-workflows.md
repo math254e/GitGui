@@ -4,8 +4,10 @@
 
 The branch sidebar offers merge into the current branch and rebase of the
 current branch onto a selected local or remote-tracking ref. A graph commit's
-context menu can rebase the current branch onto that exact commit, even when
-no branch points to it. Merge and rebase start directly without a confirmation dialog. The `git.integration.commit_target` capability
+context menu uses the selected branch when one is associated with the commit;
+otherwise it can rebase the current branch onto that exact commit. Merge and
+rebase start directly without a confirmation
+dialog. The `git.integration.commit_target` capability
 keeps rebase disabled on older servers that cannot accept commit IDs. The server rechecks the current branch and
 target before invoking Git and refuses a dirty tracked worktree. Git merges with
 fast-forward enabled or creates a merge commit. Rebase uses linear replay,
@@ -14,15 +16,17 @@ already-applied commits and rewrite published history.
 
 Branch actions pass the selected fully qualified ref to Git after checking its
 tip. Merge commit messages use the readable branch name. Another process can
-still move a ref between that check and Git resolving it.
+still move a ref between that check and Git resolving it; Git does not provide an
+atomic ref check and merge operation.
 
 The server inspects the checkout's own Git metadata and unmerged index, including
 for externally started operations. An in-progress row in the graph has a
 context menu with Continue, Abort, and, for rebase, Skip; it remains available
 even when no files are changed. Users resolve files externally and stage them in
 GitGui or outside it. Repository status invalidations re-inspect Git state.
-During a merge, incompatible actions are blocked with an explanation; staging
-remains available for conflict resolution.
+During a merge, GitGui keeps controls visible and explains when an attempted
+branch switch, pull, checkout, stash, amend, or new integration must wait.
+Staging remains available for conflict resolution.
 Abort and Skip require confirmation. Unknown
 sequencer states are displayed without recovery actions. Git hooks and signing
 remain enabled; editors are suppressed. Git command execution currently has no
@@ -47,10 +51,15 @@ not included in the review payload or shown in the dialog.
 
 Squash merge, interactive rebase, and an in-app conflict editor remain deferred.
 
-Local branches in the sidebar and branch badges in the graph expose **Rename
-branch…** and **Delete branch…**. A commit's context menu exposes **Create branch
-here…**, plus sections for the local branches pointing to that commit. Folder
-rows and remote refs do not offer local rename/delete actions.
+Local branches in the sidebar expose **Rename branch…** and **Delete branch…**.
+The commit graph context menu lists those actions directly for each associated
+branch, alongside commit, checkout, integration, worktree, and tag actions.
+Unimplemented actions are disabled. Pull and Push appear on branch tips; they
+are enabled for the current branch. Merge is enabled only when
+the selected commit has one unambiguous branch target, and the server review
+must still match the selected commit. Checkout of another local branch, rebase,
+branch/tag creation, and comparison use their existing workflows.
+Folder rows and remote refs do not offer local rename/delete actions.
 
 Creation uses the selected commit's object ID, rather than whichever commit is
 selected elsewhere in the UI. The dialog identifies the starting commit and
@@ -76,8 +85,8 @@ without mutation. A Sonner warning offers **Review deletion**, which opens a
 second confirmation explaining that commits may become difficult to recover
 and requires a separate **Delete anyway** action. Force is never enabled for
 unrelated failures. Deleting a branch checked out in any worktree
-is rejected by Rust even with force enabled. Linked-worktree branches instead
-offer the worktree actions below. Remote
+is rejected by Rust even with force enabled. Linked-worktree branches in the
+sidebar offer the worktree actions below. Remote
 branches are unaffected.
 
 The additive `git.branch.rename` and `git.branch.delete` RPCs require
