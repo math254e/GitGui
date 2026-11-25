@@ -94,6 +94,11 @@ mutation outcomes return before repository refresh. This extends the existing
 GitGui method-table divergence in `rpc/protocol.ts` without changing session,
 connection, or retry ownership.
 
+The adapted RPC table also exposes branch-targeted pull and push, with the
+local branch ref and expected tip defined in the Rust protocol. The existing
+connection and retry lifecycle is unchanged; the reviewed local table hash is
+updated without changing the pinned upstream snapshot.
+
 The same GitGui method-table divergence includes `git.worktree.remove`, with
 reviewed path/HEAD/branch inputs and explicit partial-success outcomes. Its
 catalog cleanup remains server-owned; the application workspace forgets entries

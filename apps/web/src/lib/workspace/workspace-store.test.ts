@@ -92,6 +92,32 @@ afterEach(async () => {
 });
 
 describe("integration review RPC inputs", () => {
+  it.each(["pull", "push"] as const)("sends the selected non-current branch to %s", async (action) => {
+    const f = await setup();
+    const branch = { name: "refs/heads/topic", shortName: "topic", refType: "localBranch" as const, target: "a".repeat(40) };
+    f.services.a.workspaceState.repositories.same.snapshot!.refs.push(branch);
+    f.services.a.client.serverWelcome.capabilities.push(`git.branch.${action}`);
+    const sync = vi.fn(async () => ({ repository: repository(), snapshot: snapshot() }));
+    Object.assign(f.services.a.client, { [`${action}Branch`]: sync });
+    await f.display("a");
+    if (action === "pull") f.store.pullSelectedBranch(branch);
+    else f.store.pushSelectedBranch(branch);
+    await vi.waitFor(() => expect(sync).toHaveBeenCalledWith({ repositoryId: "same", branchRef: branch.name, expectedOid: branch.target }));
+  });
+
+  it("does not sync a stale branch selection", async () => {
+    const f = await setup();
+    const branch = { name: "refs/heads/topic", shortName: "topic", refType: "localBranch" as const, target: "a".repeat(40) };
+    f.services.a.workspaceState.repositories.same.snapshot!.refs.push({ ...branch, target: "b".repeat(40) });
+    const pullBranch = vi.fn();
+    Object.assign(f.services.a.client, { pullBranch });
+    f.services.a.client.serverWelcome.capabilities.push("git.branch.pull");
+    await f.display("a");
+    f.store.pullSelectedBranch(branch);
+    expect(pullBranch).not.toHaveBeenCalled();
+    expect(notifications.error).toHaveBeenCalledWith("The selected branch changed. Open the menu again.");
+  });
+
   it("keeps integration available during a background state refresh", async () => {
     const f = await setup();
     await f.display("a");

@@ -175,9 +175,11 @@
             <GitGraph
               canPullBranch={Boolean(store.client?.serverWelcome?.capabilities.includes("git.pull") && (store.integrationState?.kind === "merge" || !store.integrationState) && !store.integrationError)}
               canPushBranch={Boolean(store.client?.serverWelcome?.capabilities.includes("git.push") && (store.integrationState?.kind === "merge" || !store.integrationState) && !store.integrationError)}
+              canPullOtherBranch={Boolean(store.client?.serverWelcome?.capabilities.includes("git.branch.pull"))}
+              canPushOtherBranch={Boolean(store.client?.serverWelcome?.capabilities.includes("git.branch.push"))}
               canSwitchBranch={Boolean(store.client?.serverWelcome?.capabilities.includes("git.branch.switch") && (store.integrationState?.kind === "merge" || !store.integrationState) && !store.integrationError)}
-              onPullBranch={(branch) => store.pullRepository(branch.shortName)}
-              onPushBranch={(branch) => store.pushRepository(branch.shortName)}
+              onPullBranch={(branch) => store.pullSelectedBranch(branch)}
+              onPushBranch={(branch) => store.pushSelectedBranch(branch)}
               onSwitchBranch={(branch) => store.switchBranch(branch)}
               onRebaseCommit={(commit) => void store.openIntegrationReview(commit.hash, "rebase")}
               integrationState={store.integrationState}
@@ -346,9 +348,11 @@
                 <GitGraph
                   canPullBranch={Boolean(store.client?.serverWelcome?.capabilities.includes("git.pull") && (store.integrationState?.kind === "merge" || !store.integrationState) && !store.integrationError)}
                   canPushBranch={Boolean(store.client?.serverWelcome?.capabilities.includes("git.push") && (store.integrationState?.kind === "merge" || !store.integrationState) && !store.integrationError)}
+                  canPullOtherBranch={Boolean(store.client?.serverWelcome?.capabilities.includes("git.branch.pull"))}
+                  canPushOtherBranch={Boolean(store.client?.serverWelcome?.capabilities.includes("git.branch.push"))}
                   canSwitchBranch={Boolean(store.client?.serverWelcome?.capabilities.includes("git.branch.switch") && (store.integrationState?.kind === "merge" || !store.integrationState) && !store.integrationError)}
-                  onPullBranch={(branch) => store.pullRepository(branch.shortName)}
-                  onPushBranch={(branch) => store.pushRepository(branch.shortName)}
+                  onPullBranch={(branch) => store.pullSelectedBranch(branch)}
+                  onPushBranch={(branch) => store.pushSelectedBranch(branch)}
                   onSwitchBranch={(branch) => store.switchBranch(branch)}
               onRebaseCommit={(commit) => void store.openIntegrationReview(commit.hash, "rebase")}
                   integrationState={store.integrationState}

@@ -41,6 +41,8 @@ export const WS_METHOD_NAMES = [
   "git.fetch",
   "git.pull",
   "git.push",
+  "git.branch.pull",
+  "git.branch.push",
   "git.integration.inspect",
   "git.integration.review",
   "git.integration.start",
@@ -715,6 +717,8 @@ export type GitRepositoryParams = {
  * Stable ID from the host's configured repository catalog.
  */
 repositoryId: string, };
+
+export type GitBranchSyncParams = { repositoryId: string, branchRef: string, expectedOid: string, };
 
 export type GitFetchResult = { repository: RepositorySummary, snapshot: RepositorySnapshot, remote?: string, tagConflicts?: Array<GitTagFetchConflict>, };
 

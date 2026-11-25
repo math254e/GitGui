@@ -84,6 +84,103 @@ pub fn push(root: &str) -> Result<super::tag_operations::PushOutcome, GitError> 
     super::tag_operations::push(root)
 }
 
+fn branch_sync_config(
+    root: &str,
+    branch_ref: &str,
+    expected_oid: &str,
+) -> Result<(String, String), GitError> {
+    let invalid = |message: &str| GitError {
+        message: message.into(),
+        stderr: String::new(),
+        status: None,
+    };
+    let path = Path::new(root);
+    let name = branch_ref
+        .strip_prefix("refs/heads/")
+        .filter(|name| !name.is_empty())
+        .ok_or_else(|| invalid("Select a local branch."))?;
+    GitCommand::run(&["check-ref-format", branch_ref], Some(path))?;
+    if !super::stash::is_oid(expected_oid) {
+        return Err(invalid("Invalid branch commit."));
+    }
+    if GitCommand::run(&["symbolic-ref", "--quiet", branch_ref], Some(path)).is_ok() {
+        return Err(invalid("Symbolic branch refs are not supported."));
+    }
+    let actual = GitCommand::run_strict(
+        &["rev-parse", "--verify", &format!("{branch_ref}^{{commit}}")],
+        path,
+    )?;
+    if actual.trim() != expected_oid {
+        return Err(invalid("The selected branch moved. Refresh and try again."));
+    }
+    let get_config = |suffix: &str| -> Result<String, GitError> {
+        let key = format!("branch.{name}.{suffix}");
+        let value = GitCommand::run_strict(&["config", "--null", "--get-all", &key], path)
+            .map_err(|_| invalid("The selected branch has no configured upstream."))?;
+        let values = value
+            .split('\0')
+            .filter(|v| !v.is_empty())
+            .collect::<Vec<_>>();
+        if values.len() != 1 || values[0].contains(['\r', '\n']) {
+            return Err(invalid("The branch upstream configuration is ambiguous."));
+        }
+        Ok(values[0].to_owned())
+    };
+    let remote = get_config("remote")?;
+    let upstream = get_config("merge")?;
+    if !upstream.starts_with("refs/heads/")
+        || GitCommand::run(&["check-ref-format", &upstream], Some(path)).is_err()
+    {
+        return Err(invalid("The branch upstream is not a valid branch."));
+    }
+    if remote != "."
+        && !GitCommand::run_strict(&["remote"], path)?
+            .lines()
+            .any(|value| value == remote)
+    {
+        return Err(invalid("The configured upstream remote does not exist."));
+    }
+    Ok((remote, upstream))
+}
+
+pub fn pull_branch(root: &str, branch_ref: &str, expected_oid: &str) -> Result<(), GitError> {
+    let (remote, upstream) = branch_sync_config(root, branch_ref, expected_oid)?;
+    let path = Path::new(root);
+    let current = GitCommand::run(&["symbolic-ref", "--quiet", "HEAD"], Some(path)).ok();
+    if current.as_deref().map(str::trim) == Some(branch_ref) {
+        return Err(GitError {
+            message: "The selected branch is now checked out. Refresh and try again.".into(),
+            stderr: String::new(),
+            status: None,
+        });
+    }
+    // Git checks all worktrees and rejects non-fast-forward updates to this ref.
+    let refspec = format!("{upstream}:{branch_ref}");
+    GitCommand::run(
+        &[
+            "fetch",
+            "--no-tags",
+            "--no-prune",
+            "--no-recurse-submodules",
+            "--",
+            &remote,
+            &refspec,
+        ],
+        Some(path),
+    )
+    .map(|_| ())
+}
+
+pub fn push_branch(root: &str, branch_ref: &str, expected_oid: &str) -> Result<(), GitError> {
+    let (remote, upstream) = branch_sync_config(root, branch_ref, expected_oid)?;
+    let refspec = format!("{branch_ref}:{upstream}");
+    GitCommand::run(
+        &["push", "--porcelain", "--", &remote, &refspec],
+        Some(Path::new(root)),
+    )
+    .map(|_| ())
+}
+
 pub fn list_local_branches(root: &str) -> Result<Vec<String>, GitError> {
     let output = GitCommand::run(
         &["for-each-ref", "--format=%(refname:short)", "refs/heads"],
@@ -762,6 +859,4 @@ mod branch_tests {
         )
         .is_err());
     }
-
-
 }

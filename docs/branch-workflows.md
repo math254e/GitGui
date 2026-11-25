@@ -1,5 +1,17 @@
 # Branch context menus
 
+## Syncing a selected branch
+
+Pull and Push in the graph target the selected local branch. The checked-out
+branch retains the existing toolbar behavior. For another branch, the server
+requires one configured upstream, validates the selected tip, and pushes only
+that branch to its upstream. Pull fetches directly into that branch using Git's
+fast-forward-only ref update; Git rejects divergence and branches checked out in
+another worktree. These branch-targeted RPCs are advertised independently so
+older servers do not enable unsupported actions. A fetched ref can still move
+between the initial tip check and Git's ref update; Git performs its own ref
+locking and fast-forward check.
+
 ## Merge and rebase
 
 The branch sidebar offers merge into the current branch and rebase of the
@@ -55,7 +67,7 @@ Local branches in the sidebar expose **Rename branch…** and **Delete branch…
 The commit graph context menu lists those actions directly for each associated
 branch, alongside commit, checkout, integration, worktree, and tag actions.
 Unimplemented actions are disabled. Pull and Push appear on branch tips; they
-are enabled for the current branch. Merge is enabled only when
+target the selected local branch as described above. Merge is enabled only when
 the selected commit has one unambiguous branch target, and the server review
 must still match the selected commit. Checkout of another local branch, rebase,
 branch/tag creation, and comparison use their existing workflows.

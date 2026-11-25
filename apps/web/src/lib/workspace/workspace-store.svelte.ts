@@ -2028,6 +2028,41 @@ export class WorkspaceStore {
     });
   }
 
+  pullSelectedBranch(branch: CommitRef): void {
+    if (this.blockDuringMerge()) return;
+    if (!this.branchSyncTargetIsCurrent(branch)) return;
+    if (branch.shortName === this.snapshot?.status.currentBranch) { this.pullRepository(branch.shortName); return; }
+    const client = this.client;
+    if (!client) return;
+    if (!client.serverWelcome.capabilities.includes("git.branch.pull")) {
+      toast.error("This server cannot pull a different branch.");
+      return;
+    }
+    this.requestGitAction({ kind: "pull", label: `Pulling ${branch.shortName}`, successMessage: `Pulled ${branch.shortName}`,
+      action: (repositoryId, activeClient) => activeClient.pullBranch({ repositoryId, branchRef: branch.name, expectedOid: branch.target }) });
+  }
+
+  pushSelectedBranch(branch: CommitRef): void {
+    if (!this.branchSyncTargetIsCurrent(branch)) return;
+    if (branch.shortName === this.snapshot?.status.currentBranch) { this.pushRepository(branch.shortName); return; }
+    const client = this.client;
+    if (!client) return;
+    if (!client.serverWelcome.capabilities.includes("git.branch.push")) {
+      toast.error("This server cannot push a different branch.");
+      return;
+    }
+    this.requestGitAction({ kind: "push", label: `Pushing ${branch.shortName}`, successMessage: `Pushed ${branch.shortName}`,
+      action: (repositoryId, activeClient) => activeClient.pushBranch({ repositoryId, branchRef: branch.name, expectedOid: branch.target }) });
+  }
+
+  private branchSyncTargetIsCurrent(branch: CommitRef): boolean {
+    if (branch.refType !== "localBranch" || !this.snapshot?.refs.some((ref) => ref.refType === "localBranch" && ref.name === branch.name && ref.target === branch.target)) {
+      toast.error("The selected branch changed. Open the menu again.");
+      return false;
+    }
+    return true;
+  }
+
   pushRepository(expectedBranch?: string): void {
     if (expectedBranch && this.snapshot?.status.currentBranch !== expectedBranch) {
       toast.error("The current branch changed. Open the menu again.");

@@ -18,6 +18,7 @@ import type {
   GitAmendParams,
   GitApplyHunksParams,
   GitBranchCreateParams,
+  GitBranchSyncParams,
   GitTagCreateParams,
   GitTagDeleteParams,
   GitTagTargetParams,
@@ -362,6 +363,14 @@ export class GitGuiClient {
 
   push(repositoryId: string) {
     return this.call("git.push", { repositoryId: assertRepositoryId(repositoryId) });
+  }
+
+  pullBranch(params: GitBranchSyncParams) {
+    return this.call("git.branch.pull", { ...params, repositoryId: assertRepositoryId(params.repositoryId) });
+  }
+
+  pushBranch(params: GitBranchSyncParams) {
+    return this.call("git.branch.push", { ...params, repositoryId: assertRepositoryId(params.repositoryId) });
   }
 
   listBranches(repositoryId: string) {

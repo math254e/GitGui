@@ -74,6 +74,8 @@ export type RepositoryPageModel = Pick<WorkspaceStore,
   | "popStash"
   | "pullRepository"
   | "pushRepository"
+  | "pullSelectedBranch"
+  | "pushSelectedBranch"
   | "pushTag"
   | "rememberGraphScrollTop"
   | "removeRepository"

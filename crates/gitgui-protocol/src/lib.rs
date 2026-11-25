@@ -107,6 +107,8 @@ pub const METHOD_GIT_FETCH: &str = "git.fetch";
 pub const METHOD_GIT_PULL: &str = "git.pull";
 /// Canonical method for pushing the current configured branch.
 pub const METHOD_GIT_PUSH: &str = "git.push";
+pub const METHOD_GIT_BRANCH_PULL: &str = "git.branch.pull";
+pub const METHOD_GIT_BRANCH_PUSH: &str = "git.branch.push";
 pub const METHOD_GIT_INTEGRATION_INSPECT: &str = "git.integration.inspect";
 pub const METHOD_GIT_INTEGRATION_REVIEW: &str = "git.integration.review";
 pub const METHOD_GIT_INTEGRATION_START: &str = "git.integration.start";
@@ -194,6 +196,8 @@ pub const WS_METHOD_NAMES: &[&str] = &[
     METHOD_GIT_FETCH,
     METHOD_GIT_PULL,
     METHOD_GIT_PUSH,
+    METHOD_GIT_BRANCH_PULL,
+    METHOD_GIT_BRANCH_PUSH,
     METHOD_GIT_INTEGRATION_INSPECT,
     METHOD_GIT_INTEGRATION_REVIEW,
     METHOD_GIT_INTEGRATION_START,
@@ -1219,6 +1223,15 @@ pub struct GitAmendParams {
 pub struct GitRepositoryParams {
     /// Stable ID from the host's configured repository catalog.
     pub repository_id: String,
+}
+
+/// A specific local branch and its tip when the action was selected.
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GitBranchSyncParams {
+    pub repository_id: String,
+    pub branch_ref: String,
+    pub expected_oid: String,
 }
 
 /// Result of fetch, pull, or push.

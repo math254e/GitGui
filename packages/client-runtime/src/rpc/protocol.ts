@@ -29,6 +29,7 @@
  *   registry; advertised capabilities still determine server availability.
  * - GitGui integration methods inspect and mutate Git-owned merge/rebase state,
  *   and a reviewed rewrite-push uses an explicit remote lease.
+ * - Branch-targeted pull and push carry an explicit local ref and expected tip.
  */
 import type {
   GitIntegrationState, GitIntegrationReview, GitIntegrationReviewParams,
@@ -44,6 +45,7 @@ import type {
   GitAmendParams,
   GitApplyHunksParams,
   GitBranchCreateParams,
+  GitBranchSyncParams,
   GitBranchCreateResult,
   GitTagCreateParams,
   GitTagCreateResult,
@@ -180,6 +182,8 @@ export interface GitGuiRpcMethods {
   "git.fetch": { readonly input: GitRepositoryParams; readonly output: GitFetchResult };
   "git.pull": { readonly input: GitRepositoryParams; readonly output: GitPullResult };
   "git.push": { readonly input: GitRepositoryParams; readonly output: GitPushResult };
+  "git.branch.pull": { readonly input: GitBranchSyncParams; readonly output: GitPullResult };
+  "git.branch.push": { readonly input: GitBranchSyncParams; readonly output: GitPushResult };
   "git.integration.inspect": { readonly input: GitRepositoryParams; readonly output: GitIntegrationState | null };
   "git.integration.review": { readonly input: GitIntegrationReviewParams; readonly output: GitIntegrationReview };
   "git.integration.start": { readonly input: GitIntegrationStartParams; readonly output: GitIntegrationOutcome };
@@ -252,6 +256,8 @@ export const WS_METHOD_NAMES = [
   "git.fetch",
   "git.pull",
   "git.push",
+  "git.branch.pull",
+  "git.branch.push",
   "git.integration.inspect",
   "git.integration.review",
   "git.integration.start",
@@ -323,6 +329,8 @@ export const WS_METHODS = {
   gitFetch: "git.fetch",
   gitPull: "git.pull",
   gitPush: "git.push",
+  gitBranchPull: "git.branch.pull",
+  gitBranchPush: "git.branch.push",
   gitBranchList: "git.branch.list",
   gitBranchCreate: "git.branch.create",
   gitTagCreate: "git.tag.create",

@@ -1167,6 +1167,8 @@ fn required_scope_for_method(method: &str) -> Option<&'static str> {
         | METHOD_GIT_FETCH
         | METHOD_GIT_PULL
         | METHOD_GIT_PUSH
+        | gitgui_protocol::METHOD_GIT_BRANCH_PULL
+        | gitgui_protocol::METHOD_GIT_BRANCH_PUSH
         | gitgui_protocol::METHOD_GIT_INTEGRATION_START
         | gitgui_protocol::METHOD_GIT_INTEGRATION_RECOVER
         | gitgui_protocol::METHOD_GIT_REWRITE_PUSH_EXECUTE
@@ -1266,6 +1268,9 @@ async fn dispatch(request: RequestEnvelope, state: &ServerState) -> ResponseEnve
         METHOD_GIT_FETCH => git_fetch(request.id, request.params, state).await,
         METHOD_GIT_PULL => git_pull(request.id, request.params, state).await,
         METHOD_GIT_PUSH => git_push(request.id, request.params, state).await,
+        gitgui_protocol::METHOD_GIT_BRANCH_PULL | gitgui_protocol::METHOD_GIT_BRANCH_PUSH => {
+            git_branch_sync(request.id, &request.method, request.params, state).await
+        }
         gitgui_protocol::METHOD_GIT_INTEGRATION_INSPECT
         | gitgui_protocol::METHOD_GIT_INTEGRATION_REVIEW
         | gitgui_protocol::METHOD_GIT_INTEGRATION_START
@@ -2062,6 +2067,28 @@ async fn git_push(request_id: String, params: Value, state: &ServerState) -> Res
                 tag_error: outcome.tag_error,
             },
         ),
+        Err(error) => ResponseEnvelope::error(request_id, error),
+    }
+}
+
+async fn git_branch_sync(request_id: String, method: &str, params: Value, state: &ServerState) -> ResponseEnvelope {
+    let params = match parse_params::<gitgui_protocol::GitBranchSyncParams>(params, method) {
+        Ok(params) => params,
+        Err(error) => return ResponseEnvelope::error(request_id, error),
+    };
+    if let Err(error) = validate_repository_id(&params.repository_id) {
+        return ResponseEnvelope::error(request_id, error);
+    }
+    let pull = method == gitgui_protocol::METHOD_GIT_BRANCH_PULL;
+    let gitgui_protocol::GitBranchSyncParams { repository_id, branch_ref, expected_oid } = params;
+    match run_git_action(state, &repository_id, move |root| {
+        if pull { gitgui_core::git::operations::pull_branch(root, &branch_ref, &expected_oid) }
+        else { gitgui_core::git::operations::push_branch(root, &branch_ref, &expected_oid) }
+    }).await {
+        Ok((repository, snapshot, ())) => {
+            if pull { response_success(request_id, GitPullResult { repository, snapshot }) }
+            else { response_success(request_id, GitPushResult { repository, snapshot, tag_error: None }) }
+        }
         Err(error) => ResponseEnvelope::error(request_id, error),
     }
 }
@@ -4237,6 +4264,8 @@ fn implemented_capabilities() -> Vec<String> {
         CAPABILITY_GIT_FETCH,
         CAPABILITY_GIT_PULL,
         CAPABILITY_GIT_PUSH,
+        gitgui_protocol::METHOD_GIT_BRANCH_PULL,
+        gitgui_protocol::METHOD_GIT_BRANCH_PUSH,
         gitgui_protocol::METHOD_GIT_INTEGRATION_INSPECT,
         gitgui_protocol::METHOD_GIT_INTEGRATION_REVIEW,
         gitgui_protocol::METHOD_GIT_INTEGRATION_START,
@@ -5033,6 +5062,8 @@ mod tests {
             METHOD_GIT_FETCH,
             METHOD_GIT_PULL,
             METHOD_GIT_PUSH,
+            gitgui_protocol::METHOD_GIT_BRANCH_PULL,
+            gitgui_protocol::METHOD_GIT_BRANCH_PUSH,
             gitgui_protocol::METHOD_GIT_INTEGRATION_START,
             gitgui_protocol::METHOD_GIT_INTEGRATION_RECOVER,
             gitgui_protocol::METHOD_GIT_REWRITE_PUSH_EXECUTE,
