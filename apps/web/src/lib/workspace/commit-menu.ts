@@ -4,6 +4,7 @@ import { branchManagementMenu } from "./branch-menu";
 
 type Options = {
   branches: CommitRef[];
+  worktreeBranches?: CommitRef[];
   currentBranch: string | null;
   isCurrentBranchContext?: boolean;
   headOid: string | null;
@@ -16,6 +17,7 @@ type Options = {
   canPushOther?: boolean;
   canSwitchBranch: boolean;
   canCreateBranch: boolean;
+  canCreateWorktree?: boolean;
   canCreateTag: boolean;
   canMerge: boolean;
   canRebase: boolean;
@@ -51,6 +53,7 @@ export function commitMenuItems(options: Options): ContextMenuItem[] {
   });
   const sourceLabel = selected?.shortName ?? (branches.length ? "selected branch" : "this commit");
   const currentLabel = currentBranch ?? "current branch";
+  const worktreeBranches = options.worktreeBranches ?? branches;
   return [
     ...(branches.some((branch) => branch.target === options.commitOid) ? [
       { id: "pull", label: "Pull", icon: "arrow-down-to-line", disabled: pending || !selected || selected.refType !== "localBranch" || !(currentSelected ? options.canPull : options.canPullOther) },
@@ -66,10 +69,20 @@ export function commitMenuItems(options: Options): ContextMenuItem[] {
       { id: "checkout-commit", label: "This commit", disabled: true },
       ...checkoutBranches,
     ] },
-    { id: "worktree", label: "Create worktree", icon: "folder", disabled: true, children: [
-      { id: "worktree-commit", label: "This commit", disabled: true },
-      ...branches.map((branch) => ({ id: `worktree-branch:${branch.name}`, label: branch.shortName, disabled: true })),
-    ] },
+    ...(worktreeBranches.length === 0 ? [{ id: "worktree-commit", label: "Create worktree from this commit", icon: "folder", disabled: pending || !options.canCreateWorktree }] : [{ id: "worktree", label: "Create worktree", icon: "folder", disabled: pending || !options.canCreateWorktree, children: [
+      { id: "worktree-commit", label: "This commit", disabled: pending || !options.canCreateWorktree },
+      ...worktreeBranches.map((branch) => {
+        const isCurrent = branch.refType === "localBranch" && branch.shortName === currentBranch;
+        const checkedOutElsewhere = branch.refType === "localBranch" && elsewhere(branch);
+        return {
+          id: `worktree-branch:${branch.name}`,
+          label: branch.shortName,
+          disabled: pending || !options.canCreateWorktree || isCurrent || checkedOutElsewhere,
+          disabledReason: isCurrent ? "This branch is already checked out in the current worktree."
+            : checkedOutElsewhere ? "This branch is already checked out in another worktree." : undefined,
+        };
+      }),
+    ] }]),
     { id: "create", label: "Create branch here…", icon: "git-branch", separatorBefore: true, disabled: pending || !options.canCreateBranch },
     { id: "cherry-pick", label: "Cherry-pick commit", disabled: true },
     { id: "reset", label: "Reset current branch to this commit", disabled: true, children: [

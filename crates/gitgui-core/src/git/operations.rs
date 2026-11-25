@@ -219,6 +219,11 @@ pub fn create_branch(
         vec!["branch".to_string(), name.to_string()]
     };
     if let Some(start_point) = start_point {
+        // A remote-tracking ref is selected specifically to establish its upstream,
+        // even when branch.autoSetupMerge is disabled in the user's Git config.
+        if start_point.starts_with("refs/remotes/") {
+            args.insert(1, "--track".to_string());
+        }
         args.push(start_point.to_string());
     }
     GitCommand::run_owned(&args, Some(Path::new(root))).map(|_| ())
@@ -232,6 +237,48 @@ pub fn switch_branch(root: &str, name: &str, merge: bool) -> Result<(), GitError
     }
     args.push(name.to_string());
     GitCommand::run_owned(&args, Some(Path::new(root))).map(|_| ())
+}
+
+pub fn create_worktree(root: &str, source: &str, name: Option<&str>) -> Result<(), GitError> {
+    let remote = source.starts_with("refs/remotes/");
+    let local = source.strip_prefix("refs/heads/");
+    let suffix = if remote {
+        let name = name.ok_or_else(|| branch_error("A local branch name is required"))?;
+        validate_branch_name(root, name)?;
+        name
+    } else if let Some(branch) = local {
+        validate_branch_name(root, branch)?;
+        branch
+    } else if super::stash::is_oid(source) {
+        &source[..8]
+    } else {
+        return Err(branch_error("A branch ref or full commit ID is required"));
+    };
+    if local.is_some() || remote {
+        GitCommand::run(&["show-ref", "--verify", "--quiet", source], Some(Path::new(root)))?;
+    } else if GitCommand::run(&["--no-replace-objects", "cat-file", "-t", source], Some(Path::new(root)))?.trim() != "commit" {
+        return Err(branch_error("The selected object is not a commit"));
+    }
+    let metadata = super::repository_identity::resolve_repository_metadata(Path::new(root))
+        .map_err(|_| branch_error("Could not determine the main repository location"))?;
+    let main = metadata.main_root.ok_or_else(|| branch_error("The main repository location is unavailable"))?;
+    let parent = main.parent().ok_or_else(|| branch_error("The main repository has no parent directory"))?;
+    let mut folder = main.file_name().ok_or_else(|| branch_error("The main repository has no folder name"))?.to_os_string();
+    let suffix: String = suffix.chars().map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '-' }).collect();
+    folder.push(format!("-{suffix}"));
+    let path = parent.join(folder);
+    if path.try_exists().map_err(|_| branch_error("Could not inspect the worktree destination"))? {
+        return Err(branch_error("The worktree destination already exists"));
+    }
+    let path = path.to_str().ok_or_else(|| branch_error("The worktree path is not valid UTF-8"))?;
+    let args = if remote {
+        vec!["worktree", "add", "--track", "-b", name.expect("validated name"), "--", path, source]
+    } else if let Some(branch) = local {
+        vec!["worktree", "add", "--", path, branch]
+    } else {
+        vec!["worktree", "add", "--detach", "--", path, source]
+    };
+    GitCommand::run(&args, Some(Path::new(root))).map(|_| ())
 }
 
 /// Create a lightweight tag at the exact commit reviewed in the graph.

@@ -2353,6 +2353,35 @@ export class WorkspaceStore {
     }
   }
 
+  openRemoteBranchDialog(branch: CommitRef, createWorktree = false): void {
+    if (branch.refType !== "remoteBranch" || !branch.name.startsWith("refs/remotes/")) return;
+    const client = this.client;
+    const name = branch.shortName.split("/").slice(1).join("/");
+    if (!name || !client?.serverWelcome.capabilities.includes(createWorktree ? "git.worktree.create" : "git.branch.create")) return;
+    if (this.blockDuringMerge() || this.gitActionPending || !this.activeRepositoryId) return;
+    this.requestGitAction({
+      kind: "createBranch", label: createWorktree ? "Creating worktree" : "Checking out branch",
+      successMessage: createWorktree ? `Created worktree for ${name}` : `Checked out ${name}`,
+      action: (repositoryId) => createWorktree
+        ? client.createWorktree({ repositoryId, name, source: branch.name })
+        : client.createBranch({ repositoryId, name, startPoint: branch.name, checkout: true }),
+    });
+  }
+
+  createGraphWorktree(source: CommitRef | CommitInfo): void {
+    const client = this.client;
+    if (!client?.serverWelcome.capabilities.includes("git.worktree.create") || this.gitActionPending || !this.activeRepositoryId || this.blockDuringMerge()) return;
+    const isBranch = "refType" in source;
+    if (isBranch && source.refType === "remoteBranch") {
+      this.openRemoteBranchDialog(source, true);
+      return;
+    }
+    if (isBranch && source.refType !== "localBranch") return;
+    const target = isBranch ? source.name : source.hash;
+    this.requestGitAction({ kind: "createBranch", label: "Creating worktree", successMessage: "Worktree created",
+      action: (repositoryId) => client.createWorktree({ repositoryId, source: target }) });
+  }
+
   openRenameBranchDialog(branch: CommitRef): void {
     if (!this.canRenameBranch || branch.refType !== "localBranch") return;
     if (this.prepareGitNameDialog("renameBranch")) {
@@ -2383,8 +2412,8 @@ export class WorkspaceStore {
   }
 
   submitGitNameDialog(): void {
-    const name = this.gitNameDialogValue.trim();
     const context = this.gitNameDialogContext;
+    const name = this.gitNameDialogValue.trim();
     const client = this.client;
     if (!context || !client || this.gitActionPending || context.repositoryId !== this.activeRepositoryId || context.environmentId !== this.workspaceState?.environmentId) return;
 

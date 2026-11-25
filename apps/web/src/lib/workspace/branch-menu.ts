@@ -25,6 +25,8 @@ export function branchMenuItems(branch: CommitRef, options: {
   canRebase?: boolean;
   isCurrent?: boolean;
   canRewritePush?: boolean;
+  canCreateLocalBranch?: boolean;
+  canCreateWorktree?: boolean;
 }): ContextMenuItem[] {
   const integration: ContextMenuItem[] = options.canIntegrate === undefined || options.isCurrent ? [] : [
     { id: `merge:${branch.name}`, label: "Merge into current branch", icon: "git-branch", disabled: !options.canIntegrate || options.isCurrent },
@@ -33,6 +35,9 @@ export function branchMenuItems(branch: CommitRef, options: {
   const currentActions: ContextMenuItem[] = options.isCurrent ? [
     ...(options.canRewritePush !== undefined ? [{ id: `rewrite-push:${branch.name}`, label: "Push rewritten branch…", icon: "upload", disabled: !options.canRewritePush }] : []),
   ] : [];
+  const worktreeCreation: ContextMenuItem[] = options.canCreateWorktree === undefined ? [] : [
+    { id: `create-worktree:${branch.name}`, label: "Create worktree", icon: "folder", disabled: !options.canCreateWorktree || options.checkedOut || Boolean(options.worktree) },
+  ];
   const management = branchManagementMenu(branch, {
     canRename: branch.refType === "localBranch" && options.canRename,
     canDelete: branch.refType === "localBranch" && options.canDelete && !options.checkedOut && !options.worktree,
@@ -42,13 +47,17 @@ export function branchMenuItems(branch: CommitRef, options: {
         ? "Cannot delete a branch checked out in a worktree."
         : !options.canDelete ? "Branch deletion is currently unavailable." : undefined,
   });
-  if (branch.refType === "remoteBranch") return integration;
+  if (branch.refType === "remoteBranch") return [
+    { id: `create-local:${branch.name}`, label: "Checkout branch", icon: "git-branch", disabled: !options.canCreateLocalBranch },
+    { id: `create-worktree:${branch.name}`, label: "Create worktree", icon: "folder", disabled: !options.canCreateWorktree },
+    ...integration,
+  ];
   const managementItems = (management.children ?? []).map((item) => ({
     ...item,
     label: item.id.startsWith("rename:") ? "Rename branch…" : item.id.startsWith("delete:") ? "Delete branch…" : "Solo",
   }));
   if (options.worktree?.isMain === false) {
-    return [...integration, ...currentActions, ...managementItems, ...worktreeMenuItems(options.worktree, {
+    return [...integration, ...currentActions, ...worktreeCreation, ...managementItems, ...worktreeMenuItems(options.worktree, {
       canRename: options.canRename,
       canRemove: options.canRemoveWorktree ?? false,
       canDeleteBranch: options.canDelete,
@@ -61,6 +70,7 @@ export function branchMenuItems(branch: CommitRef, options: {
   return [
     ...integration,
     ...currentActions,
+    ...worktreeCreation,
     ...managementItems,
   ];
 }

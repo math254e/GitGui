@@ -59,6 +59,8 @@ export type RepositoryPageModel = Pick<WorkspaceStore,
   | "loadTagDetails"
   | "loading"
   | "openBranchDialog"
+  | "openRemoteBranchDialog"
+  | "createGraphWorktree"
   | "openDeleteBranchDialog"
   | "openDeleteTagDialog"
   | "openDiscard"

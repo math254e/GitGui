@@ -87,7 +87,8 @@
 
   <form class="px-4 py-4" onsubmit={submit}>
     {#if kind === "branch" || kind === "tag"}
-      <p class="mb-3 flex items-center gap-2 text-xs text-[var(--app-theme-text-secondary)]">From <code title={startPoint}>{startPoint ? startPoint.slice(0, 8) : "HEAD"}</code></p>
+      <p class="mb-3 flex items-center gap-2 text-xs text-[var(--app-theme-text-secondary)]">From <code title={startPoint}>{startPoint?.startsWith("refs/remotes/") ? startPoint.slice("refs/remotes/".length) : startPoint ? startPoint.slice(0, 8) : "HEAD"}</code></p>
+      {#if startPoint?.startsWith("refs/remotes/")}<p class="mb-3 text-xs text-[var(--app-theme-text-secondary)]">The local branch will track this remote branch.</p>{/if}
     {/if}
     <label class="block text-xs font-medium text-[var(--app-theme-text-secondary)]" for="git-name-dialog-input">
       {label}

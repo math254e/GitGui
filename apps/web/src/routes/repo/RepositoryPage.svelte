@@ -81,6 +81,10 @@
         stateKey={store.sidebarStateKey}
         visibleRefKeys={store.visibleGraphRefKeys}
         onSelectRef={(ref) => store.selectRef(ref)}
+        canCreateLocalBranch={!store.gitUiActionPending && (store.client?.serverWelcome.capabilities.includes("git.branch.create") ?? false)}
+        onCreateLocalBranch={(ref) => store.openRemoteBranchDialog(ref)}
+        canCreateWorktree={!store.gitUiActionPending && (store.client?.serverWelcome.capabilities.includes("git.worktree.create") ?? false)}
+        onCreateWorktree={(ref) => store.createGraphWorktree(ref)}
         canRenameBranch={store.canRenameBranch}
         canDeleteBranch={store.canDeleteBranch}
         canDeleteTag={store.canDeleteTag}
@@ -136,6 +140,10 @@
         stateKey={store.sidebarStateKey}
         visibleRefKeys={store.visibleGraphRefKeys}
         onSelectRef={(ref) => store.selectRef(ref)}
+        canCreateLocalBranch={!store.gitUiActionPending && (store.client?.serverWelcome.capabilities.includes("git.branch.create") ?? false)}
+        onCreateLocalBranch={(ref) => store.openRemoteBranchDialog(ref)}
+        canCreateWorktree={!store.gitUiActionPending && (store.client?.serverWelcome.capabilities.includes("git.worktree.create") ?? false)}
+        onCreateWorktree={(ref) => store.createGraphWorktree(ref)}
         canRenameBranch={store.canRenameBranch}
         canDeleteBranch={store.canDeleteBranch}
         canDeleteTag={store.canDeleteTag}
@@ -202,6 +210,8 @@
               onSelectCommit={(commit) => store.selectCommit(commit)}
               onCompareCommitToWorkingTree={(commit) => store.compareCommitToWorkingTree(commit)}
               onCreateBranch={(commit) => store.openBranchDialog(commit)}
+              canCreateWorktree={Boolean(store.client?.serverWelcome.capabilities.includes("git.worktree.create"))}
+              onCreateWorktree={(source) => store.createGraphWorktree(source)}
               onCreateTag={(commit) => store.openTagDialog(commit)}
               canCreateTag={store.canCreateTag}
               canRenameBranch={store.canRenameBranch}
@@ -301,6 +311,10 @@
             stateKey={store.sidebarStateKey}
             visibleRefKeys={store.visibleGraphRefKeys}
             onSelectRef={(ref) => store.selectRef(ref)}
+            canCreateLocalBranch={!store.gitUiActionPending && (store.client?.serverWelcome.capabilities.includes("git.branch.create") ?? false)}
+            onCreateLocalBranch={(ref) => store.openRemoteBranchDialog(ref)}
+            canCreateWorktree={!store.gitUiActionPending && (store.client?.serverWelcome.capabilities.includes("git.worktree.create") ?? false)}
+            onCreateWorktree={(ref) => store.createGraphWorktree(ref)}
             canRenameBranch={store.canRenameBranch}
             canDeleteBranch={store.canDeleteBranch}
             canDeleteTag={store.canDeleteTag}
@@ -375,6 +389,8 @@
                   onSelectCommit={(commit) => store.selectCommit(commit)}
                   onCompareCommitToWorkingTree={(commit) => store.compareCommitToWorkingTree(commit)}
                   onCreateBranch={(commit) => store.openBranchDialog(commit)}
+                  canCreateWorktree={Boolean(store.client?.serverWelcome.capabilities.includes("git.worktree.create"))}
+                  onCreateWorktree={(source) => store.createGraphWorktree(source)}
                   onCreateTag={(commit) => store.openTagDialog(commit)}
                   canCreateTag={store.canCreateTag}
                   canRenameBranch={store.canRenameBranch}

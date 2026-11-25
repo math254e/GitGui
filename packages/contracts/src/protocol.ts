@@ -61,6 +61,7 @@ export const WS_METHOD_NAMES = [
   "git.branch.rename",
   "git.branch.delete",
   "git.worktree.remove",
+  "git.worktree.create",
   "git.stash.push",
   "git.stash.pop",
   "git.stash.push_selected",
@@ -791,6 +792,16 @@ export type GitWorktreeRemoveParams = { repositoryId: string, worktreePath: stri
  * Permits unmerged branch deletion, never forced worktree removal.
  */
 forceBranchDeletion: boolean, };
+
+export type GitWorktreeCreateParams = { repositoryId: string,
+/**
+ * A full local or remote branch ref, or a full commit object ID.
+ */
+source: string,
+/**
+ * Local tracking branch name, required for remote refs.
+ */
+name?: string, };
 
 export type GitWorktreeRemoveResult = { branchDeleted: boolean, removedRepositoryIds: Array<string>, warning: string | null, };
 

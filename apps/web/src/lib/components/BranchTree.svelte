@@ -20,6 +20,10 @@
     visibleRefKeys?: ReadonlySet<string>;
     onSelectRef?: (ref: CommitRef) => void;
     onSwitchBranch?: (branchName: string) => void;
+    canCreateLocalBranch?: boolean;
+    onCreateLocalBranch?: (branch: CommitRef) => void;
+    canCreateWorktree?: boolean;
+    onCreateWorktree?: (branch: CommitRef) => void;
     onToggleRefs?: (refs: CommitRef[], visible: boolean) => void;
     contextKey?: string | null;
     canRenameBranch?: boolean;
@@ -48,6 +52,10 @@
     visibleRefKeys = new Set<string>(),
     onSelectRef,
     onSwitchBranch,
+    canCreateLocalBranch = false,
+    onCreateLocalBranch,
+    canCreateWorktree = false,
+    onCreateWorktree,
     onToggleRefs,
     contextKey = null,
     canRenameBranch = false,
@@ -439,7 +447,7 @@
   }
 
   function openBranchContextMenu(row: HTMLElement, position: { x: number; y: number }) {
-    if (refType !== "localBranch" && !onIntegrateBranch) return;
+    if (refType !== "localBranch" && !onIntegrateBranch && !onCreateLocalBranch) return;
     const branch = branchByPath.get(normalizePath(row.getAttribute("data-item-path") ?? ""));
     if (!branch) return;
     const key = contextKey;
@@ -454,6 +462,8 @@
       canRebase,
       isCurrent: refType === "localBranch" && currentBranch === branch.shortName,
       canRewritePush,
+      canCreateLocalBranch,
+      canCreateWorktree,
     }), position, contextMenuOwner, worktree?.isMain === false ? { width: 320 } : undefined);
     // Keep the menu target visible through refreshes and virtualized row replacements.
     const treePath = row.dataset.itemPath ?? "";
@@ -468,6 +478,8 @@
       highlight.remove();
       if (key !== contextKey) return;
       if (selected === `rename:${branch.name}`) onRenameBranch?.(branch);
+      if (selected === `create-local:${branch.name}`) onCreateLocalBranch?.(branch);
+      if (selected === `create-worktree:${branch.name}`) onCreateWorktree?.(branch);
       if (selected === `delete:${branch.name}`) onDeleteBranch?.(branch);
       if (selected === `merge:${branch.name}`) onIntegrateBranch?.(branch, "merge");
       if (selected === `rebase:${branch.name}`) onIntegrateBranch?.(branch, "rebase");
@@ -479,7 +491,7 @@
 
   function handleContextMenu(event: MouseEvent) {
     const row = contextMenuRow(event);
-    if (!row || (refType !== "localBranch" && !onIntegrateBranch)) return;
+    if (!row || (refType !== "localBranch" && !onIntegrateBranch && !onCreateLocalBranch)) return;
     event.preventDefault();
     openBranchContextMenu(row, { x: event.clientX, y: event.clientY });
   }
@@ -487,7 +499,7 @@
   function handleContextMenuKey(event: KeyboardEvent) {
     if (event.key !== "ContextMenu" && event.key !== "Apps" && !(event.shiftKey && event.key === "F10")) return;
     const row = contextMenuRow(event) ?? host?.querySelector<HTMLElement>('[data-item-focused="true"][data-item-type="file"]');
-    if (!row || (refType !== "localBranch" && !onIntegrateBranch)) return;
+    if (!row || (refType !== "localBranch" && !onIntegrateBranch && !onCreateLocalBranch)) return;
     event.preventDefault();
     event.stopPropagation();
     const rect = row.getBoundingClientRect();

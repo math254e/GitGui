@@ -103,6 +103,8 @@ The same GitGui method-table divergence includes `git.worktree.remove`, with
 reviewed path/HEAD/branch inputs and explicit partial-success outcomes. Its
 catalog cleanup remains server-owned; the application workspace forgets entries
 the server has already removed without changing the connection runtime.
+The same table includes `git.worktree.create` for a branch ref or commit ID;
+Rust chooses the sibling path and returns a repository snapshot.
 
 Issue #4 extends the adapted `rpc/session.ts` request lifetime: interruption and
 timeout notify capable Rust servers using the generated `CancelRequest`, pending

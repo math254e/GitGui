@@ -136,6 +136,7 @@ pub const METHOD_GIT_BRANCH_RENAME: &str = "git.branch.rename";
 /// Canonical method for deleting a reviewed local branch.
 pub const METHOD_GIT_BRANCH_DELETE: &str = "git.branch.delete";
 pub const METHOD_GIT_WORKTREE_REMOVE: &str = "git.worktree.remove";
+pub const METHOD_GIT_WORKTREE_CREATE: &str = "git.worktree.create";
 /// Canonical method for creating a stash.
 pub const METHOD_GIT_STASH_PUSH: &str = "git.stash.push";
 /// Canonical method for applying and removing the latest stash.
@@ -216,6 +217,7 @@ pub const WS_METHOD_NAMES: &[&str] = &[
     METHOD_GIT_BRANCH_RENAME,
     METHOD_GIT_BRANCH_DELETE,
     METHOD_GIT_WORKTREE_REMOVE,
+    METHOD_GIT_WORKTREE_CREATE,
     METHOD_GIT_STASH_PUSH,
     METHOD_GIT_STASH_POP,
     METHOD_GIT_STASH_PUSH_SELECTED,
@@ -322,6 +324,7 @@ pub const CAPABILITY_GIT_BRANCH_SWITCH: &str = "git.branch.switch";
 pub const CAPABILITY_GIT_BRANCH_RENAME: &str = "git.branch.rename";
 pub const CAPABILITY_GIT_BRANCH_DELETE: &str = "git.branch.delete";
 pub const CAPABILITY_GIT_WORKTREE_REMOVE: &str = "git.worktree.remove";
+pub const CAPABILITY_GIT_WORKTREE_CREATE: &str = METHOD_GIT_WORKTREE_CREATE;
 /// Capability advertised when stash creation is available.
 pub const CAPABILITY_GIT_STASH_PUSH: &str = "git.stash.push";
 /// Capability advertised when stash popping is available.
@@ -1428,6 +1431,18 @@ pub struct GitBranchDeleteParams {
     /// Requires an explicit second confirmation after safe deletion is refused.
     #[serde(default)]
     pub force: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GitWorktreeCreateParams {
+    pub repository_id: String,
+    /// A full local or remote branch ref, or a full commit object ID.
+    pub source: String,
+    /// Local tracking branch name, required for remote refs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub name: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, TS)]

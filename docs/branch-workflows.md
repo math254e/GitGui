@@ -159,6 +159,19 @@ warning remains in `WorkingTreeFileList.svelte`.
 
 ## Worktree actions in branch and worktree menus
 
+Remote branch menus offer checkout and worktree creation. Both create a local
+tracking branch with the same name as the selected fetched remote branch. Checkout
+runs immediately. Worktree creation chooses a sibling of the main repository,
+named `<repository>-<branch>` with separators and other unsafe characters
+replaced by hyphens. It uses `git.worktree.create`, authorized by
+`repository:operate`. Git refuses existing branches or unsuitable paths. Fetch
+updates the remote refs shown in the menu.
+
+The graph also offers worktree creation for a selected commit (detached HEAD)
+or branch. The local branch sidebar offers the same branch action. Local
+branches already checked out in a worktree are unavailable.
+Commit worktrees use the abbreviated object ID in the sibling folder name.
+
 Right-clicking a linked-worktree branch in the sidebar or graph offers the same
 actions as its entry in the Worktrees list:
 

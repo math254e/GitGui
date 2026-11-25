@@ -1182,6 +1182,7 @@ fn required_scope_for_method(method: &str) -> Option<&'static str> {
         | METHOD_GIT_BRANCH_RENAME
         | METHOD_GIT_BRANCH_DELETE
         | METHOD_GIT_WORKTREE_REMOVE
+        | gitgui_protocol::METHOD_GIT_WORKTREE_CREATE
         | METHOD_GIT_STASH_PUSH
         | METHOD_GIT_STASH_PUSH_SELECTED
         | METHOD_GIT_STASH_APPLY
@@ -1292,6 +1293,7 @@ async fn dispatch(request: RequestEnvelope, state: &ServerState) -> ResponseEnve
             git_branch_mutation(request.id, &request.method, request.params, state).await
         }
         METHOD_GIT_WORKTREE_REMOVE => git_worktree_remove(request.id, request.params, state).await,
+        gitgui_protocol::METHOD_GIT_WORKTREE_CREATE => git_worktree_create(request.id, request.params, state).await,
         METHOD_GIT_STASH_PUSH => git_stash_push(request.id, request.params, state).await,
         METHOD_GIT_STASH_POP => git_stash_pop(request.id, request.params, state).await,
         METHOD_GIT_STASH_PUSH_SELECTED
@@ -2155,6 +2157,24 @@ async fn git_branch_list(
                 },
             )
         }
+        Err(error) => ResponseEnvelope::error(request_id, error),
+    }
+}
+
+async fn git_worktree_create(request_id: String, params: Value, state: &ServerState) -> ResponseEnvelope {
+    let params = match parse_params::<gitgui_protocol::GitWorktreeCreateParams>(params, gitgui_protocol::METHOD_GIT_WORKTREE_CREATE) {
+        Ok(params) => params,
+        Err(error) => return ResponseEnvelope::error(request_id, error),
+    };
+    if let Err(error) = validate_repository_id(&params.repository_id)
+        .and_then(|_| validate_branch_argument(&params.source, "source"))
+        .and_then(|_| params.name.as_deref().map(|name| validate_branch_argument(name, "name")).unwrap_or(Ok(()))) {
+        return ResponseEnvelope::error(request_id, error);
+    }
+    match run_git_action(state, &params.repository_id, move |root| {
+        gitgui_core::git::operations::create_worktree(root, &params.source, params.name.as_deref())
+    }).await {
+        Ok((repository, snapshot, _)) => response_success(request_id, GitBranchCreateResult { repository, snapshot }),
         Err(error) => ResponseEnvelope::error(request_id, error),
     }
 }
@@ -4285,6 +4305,7 @@ fn implemented_capabilities() -> Vec<String> {
         CAPABILITY_GIT_BRANCH_RENAME,
         CAPABILITY_GIT_BRANCH_DELETE,
         gitgui_protocol::CAPABILITY_GIT_WORKTREE_REMOVE,
+        gitgui_protocol::CAPABILITY_GIT_WORKTREE_CREATE,
         CAPABILITY_GIT_STASH_PUSH,
         CAPABILITY_GIT_STASH_POP,
         gitgui_protocol::CAPABILITY_GIT_STASH_PUSH_SELECTED,
@@ -5077,6 +5098,7 @@ mod tests {
             METHOD_GIT_BRANCH_RENAME,
             METHOD_GIT_BRANCH_DELETE,
             METHOD_GIT_WORKTREE_REMOVE,
+            gitgui_protocol::METHOD_GIT_WORKTREE_CREATE,
             METHOD_GIT_STASH_PUSH,
             METHOD_GIT_STASH_PUSH_SELECTED,
             METHOD_GIT_STASH_APPLY,

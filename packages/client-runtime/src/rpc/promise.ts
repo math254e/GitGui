@@ -26,6 +26,7 @@ import type {
   GitBranchRenameParams,
   GitBranchDeleteParams,
   GitWorktreeRemoveParams,
+  GitWorktreeCreateParams,
   GitBranchSwitchParams,
   GitCommitParams,
   GitDiscardParams,
@@ -449,6 +450,10 @@ export class GitGuiClient {
 
   removeWorktree(params: GitWorktreeRemoveParams) {
     return this.call("git.worktree.remove", { ...params, repositoryId: assertRepositoryId(params.repositoryId) });
+  }
+
+  createWorktree(params: GitWorktreeCreateParams) {
+    return this.call("git.worktree.create", { ...params, repositoryId: assertRepositoryId(params.repositoryId) });
   }
 
   stashPush(params: GitStashPushParams) {

@@ -30,6 +30,10 @@
     visibleRefKeys?: ReadonlySet<string>;
     onSelectRef?: (ref: CommitRef) => void;
     onSwitchBranch?: (branchName: string) => void;
+    canCreateLocalBranch?: boolean;
+    onCreateLocalBranch?: (branch: CommitRef) => void;
+    canCreateWorktree?: boolean;
+    onCreateWorktree?: (branch: CommitRef) => void;
     onSwitchWorktree?: (path: string) => void;
     onOpenWorktreeInNewTab?: (path: string) => void;
     onToggleRefs?: (refs: CommitRef[], visible: boolean) => void;
@@ -80,6 +84,10 @@
     visibleRefKeys = new Set<string>(),
     onSelectRef,
     onSwitchBranch,
+    canCreateLocalBranch = false,
+    onCreateLocalBranch,
+    canCreateWorktree = false,
+    onCreateWorktree,
     onSwitchWorktree,
     onOpenWorktreeInNewTab,
     onToggleRefs,
@@ -197,6 +205,7 @@
           {#if localBranches.length}
             <BranchTree
               {canIntegrate} {canRebase} {onIntegrateBranch} {canRewritePush} {onRewritePush}
+              {canCreateWorktree} {onCreateWorktree}
               refs={localBranches}
               refType="localBranch"
               treeId="gitgui-local-branches"
@@ -240,6 +249,8 @@
           {#if remoteBranches.length}
             <BranchTree
               {canIntegrate} {canRebase} {onIntegrateBranch}
+              {canCreateLocalBranch} {onCreateLocalBranch}
+              {canCreateWorktree} {onCreateWorktree}
               refs={remoteBranches}
               refType="remoteBranch"
               treeId="gitgui-remote-branches"

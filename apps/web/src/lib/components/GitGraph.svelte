@@ -56,6 +56,8 @@
     canPushBranch?: boolean;
     canSwitchBranch?: boolean;
     onCreateBranch?: (commit: CommitInfo) => void;
+    canCreateWorktree?: boolean;
+    onCreateWorktree?: (source: CommitRef | CommitInfo) => void;
     onCreateTag?: (commit: CommitInfo) => void;
     canCreateTag?: boolean;
     onRenameBranch?: (branch: CommitRef) => void;
@@ -103,6 +105,8 @@
     canPushBranch = false,
     canSwitchBranch = false,
     onCreateBranch,
+    canCreateWorktree = false,
+    onCreateWorktree,
     onCreateTag,
     canCreateTag = false,
     onRenameBranch,
@@ -192,18 +196,23 @@
       return;
     }
     const branches = clickedBranch ? [clickedBranch] : snapshot?.refs.filter((ref) => ref.refType === "localBranch" && ref.target === commit.hash) ?? [];
+    const worktreeBranches = clickedBranch ? [clickedBranch] : snapshot?.refs.filter((ref) => ref.refType !== "tag" && ref.target === commit.hash) ?? [];
     const selectedBranch = branches.length === 1 ? branches[0] : undefined;
     // Use the same branch attribution shown in the graph for commits without a ref at their tip.
     const associatedBranch = branches.length === 0
       ? branchRefByLineCommit.get(commit.hash) ?? nearestDescendantRefs.get(commit.hash) ?? branchRefByMergeTargetCommit.get(commit.hash) ?? branchRefByLaneCommit.get(commit.hash) ?? branchRefByFirstParentCommit.get(commit.hash)
       : undefined;
+    if (associatedBranch?.refType === "remoteBranch" && !worktreeBranches.some((ref) => ref.name === associatedBranch.name)) {
+      worktreeBranches.push(associatedBranch);
+    }
     const items = commitMenuItems({
-      branches, currentBranch: snapshot?.status.currentBranch ?? null, headOid: snapshot?.status.headOid ?? null,
+      branches, worktreeBranches, currentBranch: snapshot?.status.currentBranch ?? null, headOid: snapshot?.status.headOid ?? null,
       isCurrentBranchContext: associatedBranch?.refType === "localBranch" && associatedBranch.shortName === snapshot?.status.currentBranch,
       commitOid: commit.hash, worktrees: snapshot?.worktrees ?? [], pending,
       canPull: canPullBranch && Boolean(onPullBranch), canPush: canPushBranch && Boolean(onPushBranch), canSwitchBranch: canSwitchBranch && Boolean(onSwitchBranch),
       canPullOther: canPullOtherBranch && Boolean(onPullBranch), canPushOther: canPushOtherBranch && Boolean(onPushBranch),
       canCreateBranch: Boolean(onCreateBranch), canCreateTag: canCreateTag && Boolean(onCreateTag),
+      canCreateWorktree: canCreateWorktree && Boolean(onCreateWorktree),
       canMerge: Boolean(canIntegrate && onIntegrateBranch), canRebase: Boolean(canRebase && (selectedBranch ? onIntegrateBranch : onRebaseCommit)),
       canRename: canRenameBranch && Boolean(onRenameBranch), canDelete: canDeleteBranch && Boolean(onDeleteBranch),
     });
@@ -217,6 +226,7 @@
         onCompareCommitToWorkingTree(commit);
       }
       if (selected === "create") onCreateBranch?.(commit);
+      if (selected === "worktree-commit") onCreateWorktree?.(commit);
       if (selected === "createTag") onCreateTag?.(commit);
       if (selected === "rebase-commit") {
         if (selectedBranch) onIntegrateBranch?.(selectedBranch, "rebase");
@@ -225,6 +235,9 @@
       if (selected === "merge-commit" && selectedBranch) onIntegrateBranch?.(selectedBranch, "merge");
       if (selected === "pull" && selectedBranch) onPullBranch?.(selectedBranch);
       if (selected === "push" && selectedBranch) onPushBranch?.(selectedBranch);
+      for (const branch of worktreeBranches) {
+        if (selected === `worktree-branch:${branch.name}`) onCreateWorktree?.(branch);
+      }
       for (const branch of branches) {
         if (selected === `checkout-branch:${branch.name}`) onSwitchBranch?.(branch.shortName);
         if (selected === `rename:${branch.name}`) onRenameBranch?.(branch);

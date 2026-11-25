@@ -18,6 +18,8 @@
  * - GitGui-owned branch rename/delete methods use reviewed local ref targets
  *   and return mutation outcomes before the client refreshes repository state.
  * - Reviewed worktree removal also reports branch and catalog cleanup outcomes.
+ * - Worktree creation accepts a branch ref or commit ID; the server selects
+ *   a sibling directory of the main repository.
  * - GitGui-owned lightweight tag creation accepts a full reviewed commit ID
  *   and returns a snapshot through the ordinary repository mutation contract.
  * - Reviewed tag deletion compares the unpeeled tag object ID atomically and
@@ -58,6 +60,7 @@ import type {
   GitBranchRenameParams,
   GitBranchDeleteParams,
   GitWorktreeRemoveParams,
+  GitWorktreeCreateParams,
   GitWorktreeRemoveResult,
   GitBranchListParams,
   GitBranchListResult,
@@ -208,6 +211,7 @@ export interface GitGuiRpcMethods {
   "git.branch.rename": { readonly input: GitBranchRenameParams; readonly output: null };
   "git.branch.delete": { readonly input: GitBranchDeleteParams; readonly output: null };
   "git.worktree.remove": { readonly input: GitWorktreeRemoveParams; readonly output: GitWorktreeRemoveResult };
+  "git.worktree.create": { readonly input: GitWorktreeCreateParams; readonly output: GitBranchCreateResult };
   "git.stash.push": { readonly input: GitStashPushParams; readonly output: GitStashPushResult };
   "git.stash.pop": { readonly input: GitStashPopParams; readonly output: GitStashPopResult };
   "git.stash.push_selected": { readonly input: GitStashPushSelectedParams; readonly output: GitStashPushSelectedResult };
@@ -276,6 +280,7 @@ export const WS_METHOD_NAMES = [
   "git.branch.rename",
   "git.branch.delete",
   "git.worktree.remove",
+  "git.worktree.create",
   "git.stash.push",
   "git.stash.pop",
   ...STASH_FEATURE_METHOD_NAMES,
@@ -349,6 +354,7 @@ export const WS_METHODS = {
   gitRewritePushExecute: "git.rewrite_push.execute",
   gitBranchDelete: "git.branch.delete",
   gitWorktreeRemove: "git.worktree.remove",
+  gitWorktreeCreate: "git.worktree.create",
   gitStashPush: "git.stash.push",
   gitStashPop: "git.stash.pop",
   gitStashPushSelected: "git.stash.push_selected",
