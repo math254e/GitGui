@@ -3,6 +3,7 @@ export interface ContextMenuItem<T extends string = string> {
   label: string;
   destructive?: boolean;
   disabled?: boolean;
+  disabledReason?: string;
   header?: boolean;
   icon?: string;
   separatorBefore?: boolean;
@@ -60,6 +61,9 @@ const ICON_PATHS: Record<string, ReadonlyArray<{ tag: string; attrs: Record<stri
   ],
   upload: [
     { tag: "path", attrs: { d: "M12 16V3m-5 5 5-5 5 5M3 16v4a1 1 0 0 0 1 1h16a1 1 0 0 0 1-1v-4" } },
+  ],
+  "arrow-down-to-line": [
+    { tag: "path", attrs: { d: "M12 3v14m-6-6 6 6 6-6M5 21h14" } },
   ],
   hash: [
     { tag: "line", attrs: { x1: "4", x2: "20", y1: "9", y2: "9" } },
@@ -156,9 +160,11 @@ function createIconElement(name: string, tone: "neutral" | "destructive"): SVGSV
   svg.setAttribute("viewBox", "0 0 24 24");
   svg.setAttribute("fill", "none");
   svg.setAttribute("stroke", "currentColor");
-  svg.setAttribute("stroke-width", "2");
+  svg.setAttribute("stroke-width", "1.5");
   svg.setAttribute("stroke-linecap", "round");
   svg.setAttribute("stroke-linejoin", "round");
+  svg.setAttribute("aria-hidden", "true");
+  svg.setAttribute("style", `width:16px;height:16px;flex-shrink:0;color:${tone === "destructive" ? "var(--app-theme-error)" : "var(--app-theme-muted-foreground)"};`);
   svg.setAttribute(
     "class",
     tone === "destructive"
@@ -187,6 +193,54 @@ function clampMenuPosition(menu: HTMLDivElement, preferredLeft: number, preferre
   );
   menu.style.left = `${left}px`;
   menu.style.top = `${top}px`;
+}
+
+/** Fit long menus into columns so all actions remain reachable without scrolling. */
+function fitMenuToViewport(menu: HTMLDivElement, inner: HTMLDivElement) {
+  const availableHeight = Math.max(1, window.innerHeight - 16);
+  const availableWidth = Math.max(1, window.innerWidth - 16);
+  const rect = menu.getBoundingClientRect();
+  if (rect.height <= availableHeight) return;
+
+  const entries = [...inner.children] as HTMLElement[];
+  const rowsAtNormalHeight = Math.max(1, Math.floor((availableHeight - 10) / 28));
+  const maximumColumns = Math.max(1, Math.floor(availableWidth / 140));
+  const columns = Math.min(maximumColumns, Math.ceil(entries.length / rowsAtNormalHeight));
+  const rows = Math.ceil(entries.length / columns);
+  const rowHeight = Math.min(28, Math.max(1, (availableHeight - 10) / rows));
+  const columnWidth = Math.max(140, rect.width || 206);
+
+  menu.style.width = `${Math.min(availableWidth, columnWidth * columns)}px`;
+  menu.style.maxWidth = `${availableWidth}px`;
+  inner.style.display = "grid";
+  inner.style.gridAutoFlow = "column";
+  inner.style.gridTemplateColumns = `repeat(${columns}, minmax(0, 1fr))`;
+  inner.style.gridTemplateRows = `repeat(${rows}, ${rowHeight}px)`;
+  for (const entry of entries) {
+    entry.style.minWidth = "0";
+    if (entry.dataset.contextMenuSeparator === "true") {
+      entry.style.alignSelf = "center";
+      entry.style.margin = "0 8px";
+    } else {
+      const button = entry instanceof HTMLButtonElement ? entry : entry.querySelector<HTMLButtonElement>("button");
+      if (button) {
+        button.style.minHeight = "0";
+        button.style.height = `${rowHeight}px`;
+        button.style.paddingBlock = "0";
+        if (rowHeight < 20) {
+          button.style.fontSize = `${Math.max(1, rowHeight * 0.7)}px`;
+          button.style.lineHeight = "1";
+          for (const icon of button.querySelectorAll<SVGElement>("svg")) {
+            icon.style.width = `${rowHeight * 0.7}px`;
+            icon.style.height = `${rowHeight * 0.7}px`;
+          }
+        }
+      } else {
+        entry.style.paddingBlock = "0";
+        entry.style.overflow = "hidden";
+      }
+    }
+  }
 }
 
 function isNodeWithinMenuStack(target: EventTarget | null, menuStack: readonly HTMLDivElement[]) {
@@ -272,6 +326,7 @@ export function showContextMenu<T extends string>(
       document.removeEventListener("keydown", onKeyDown, true);
       document.removeEventListener("pointerdown", onPointerDown, true);
       document.removeEventListener("contextmenu", onContextMenu, true);
+      window.removeEventListener("resize", dismiss);
       const shouldRestoreFocus = isNodeWithinMenuStack(document.activeElement, menuStack);
       for (const menu of menuStack) {
         menu.remove();
@@ -352,31 +407,38 @@ export function showContextMenu<T extends string>(
 
       const menu = document.createElement("div");
       menu.className =
-        "gitgui-context-menu fixed z-[10000] w-80 min-w-80 max-w-80 overflow-hidden rounded-lg bg-clip-padding outline-none";
+        "gitgui-context-menu fixed z-[10000] overflow-hidden rounded-lg bg-clip-padding outline-none";
       menu.style.cssText =
-        "position:fixed;z-index:10000;width:20rem;min-width:20rem;max-width:20rem;overflow:hidden;border-radius:8px;background-clip:padding-box;background:var(--app-theme-surface-overlay);border:1px solid var(--app-theme-border);box-shadow:var(--app-theme-dialog-shadow);color:var(--app-theme-text);outline:none;pointer-events:auto;";
+        "position:fixed;z-index:10000;width:max-content;overflow:hidden;border-radius:8px;background:var(--app-theme-surface-overlay);border:1px solid var(--app-theme-border);box-shadow:var(--app-theme-dialog-shadow);color:var(--app-theme-text);outline:none;pointer-events:auto;";
       menu.style.left = `${preferredLeft}px`;
       menu.style.top = `${preferredTop}px`;
-      const width = `${Math.min(Math.max(320, options?.width ?? 320), Math.max(0, window.innerWidth - 16))}px`;
-      menu.style.width = width;
-      menu.style.minWidth = width;
-      menu.style.maxWidth = width;
+      const availableWidth = Math.max(0, window.innerWidth - 16);
+      if (options) {
+        const width = `${Math.min(Math.max(206, options.width), availableWidth)}px`;
+        menu.style.width = width;
+        menu.style.minWidth = width;
+        menu.style.maxWidth = width;
+      } else {
+        menu.style.minWidth = `${Math.min(206, availableWidth)}px`;
+        menu.style.maxWidth = `${Math.min(320, availableWidth)}px`;
+      }
       menu.dataset.level = String(level);
       menu.setAttribute("role", "menu");
       menu.tabIndex = -1;
 
       const inner = document.createElement("div");
-      inner.className =
-        "max-h-[min(24rem,70vh)] min-w-0 max-w-sm overflow-y-auto overflow-x-hidden p-1";
+      inner.className = "min-w-0 p-1";
       inner.style.cssText =
-        "max-height:min(24rem,70vh);min-width:0;max-width:100%;overflow-x:hidden;overflow-y:auto;padding:0.25rem;";
+        "min-width:0;max-width:100%;padding:4px;";
+
+      const hasIconColumn = entries.some((item) => !item.header && typeof item.icon === "string" && item.icon in ICON_PATHS);
 
       for (const item of entries) {
         if (item.separatorBefore === true && inner.children.length > 0) {
           const separator = document.createElement("div");
           separator.className = "mx-2 my-1 h-px bg-border";
           separator.style.cssText =
-            "height:1px;margin:0.25rem 0.5rem;background:var(--app-theme-border);";
+            "height:1px;margin:4px 8px;background:var(--app-theme-border);";
           separator.dataset.contextMenuSeparator = "true";
           separator.setAttribute("role", "separator");
           inner.appendChild(separator);
@@ -385,7 +447,7 @@ export function showContextMenu<T extends string>(
         if (item.header === true) {
           const header = document.createElement("div");
           header.className = "px-2 py-1.5 font-medium text-muted-foreground text-[11px]";
-          header.style.cssText = "padding:0.375rem 0.5rem;color:var(--app-theme-muted-foreground);font-size:0.6875rem;font-weight:500;";
+          header.style.cssText = "padding:6px 8px;color:var(--app-theme-muted-foreground);font-size:12px;font-weight:500;";
           header.textContent = item.label;
           inner.appendChild(header);
           continue;
@@ -403,16 +465,15 @@ export function showContextMenu<T extends string>(
         button.disabled = isDisabled;
         if (isDisabled) button.setAttribute("aria-disabled", "true");
         const rowBase =
-          "flex w-full cursor-default select-none items-center gap-2 rounded-sm px-2 py-1 text-left text-xs outline-none transition-colors sm:min-h-7 min-h-8";
+          "flex w-full cursor-default select-none items-center gap-2 rounded-sm px-2 py-1 text-left text-sm outline-none transition-colors min-h-7";
         button.className = isDisabled
           ? `${rowBase} pointer-events-none cursor-not-allowed text-muted-foreground opacity-64`
           : isLeafDestructive
             ? `${rowBase} text-[var(--app-theme-error)] hover:bg-destructive/10 hover:text-[var(--app-theme-error)]`
             : `${rowBase} text-foreground hover:bg-accent hover:text-accent-foreground`;
         button.style.cssText =
-          "display:flex;width:100%;min-height:1.75rem;align-items:center;gap:0.5rem;border:0;border-radius:4px;background:transparent;padding:0.25rem 0.5rem;color:var(--app-theme-text);font-family:inherit;font-size:0.75rem;line-height:1.125rem;text-align:left;cursor:default;";
+          "display:flex;width:100%;min-height:28px;align-items:center;gap:8px;border:0;border-radius:4px;background:transparent;padding:4px 8px;color:var(--app-theme-text);font-family:inherit;font-size:14px;font-weight:400;line-height:20px;text-align:left;cursor:default;";
         if (isLeafDestructive) {
-          // Error foreground is text on a filled error surface, not on the menu.
           button.style.color = "var(--app-theme-error)";
         }
         if (isDisabled) {
@@ -421,15 +482,21 @@ export function showContextMenu<T extends string>(
           button.style.pointerEvents = "none";
         }
 
-        if (typeof item.icon === "string") {
-          const icon = createIconElement(item.icon, isLeafDestructive ? "destructive" : "neutral");
-          if (icon) {
-            button.appendChild(icon);
-          }
+        const icon = typeof item.icon === "string"
+          ? createIconElement(item.icon, isLeafDestructive && !isDisabled ? "destructive" : "neutral")
+          : null;
+        if (icon) {
+          button.appendChild(icon);
+        } else if (hasIconColumn) {
+          const spacer = document.createElement("span");
+          spacer.setAttribute("aria-hidden", "true");
+          spacer.style.cssText = "width:16px;height:16px;flex-shrink:0;";
+          button.appendChild(spacer);
         }
 
         const label = document.createElement("span");
         label.className = "min-w-0 flex-1 truncate";
+        label.style.cssText = "min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
         label.textContent = item.label;
         button.appendChild(label);
 
@@ -443,6 +510,8 @@ export function showContextMenu<T extends string>(
               "-me-0.5 ms-auto size-4.5 shrink-0 text-[var(--app-theme-muted-foreground)] opacity-80 sm:size-4",
             );
             chevron.setAttribute("aria-hidden", "true");
+            chevron.style.width = "14px";
+            chevron.style.height = "14px";
             chevron.dataset.contextMenuChevron = "true";
             button.appendChild(chevron);
           }
@@ -458,13 +527,9 @@ export function showContextMenu<T extends string>(
                 ? "color-mix(in srgb, var(--app-theme-error) 10%, transparent)"
                 : "var(--app-theme-accent-surface)"
               : "transparent";
-            button.style.color = isHighlighted
-              ? isLeafDestructive
-                ? "var(--app-theme-error)"
-                : "var(--app-theme-accent-surface-foreground)"
-              : isLeafDestructive
-                ? "var(--app-theme-error)"
-                : "var(--app-theme-text)";
+            button.style.color = isLeafDestructive
+              ? "var(--app-theme-error)"
+              : isHighlighted ? "var(--app-theme-accent-surface-foreground)" : "var(--app-theme-text)";
           };
           button.addEventListener("mouseenter", () => {
             button.focus({ preventScroll: true });
@@ -497,7 +562,7 @@ export function showContextMenu<T extends string>(
                 return;
               }
               const childRect = childMenu.getBoundingClientRect();
-              if (childRect.right > window.innerWidth) {
+              if (rect.right + 4 + childRect.width > window.innerWidth) {
                 clampMenuPosition(childMenu, rect.left - childRect.width - 4, rect.top);
               }
               if (focusFirstItem) {
@@ -523,7 +588,16 @@ export function showContextMenu<T extends string>(
           }
         }
 
-        inner.appendChild(button);
+        if (isDisabled && item.disabledReason) {
+          // Disabled buttons do not reliably receive pointer events, so the wrapper owns the tooltip.
+          const wrapper = document.createElement("div");
+          wrapper.title = item.disabledReason;
+          wrapper.setAttribute("role", "none");
+          wrapper.appendChild(button);
+          inner.appendChild(wrapper);
+        } else {
+          inner.appendChild(button);
+        }
       }
 
       menu.appendChild(inner);
@@ -535,15 +609,15 @@ export function showContextMenu<T extends string>(
       document.body.appendChild(menu);
       menuStack[level] = menu;
       submenuTriggerStack[level] = parentTrigger;
+      fitMenuToViewport(menu, inner);
+      clampMenuPosition(menu, preferredLeft, preferredTop);
 
-      requestAnimationFrame(() => {
-        clampMenuPosition(menu, preferredLeft, preferredTop);
-      });
     };
 
     document.addEventListener("keydown", onKeyDown, true);
     document.addEventListener("pointerdown", onPointerDown, true);
     document.addEventListener("contextmenu", onContextMenu, true);
+    window.addEventListener("resize", dismiss);
     document.body.appendChild(backdrop);
     openMenu(items, position?.x ?? 0, position?.y ?? 0, 0);
     activeContextMenuDismiss = dismiss;

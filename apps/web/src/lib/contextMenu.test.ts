@@ -7,7 +7,7 @@ beforeEach(() => {
   frames = [];
   vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => { frames.push(callback); return frames.length; });
 });
-afterEach(() => { dismissContextMenu(); document.body.replaceChildren(); vi.unstubAllGlobals(); });
+afterEach(() => { dismissContextMenu(); document.body.replaceChildren(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 function key(key: string) {
   const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
   document.activeElement!.dispatchEvent(event);
@@ -21,6 +21,28 @@ function invoker() {
 const activeLabel = () => document.activeElement?.textContent;
 
 describe("context menu keyboard ownership", () => {
+  it("lays out a tall menu in columns without scrolling and keeps every item keyboard accessible", async () => {
+    vi.stubGlobal("innerHeight", 400);
+    vi.stubGlobal("innerWidth", 800);
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      return { x: 0, y: 0, left: 0, top: 0, right: 240, bottom: 800, width: 240, height: 800, toJSON: () => ({}) };
+    });
+    const result = showContextMenu(Array.from({ length: 20 }, (_, index) => ({ id: `item-${index}`, label: `Item ${index}` })));
+    const menu = document.querySelector<HTMLElement>('[role="menu"]')!;
+    const inner = menu.firstElementChild as HTMLElement;
+    expect(inner.style.overflowY).not.toBe("auto");
+    expect(inner.style.display).toBe("grid");
+    expect(inner.style.gridTemplateColumns).toBe("repeat(2, minmax(0, 1fr))");
+    expect(menu.querySelectorAll("button")).toHaveLength(20);
+    key("End"); expect(activeLabel()).toBe("Item 19");
+    key("Enter"); await expect(result).resolves.toBe("item-19");
+  });
+
+  it("dismisses the menu when the viewport changes", async () => {
+    const result = showContextMenu([{ id: "item", label: "Item" }]);
+    window.dispatchEvent(new Event("resize"));
+    await expect(result).resolves.toBeNull();
+  });
   it("focuses the first enabled item and navigates/wraps over headers, separators, and disabled items without moving the graph", async () => {
     const graphRow = invoker();
     const navigateGraph = vi.fn(); graphRow.addEventListener("keydown", navigateGraph);
@@ -85,6 +107,16 @@ describe("context menu keyboard ownership", () => {
     dismissContextMenu({}); expect(isContextMenuOpen()).toBe(true);
     dismissContextMenu(owner); await expect(result).resolves.toBeNull();
     expect(document.activeElement).toBe(trigger);
+  });
+
+  it("shows a hover reason and neutral icon for disabled destructive actions", async () => {
+    const result = showContextMenu([{ id: "delete", label: "Delete branch…", icon: "trash", destructive: true, disabled: true, disabledReason: "Branch is checked out." }]);
+    const button = document.querySelector<HTMLButtonElement>('button[role="menuitem"]')!;
+    expect(button.disabled).toBe(true);
+    expect(button.parentElement?.title).toBe("Branch is checked out.");
+    expect(button.style.pointerEvents).toBe("none");
+    expect(button.querySelector("svg")?.getAttribute("style")).toContain("var(--app-theme-muted-foreground)");
+    dismissContextMenu(); await expect(result).resolves.toBeNull();
   });
 
   it("preserves mouse hover submenus and pointer selection/outside dismissal", async () => {
