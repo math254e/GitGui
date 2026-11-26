@@ -150,7 +150,15 @@ const ICON_PATHS: Record<string, ReadonlyArray<{ tag: string; attrs: Record<stri
   ],
 };
 
-function createIconElement(name: string, tone: "neutral" | "destructive"): SVGSVGElement | null {
+function createIconElement(name: string, tone: "neutral" | "destructive"): SVGSVGElement | HTMLImageElement | null {
+  if (name === "vscode" || name === "file-explorer") {
+    const image = document.createElement("img");
+    image.src = name === "vscode" ? "/visual-studio-code.svg" : "/file-explorer.png";
+    image.alt = "";
+    image.setAttribute("aria-hidden", "true");
+    image.style.cssText = "width:16px;height:16px;flex-shrink:0;object-fit:contain;";
+    return image;
+  }
   const paths = ICON_PATHS[name];
   if (!paths || typeof document.createElementNS !== "function") {
     return null;
@@ -431,7 +439,7 @@ export function showContextMenu<T extends string>(
       inner.style.cssText =
         "min-width:0;max-width:100%;padding:4px;";
 
-      const hasIconColumn = entries.some((item) => !item.header && typeof item.icon === "string" && item.icon in ICON_PATHS);
+      const hasIconColumn = entries.some((item) => !item.header && typeof item.icon === "string" && (item.icon === "vscode" || item.icon === "file-explorer" || item.icon in ICON_PATHS));
 
       for (const item of entries) {
         if (item.separatorBefore === true && inner.children.length > 0) {

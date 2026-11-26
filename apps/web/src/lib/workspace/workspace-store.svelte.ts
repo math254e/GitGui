@@ -370,6 +370,9 @@ export class WorkspaceStore {
   activeRepository = $derived(
     this.openRepos.find((repo) => repo.id === this.activeRepositoryId) ?? null,
   );
+  canOpenActiveRepositoryLocally = $derived(this.isDesktop && this.environmentEntries.some(
+    (entry) => entry.registration.environmentId === this.workspaceState?.environmentId && entry.registration.target.kind === "primary",
+  ));
   snapshot = $derived(this.activeRepository?.snapshot ?? null);
   repositoryDisconnected = $derived(this.externalTabs && Boolean(this.connectionEnvironmentId) &&
     this.environmentEntries.find((entry) => entry.registration.environmentId === this.connectionEnvironmentId)?.connection.phase !== "connected");

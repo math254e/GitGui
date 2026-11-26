@@ -96,6 +96,8 @@ export interface DesktopBridge {
   getCredential(environmentId: string): Promise<DesktopCredential | undefined>;
   setCredential(environmentId: string, credential: DesktopCredential): Promise<void>;
   removeCredential(environmentId: string): Promise<void>;
+  openRepositoryInVSCode(path: string): Promise<void>;
+  openRepositoryInExplorer(path: string): Promise<void>;
   pickFolder(): Promise<string | null>;
   discoverSshHosts(): Promise<DesktopSshHost[]>;
   ensureSshConnection(target: DesktopSshTarget, request?: DesktopSshRequest): Promise<DesktopPreparedConnection>;

@@ -17,6 +17,25 @@
   import type { RepositoryPageModel } from "$lib/workspace/repository-routing";
 
   let { store }: { store: RepositoryPageModel } = $props();
+  function activeRepositoryPath() {
+    const path = store.activeRepository?.root;
+    if (!path) throw new Error("The repository folder is unavailable.");
+    return path;
+  }
+  async function openRepositoryInVSCode() {
+    const desktopBridge = window.desktopBridge;
+    if (typeof desktopBridge?.openRepositoryInVSCode !== "function") {
+      throw new Error("Restart GitGui to enable opening repositories in other apps.");
+    }
+    await desktopBridge.openRepositoryInVSCode(activeRepositoryPath());
+  }
+  async function openRepositoryInExplorer() {
+    const desktopBridge = window.desktopBridge;
+    if (typeof desktopBridge?.openRepositoryInExplorer !== "function") {
+      throw new Error("Restart GitGui to enable opening repositories in other apps.");
+    }
+    await desktopBridge.openRepositoryInExplorer(activeRepositoryPath());
+  }
 
   onMount(() => {
     const renderer = acquireDiffRenderer();
@@ -178,6 +197,10 @@
           onBranch={() => store.openBranchDialog()}
           onStash={() => store.openStashDialog()}
           onPop={() => store.popStash()}
+          canOpenRepositoryLocally={store.canOpenActiveRepositoryLocally}
+          repositoryKey={store.activeRepository?.root ?? ""}
+          onOpenInVSCode={openRepositoryInVSCode}
+          onOpenInExplorer={openRepositoryInExplorer}
           pending={store.gitUiActionPending}
           pendingKind={store.gitAction?.kind ?? null}
         />
@@ -362,6 +385,10 @@
               onBranch={() => store.openBranchDialog()}
               onStash={() => store.openStashDialog()}
               onPop={() => store.popStash()}
+              canOpenRepositoryLocally={store.canOpenActiveRepositoryLocally}
+              repositoryKey={store.activeRepository?.root ?? ""}
+              onOpenInVSCode={openRepositoryInVSCode}
+              onOpenInExplorer={openRepositoryInExplorer}
               pending={store.gitUiActionPending}
               pendingKind={store.gitAction?.kind ?? null}
             />

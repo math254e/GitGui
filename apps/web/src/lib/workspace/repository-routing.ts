@@ -31,6 +31,7 @@ export type RepositoryPageModel = Pick<WorkspaceStore,
   | "canCreateTag"
   | "canDeleteBranch"
   | "canDeleteTag"
+  | "canOpenActiveRepositoryLocally"
   | "canPopStash"
   | "canPushTag"
   | "canRemoveWorktree"

@@ -1,4 +1,6 @@
-import { join, normalize, resolve } from "node:path";
+import { delimiter, join, normalize, resolve } from "node:path";
+import { spawn } from "node:child_process";
+import { statSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import {
   app,
@@ -8,6 +10,7 @@ import {
   ipcMain,
   net,
   protocol,
+  shell,
   type IpcMainInvokeEvent,
 } from "electron";
 import type {
@@ -24,6 +27,7 @@ import { extractDeepLink, normalizeDeepLink } from "./lifecycle.js";
 import { registerDevelopmentLauncher } from "./dev-launcher.js";
 import { DesktopUpdates } from "./updates/desktop-updates.js";
 import { packagedUpdateEngine, updateDisabledReason } from "./updates/electron-updater.js";
+import { desktopRepositoryPath } from "./repository-path.js";
 
 const DEVELOPMENT_ORIGIN = "http://127.0.0.1:1420";
 const APPLICATION_ORIGIN = "gitgui://app";
@@ -211,6 +215,15 @@ function registerIpc(): void {
   ipcMain.handle("desktop:credentials:get", trusted((_event, id: string) => stateStore.getCredential(id)));
   ipcMain.handle("desktop:credentials:set", trusted((_event, id: string, credential: DesktopCredential) => stateStore.setCredential(id, credential)));
   ipcMain.handle("desktop:credentials:remove", trusted((_event, id: string) => stateStore.removeCredential(id)));
+  ipcMain.handle("desktop:repository:open-vscode", trusted(async (_event, value: string) => {
+    const repositoryPath = validateLocalRepositoryPath(value);
+    await launchVSCode(repositoryPath);
+  }));
+  ipcMain.handle("desktop:repository:open-explorer", trusted(async (_event, value: string) => {
+    const repositoryPath = validateLocalRepositoryPath(value);
+    const error = await shell.openPath(repositoryPath);
+    if (error) throw new Error(`Could not open repository folder: ${error}`);
+  }));
   ipcMain.handle("desktop:dialog:folder", trusted(async () => {
     const options = { properties: ["openDirectory", "createDirectory"] as Array<"openDirectory" | "createDirectory"> };
     const result = mainWindow
@@ -233,6 +246,79 @@ function registerIpc(): void {
     }
     return updates.install(expectedVersion);
   }));
+}
+
+function validateLocalRepositoryPath(value: unknown): string {
+  if (typeof value !== "string" || value.length === 0 || value.length > 32_768) {
+    throw new Error("Invalid repository folder path");
+  }
+  // Rust canonical paths on Windows can use the extended prefix, which GUI
+  // programs do not consistently accept as a folder argument.
+  const path = desktopRepositoryPath(value, process.platform);
+  if (!isAbsolutePath(path)) throw new Error("Invalid repository folder path");
+  try {
+    if (!statSync(path).isDirectory()) throw new Error("Repository path is not a folder");
+  } catch {
+    throw new Error("Repository folder is unavailable on this computer");
+  }
+  return path;
+}
+
+function isAbsolutePath(value: string): boolean {
+  return process.platform === "win32" ? /^[a-zA-Z]:[\\/]/.test(value) || /^\\\\[^\\]+\\[^\\]+/.test(value) : value.startsWith("/");
+}
+
+function findCommandOnPath(command: string): string | undefined {
+  const pathExtensions = process.platform === "win32"
+    ? (process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean)
+    : [""];
+  const extensions = process.platform === "win32" ? pathExtensions : [""];
+
+  for (const entry of (process.env.PATH ?? "").split(delimiter)) {
+    const directory = entry.trim().replace(/^"|"$/g, "");
+    if (!directory) continue;
+
+    for (const extension of extensions) {
+      const candidate = join(directory, `${command}${extension}`);
+      try {
+        if (statSync(candidate).isFile()) return candidate;
+      } catch {
+        // Continue searching PATH.
+      }
+    }
+  }
+}
+
+const WINDOWS_SHELL_META_CHARS = /([()\][%!^"`<>&|;, *?])/g;
+
+/** Match T3's cmd.exe quoting for .cmd/.bat shims without exposing paths to shell syntax. */
+function escapeWindowsShellArg(value: string): string {
+  let escaped = value.replace(/(\\*)"/g, "$1$1\\\"");
+  escaped = escaped.replace(/(\\*)$/, "$1$1");
+  return `"${escaped}"`.replace(WINDOWS_SHELL_META_CHARS, "^$1");
+}
+
+function launchVSCode(repositoryPath: string): Promise<void> {
+  const executable = findCommandOnPath("code");
+  if (!executable) throw new Error("Visual Studio Code CLI ('code') was not found on PATH.");
+
+  const isWindowsShim = process.platform === "win32" && /\.(cmd|bat)$/i.test(executable);
+  const args = [repositoryPath];
+  const command = isWindowsShim ? escapeWindowsShellArg(executable) : executable;
+  const spawnArgs = isWindowsShim ? args.map(escapeWindowsShellArg) : args;
+
+  return new Promise((resolveLaunch, rejectLaunch) => {
+    const processHandle = spawn(command, spawnArgs, {
+      detached: true,
+      stdio: "ignore",
+      shell: isWindowsShim,
+    });
+    processHandle.once("error", rejectLaunch);
+    processHandle.once("spawn", () => {
+      processHandle.unref();
+      resolveLaunch();
+    });
+  });
 }
 
 function registerDesktopProtocol(): void {
