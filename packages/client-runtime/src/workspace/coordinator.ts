@@ -44,6 +44,18 @@ export class WorkspaceTabCoordinator {
       return selectRepositoryTab(state, tabId);
     }, valid);
   }
+  move(tabId: string, targetId: string, side: "before" | "after"): Promise<void> {
+    return this.commit((state) => {
+      const source = state.tabs.findIndex((tab) => tab.tabId === tabId);
+      if (source < 0 || tabId === targetId || !state.tabs.some((tab) => tab.tabId === targetId)) return state;
+      const tabs = [...state.tabs];
+      const [tab] = tabs.splice(source, 1);
+      const target = tabs.findIndex((item) => item.tabId === targetId);
+      tabs.splice(target + (side === "after" ? 1 : 0), 0, tab);
+      if (tabs.every((item, index) => item === state.tabs[index])) return state;
+      return { ...state, tabs };
+    });
+  }
   close(tabId: string): Promise<void> {
     this.bump(tabId);
     this.releaseReservations((reservation) => reservation.tabId === tabId || reservation.sourceTabId === tabId);

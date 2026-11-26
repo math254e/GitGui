@@ -22,9 +22,31 @@
     onShowSettings: () => void;
     onSelectRepo: (repoId: string) => void;
     onCloseRepo: (repoId: string) => void;
+    onMoveRepo: (repoId: string, targetId: string, side: "before" | "after") => void;
   };
 
-  let { activeView, activeRepoId, tabs, onShowStart, onShowSettings, onSelectRepo, onCloseRepo }: Props = $props();
+  let { activeView, activeRepoId, tabs, onShowStart, onShowSettings, onSelectRepo, onCloseRepo, onMoveRepo }: Props = $props();
+  let draggedId = $state<string | null>(null);
+  // A boundary belongs to the gap, not to either of its neighboring tabs.
+  let dropBoundary = $state<number | null>(null);
+
+  function dragOver(event: DragEvent, index: number) {
+    if (!draggedId) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    dropBoundary = index + (event.clientX < rect.left + rect.width / 2 ? 0 : 1);
+  }
+
+  function finishDrag() { draggedId = null; dropBoundary = null; }
+
+  function drop(event: DragEvent) {
+    if (!draggedId || dropBoundary === null || !tabs.length) return;
+    event.preventDefault();
+    const target = tabs[dropBoundary] ?? tabs[tabs.length - 1];
+    onMoveRepo(draggedId, target.id, dropBoundary < tabs.length ? "before" : "after");
+    finishDrag();
+  }
 
   function navigationStateClasses(active: boolean): string {
     return active
@@ -56,19 +78,52 @@
     <Home aria-hidden="true" size={18} />
   </button>
 
-  <div class="flex h-full min-w-0 flex-1 items-stretch overflow-x-auto" aria-label="Open repositories" role="tablist">
+  <div
+    class="flex h-full min-w-0 flex-1 items-stretch overflow-x-auto"
+    aria-label="Open repositories"
+    role="tablist"
+    tabindex="-1"
+    ondragover={(event) => {
+      if (event.target !== event.currentTarget || !draggedId || !tabs.length) return;
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+      dropBoundary = tabs.length;
+    }}
+    ondragleave={(event) => {
+      if (!(event.currentTarget as HTMLElement).contains(event.relatedTarget as Node | null)) dropBoundary = null;
+    }}
+    ondrop={drop}
+  >
     {#if tabs.length}
       {#each tabs as tab, index (tab.id)}
         {@const active = activeView === "repo" && activeRepoId === tab.id}
+        {#if dropBoundary === index}
+          <span aria-hidden="true" class="pointer-events-none relative z-20 h-full w-0 shrink-0"><span class="absolute inset-y-0 left-0 w-0.5 -translate-x-1/2 bg-[var(--app-theme-text)]"></span></span>
+        {/if}
         <div
-          class={`group flex h-full min-w-36 max-w-64 items-center border-r border-[var(--app-theme-toolbar-border-subtle)] transition ${navigationStateClasses(active)}`}
+          class={`group relative flex h-full min-w-36 max-w-64 items-center border-r border-[var(--app-theme-toolbar-border-subtle)] transition ${navigationStateClasses(active)} ${draggedId === tab.id ? "opacity-50" : ""}`}
           role="tab"
+          draggable="true"
           aria-selected={active}
           tabindex={activeRepoId === tab.id || (!tabs.some((entry) => entry.id === activeRepoId) && index === 0) ? 0 : -1}
-          title={tab.branch ? `${displayHostPath(tab.root)} (${tab.branch})` : displayHostPath(tab.root)}
+          title={`${tab.branch ? `${displayHostPath(tab.root)} (${tab.branch})` : displayHostPath(tab.root)}\nDrag to reorder, or use Alt+Shift+Arrow keys`}
           onclick={() => onSelectRepo(tab.id)}
+          ondragstart={(event) => {
+            if ((event.target as HTMLElement).closest("button")) { event.preventDefault(); return; }
+            draggedId = tab.id;
+            event.dataTransfer?.setData("text/plain", tab.id);
+            if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+          }}
+          ondragover={(event) => dragOver(event, index)}
+          ondragend={finishDrag}
           onkeydown={(event) => {
             if (event.target !== event.currentTarget) return;
+            if (event.altKey && event.shiftKey && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
+              event.preventDefault();
+              const next = index + (event.key === "ArrowLeft" ? -1 : 1);
+              if (tabs[next]) onMoveRepo(tab.id, tabs[next].id, event.key === "ArrowLeft" ? "before" : "after");
+              return;
+            }
             navigateTabs(event, index);
             if (event.key === "Enter" || event.key === " ") {
               event.preventDefault();
@@ -103,6 +158,9 @@
           </button>
         </div>
       {/each}
+      {#if dropBoundary === tabs.length}
+        <span aria-hidden="true" class="pointer-events-none relative z-20 h-full w-0 shrink-0"><span class="absolute inset-y-0 left-0 w-0.5 -translate-x-1/2 bg-[var(--app-theme-text)]"></span></span>
+      {/if}
     {:else}
       <div class="flex h-full items-center px-4 text-sm text-[var(--app-theme-text-subtle)]">No repositories open</div>
     {/if}

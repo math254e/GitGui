@@ -89,6 +89,7 @@
     onShowSettings={() => void store.showSettingsView()}
     onSelectRepo={(repositoryId) => void store.selectRepository(repositoryId)}
     onCloseRepo={(repositoryId) => void store.closeRepository(repositoryId)}
+    onMoveRepo={(id, target, side) => void store.moveRepositoryTab(id, target, side)}
   />
 
   <section class="min-h-0 overflow-hidden">

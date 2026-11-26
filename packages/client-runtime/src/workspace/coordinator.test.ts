@@ -11,6 +11,22 @@ function deferred() {
 const ready = async () => {};
 
 describe("application workspace coordinator", () => {
+  it("persists reordered tabs across environments without changing selection", async () => {
+    const initial = { tabs: [
+      { tabId: "one", target: ref("a", "repo") },
+      { tabId: "two", target: ref("b", "repo") },
+      { tabId: "three", target: ref("a", "other") },
+    ], activeTabId: "two" };
+    let saved: RepositoryTabs = initial;
+    const coordinator = new WorkspaceTabCoordinator(initial, (state) => { saved = state; });
+    await coordinator.move("one", "three", "after");
+    expect(saved.tabs.map((tab) => tab.tabId)).toEqual(["two", "three", "one"]);
+    expect(saved.activeTabId).toBe("two");
+    await coordinator.move("one", "two", "before");
+    expect(new WorkspaceTabCoordinator(saved, () => {}).state.tabs.map((tab) => tab.tabId)).toEqual(["one", "two", "three"]);
+    await coordinator.move("missing", "two", "before");
+    expect(coordinator.state).toEqual(saved);
+  });
   it("checks conditional close after an already queued switch commits", async () => {
     const writing = deferred(), gate = deferred();
     const old = ref("a", "old"), next = ref("b", "new");

@@ -1312,6 +1312,12 @@ export class WorkspaceStore {
     await this.runWorkspaceCommand(() => this.requireWorkspace().selectRepository(repositoryId));
   }
 
+  async moveRepositoryTab(tabId: string, targetId: string, side: "before" | "after"): Promise<void> {
+    if (!this.applicationWorkspace) return;
+    try { await this.applicationWorkspace.move(tabId, targetId, side); }
+    catch (error) { toast.error("Could not reorder repository", { description: formatError(error) }); }
+  }
+
   async closeRepository(repositoryId: string): Promise<void> {
     if (this.runtime.tabOwnership === "external") { await this.closeApplicationTab(repositoryId); return; }
     const wasRouted = this.routedRepositoryId === repositoryId;

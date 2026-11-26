@@ -153,6 +153,7 @@ export class ApplicationWorkspace {
   }
 
   select(tabId: string): Promise<void> { return this.requireCoordinator().select(tabId); }
+  move(tabId: string, targetId: string, side: "before" | "after"): Promise<void> { return this.requireCoordinator().move(tabId, targetId, side); }
   close(tabId: string): Promise<void> { return this.requireCoordinator().close(tabId); }
   closeIfMatches(tabId: string, expectedTarget: ScopedRepositoryRef): Promise<void> {
     return this.requireCoordinator().closeIfMatches(tabId, expectedTarget);
